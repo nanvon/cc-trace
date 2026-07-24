@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108" role="img" aria-label="CC Trace adaptive icon background">
+  <defs>
+    <radialGradient id="matte" cx="28%" cy="18%" r="105%">
+      <stop offset="0" stop-color="#242521"/>
+      <stop offset=".5" stop-color="#191A18"/>
+      <stop offset="1" stop-color="#121311"/>
+    </radialGradient>
+  </defs>
+  <rect width="108" height="108" fill="url(#matte)"/>
+</svg>
