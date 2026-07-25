@@ -3,7 +3,10 @@ name: CC Trace
 description: A restrained adaptive desktop system built around stable provider lanes and honest reset-state rails.
 ---
 
-<!-- SEED: established with the user before implementation; re-run $impeccable document once there's code to capture the actual tokens and components. -->
+<!-- Updated 2026-07-25 from the shipped implementation. Token values below are mirrored from
+     `src/styles/tokens.css`, which is the single source of truth; component names map to
+     `src/components/`. The semantic-name ↔ CSS-variable table lives in
+     `docs/设计方向与状态规范.md` §3.4 and must be changed alongside any token rename. -->
 
 # Design System: CC Trace
 
@@ -28,24 +31,28 @@ The interface operates frequently and briefly. Expression comes from the rhythm 
 
 The palette is restrained and cool rather than warm or atmospheric. Large surfaces stay neutral; interaction blue and semantic status colors appear only where they carry meaning.
 
+Values are light / dark pairs as shipped in `src/styles/tokens.css`.
+
 ### Primary
 
-- **Trace Blue:** interactive controls, keyboard focus and selected settings. It must never stand in for success.
+- **Trace Blue** `--action-primary` `#2F67D8` / `#7BA3FF`: interactive controls, keyboard focus and selected settings. It must never stand in for success.
 
 ### Secondary
 
-- **Signal Green:** current successful data and completed checks.
-- **Reset Amber:** stale data, rate limits and approaching quota risk.
-- **Fault Red:** unrecoverable or credential/protocol errors. It is not used for ordinary absence.
+- **Signal Green** `--status-success` `#247A55` / `#63C99A`: current successful data and completed checks.
+- **Reset Amber** `--status-warning` `#B66A12` / `#F0AA52`: stale data, rate limits and approaching quota risk.
+- **Fault Red** `--status-error` `#B93636` / `#FF7B75`: unrecoverable or credential/protocol errors. It is not used for ordinary absence.
 
 ### Neutral
 
-- **Mineral Canvas:** application background.
-- **Instrument Surface:** provider lanes, fields and quiet grouped content.
-- **Carbon Ink:** primary text and high-value numbers.
-- **Graphite Muted:** labels, timestamps and supporting explanations.
-- **Hairline:** structural separators in dense areas.
-- **Rail Track:** the unfilled groove of the reset rail.
+- **Mineral Canvas** `--surface-primary` `#F2F5F3` / `#111513`: application background.
+- **Instrument Surface** `--surface-raised` `#FFFFFF` / `#1A201D`: provider lanes, fields and quiet grouped content.
+- **Carbon Ink** `--text-primary` `#161A18` / `#EEF3F0`: primary text and high-value numbers.
+- **Graphite Muted** `--text-secondary` `#66706B` / `#9DA8A2`: labels, timestamps and supporting explanations.
+- **Hairline** `--border-subtle` `#DCE2DE` / `#303934`: structural separators in dense areas.
+- **Rail Track** `--track-background` `#E7EBE8` / `#2B332F`: the unfilled groove of the reset rail.
+
+Appearance is driven by `data-appearance` on the root element: absent or `system` follows `prefers-color-scheme`; `light` and `dark` override it.
 
 **The Semantic Color Rule.** Color only appears when it identifies interaction, freshness, warning or failure; it never decorates headings or fills arbitrary tiles.
 
@@ -98,6 +105,20 @@ Transient panels use one layered ambient shadow and a subtle neutral ring. Inter
 The double-C brand geometry supplies controlled arcs and round endpoints, not a license to make every object circular. Provider lanes and fields use restrained corners; nested radii remain concentric. Buttons and inputs are rounded rectangles, not pills, except for true compact state labels whose text length is bounded.
 
 The reset rail uses a straight track with softened endpoints and a clear terminal marker. It does not become a circular gauge, speedometer or decorative waveform.
+
+## Implementation
+
+| Element | Component | Notes |
+|---|---|---|
+| Reset rail | `src/components/ResetRail.vue` | 3px straight track (`--rail-height`), 1.5px softened ends, hairline ticks at 25/50/75%, a terminal marker at the right end followed immediately by the reset time |
+| Provider lane | `src/components/ProviderLane.vue` | 2px status spine on the left, neutral when `ready` and coloured only on risk |
+| Overall signal | `src/components/OverallSignal.vue` | Raises the weight of the highest-risk provider without reordering anything |
+| Status explanation | `src/components/StatusExplanation.vue` | One line in the compact panel, title / impact / next step in the main window |
+| Refresh icon | `src/components/RefreshIcon.vue` | Spins only during a real refresh; static under reduced motion |
+
+Spacing follows a four-point rhythm (`--space-1` … `--space-8` = 4/8/12/16/20/24/32). Radii are `--radius-small` 7px, `--radius-medium` 11px, `--radius-shell` 16px. Motion uses `--motion-fast` 140ms, `--motion-base` 200ms, `--motion-panel` 320ms with a single `--ease-out` curve and no overshoot.
+
+The mapping from the three status dimensions to copy keys, tone and rail treatment exists in exactly one place: `src/lib/status.ts`. Components never re-derive status from `availability` themselves.
 
 ## Do's and Don'ts
 

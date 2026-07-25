@@ -2,7 +2,7 @@
 
 CC Trace 是一款面向使用 Codex 与 Claude Code 的开发者的跨平台桌面应用，让用户通过 macOS 菜单栏或 Windows 系统托盘，快速查看 AI 编程工具的额度、重置时间、刷新状态与异常风险。
 
-当前处于 `0.1.0` 工程基线阶段：产品范围、信息架构、设计方向和技术边界已经固化，Tauri 2、Vue 3、TypeScript、Rust、Pinia、Vue Router 与 Vue I18n 的最小框架已经建立。Tray 桌面壳使用合成数据在 macOS 完成实机验证，Windows 实机验证与首次启动窗口尚未完成；Provider、缓存、调度和正式业务页面尚未开始实现。
+当前处于 `0.1.0` 第 11 阶段：四个窗口、Tray 入口、三维状态模型、刷新调度与退避、设置持久化和首次启动引导都已实现，额度数据来自 Rust 内的合成 Provider，走与真实 Provider 完全相同的契约与事件路径。全部自动化检查（类型、lint、格式、Rust 与前端测试）通过；**双平台实机走查尚未重跑**，真实 Provider 的凭据发现与额度请求尚未开始。
 
 ## 首版边界
 
@@ -77,16 +77,20 @@ CC Trace 是一款面向使用 Codex 与 Claude Code 的开发者的跨平台桌
 ```bash
 pnpm install
 pnpm tauri dev
+pnpm lint
+pnpm test
 pnpm build
 ```
+
+Rust 侧在 `src-tauri/` 下执行 `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test`。
 
 仓库初始化阶段没有自动运行开发服务器、构建或测试。执行这些命令前，请先确认当前工作目标确实需要。
 
 ## 目录
 
 ```text
-src/                    Vue 应用、功能模块、状态、路由、国际化与样式
-src-tauri/              Rust 核心、Tauri 配置、capabilities 与桌面图标
+src/                    Vue 应用：视图、组件、features、lib、国际化与样式
+src-tauri/              Rust 核心：contracts、providers、scheduler、storage、platform、commands
 docs/                   规范、决策记录、进度与验证、外部参考
 docs/决策/              ADR：已确认决策的背景、理由与复审条件
 docs/archive/           历史规划文档，冲突时以现行规范为准
@@ -96,3 +100,7 @@ prototypes/tray-shell/  第 8 阶段双平台交互原型（不属于正式应�
 ```
 
 应用标识为 `com.nanvon.cctrace`，与 Swift 版 cc-bar 的 `com.nanvon.ccbar` 完全独立。
+
+## 许可证
+
+[MIT](LICENSE)
