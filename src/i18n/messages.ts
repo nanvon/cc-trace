@@ -1,7 +1,6 @@
 export const messages = {
   "zh-CN": {
     foundation: {
-      eyebrow: "CC TRACE · 0.1.0",
       title: "工程基础已经就位",
       description:
         "Tauri、Vue、Rust 与品牌资源已接入。正式额度界面将在信息架构和交互原型确认后开始。",
@@ -13,7 +12,6 @@ export const messages = {
   },
   en: {
     foundation: {
-      eyebrow: "CC TRACE · 0.1.0",
       title: "The foundation is in place",
       description:
         "Tauri, Vue, Rust, and the brand assets are connected. The quota interface starts after the information architecture and interaction prototype are approved.",

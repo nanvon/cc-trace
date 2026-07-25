@@ -5,6 +5,12 @@
 - `docs/产品定义.md`
 - `docs/产品范围.md`
 - `docs/技术架构.md`
+- `PRODUCT.md`
+- `docs/信息架构与核心流程.md`
+- `DESIGN.md`
+- `docs/设计方向与状态规范.md`
+- `docs/双平台交互原型.md`
+- `docs/桌面壳验证记录.md`
 - `docs/Tauri桌面端重新开发执行清单.md`
 
 AI 开始工作前必须先读取与任务有关的上述文档，不得用 Skill 的通用建议覆盖已经确认的产品范围、技术边界、阶段门禁或用户决定。

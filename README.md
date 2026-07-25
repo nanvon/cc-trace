@@ -21,6 +21,13 @@ CC Trace 是一款面向使用 Codex 与 Claude Code 的开发者的跨平台桌
 - [产品定义](docs/产品定义.md)
 - [首版产品范围](docs/产品范围.md)
 - [技术架构](docs/技术架构.md)
+- [AI 设计产品上下文](PRODUCT.md)
+- [信息架构与核心流程](docs/信息架构与核心流程.md)
+- [设计方向与状态规范](docs/设计方向与状态规范.md)
+- [设计系统种子](DESIGN.md)
+- [双平台交互原型与验证记录](docs/双平台交互原型.md)
+- [可交互 Tray Shell 原型](prototypes/tray-shell/index.html)
+- [Tauri Tray 桌面壳验证记录](docs/桌面壳验证记录.md)
 - [执行清单](docs/Tauri桌面端重新开发执行清单.md)
 - [AI 协作与 Skills 规范](AGENTS.md)
 - [cc-bar 只读参考资料](docs/cc-bar-reference/README.md)
@@ -60,6 +67,7 @@ src/                    Vue 应用、功能模块、状态、路由、国际化�
 src-tauri/              Rust 核心、Tauri 配置、capabilities 与桌面图标
 docs/                   产品、范围、架构、执行清单与旧版参考
 design/brand/           CC Trace 品牌母版与跨端图标源文件
+prototypes/tray-shell/  第 8 阶段双平台交互原型（不属于正式应用）
 ```
 
 应用标识为 `com.nanvon.cctrace`，与 Swift 版 cc-bar 的 `com.nanvon.ccbar` 完全独立。
