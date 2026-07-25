@@ -45,6 +45,7 @@ The palette is restrained and cool rather than warm or atmospheric. Large surfac
 - **Carbon Ink:** primary text and high-value numbers.
 - **Graphite Muted:** labels, timestamps and supporting explanations.
 - **Hairline:** structural separators in dense areas.
+- **Rail Track:** the unfilled groove of the reset rail.
 
 **The Semantic Color Rule.** Color only appears when it identifies interaction, freshness, warning or failure; it never decorates headings or fills arbitrary tiles.
 

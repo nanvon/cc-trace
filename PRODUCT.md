@@ -52,7 +52,7 @@ CC Trace 是本机优先、权限克制的跨平台额度观察工具，不是 P
 - 首版展示主要额度、必要专项额度、剩余百分比、重置时间和最近成功刷新时间。
 - 每个 Provider 独立刷新、节流、退避和恢复，一个 Provider 的失败不能阻断另一个。
 - 最新有效快照保存在 CC Trace 自己的缓存中；首版不建立额度历史序列。
-- 界面必须明确覆盖 `loading`、`live`、`no_credentials`、`offline`、`stale` 和 `error`。
+- 界面必须覆盖 `docs/状态与错误模型.md` 定义的全部状态维度与失败原因，包括 `no_credentials`、`unsupported`、`offline`、`rate_limited` 与 `error`。
 - 基础设置包括语言、外观、自动刷新间隔、开机启动和版本信息。
 - 产品使用 Tauri 2、Vue 3、TypeScript、Rust、Pinia、Vue Router 与 Vue I18n。
 - 系统能力、Provider 请求、凭据读取、调度和持久化留在 Rust；Vue 不取得秘密或通用系统权限。
