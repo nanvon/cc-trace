@@ -1,3 +1,7 @@
+/**
+ * 全局基线。组件样式一律 scoped，这里只放跨窗口共享的重置与实用类。
+ */
+
 * {
   box-sizing: border-box;
 }
@@ -6,7 +10,6 @@ html,
 body,
 #app {
   min-width: 20rem;
-  min-height: 100%;
   margin: 0;
 }
 
@@ -17,7 +20,28 @@ body {
 
 body {
   color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* 紧凑面板是透明窗口，背景由它自己的外壳绘制 */
+  background: transparent;
+}
+
+/* 常规窗口需要实色背景；紧凑面板由 .panel-shell 负责 */
+body:not([data-surface="compact"]) {
   background: var(--surface-primary);
+}
+
+p {
+  text-wrap: pretty;
+}
+
+h1,
+h2,
+h3 {
+  text-wrap: balance;
 }
 
 button,
@@ -28,65 +52,101 @@ textarea {
 }
 
 button {
-  min-height: 2.5rem;
   color: inherit;
   cursor: pointer;
 }
 
-.primary-button,
-.quiet-button,
-.icon-button {
-  padding: 0 var(--space-3);
+:focus-visible {
+  outline: 2px solid var(--action-primary);
+  outline-offset: 2px;
   border-radius: var(--radius-small);
 }
 
-.primary-button {
-  color: white;
+/* --- 共享控件 --- */
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  /* 桌面控件最小点击区域 40 × 40 */
+  min-block-size: 2.5rem;
+  padding: 0 var(--space-4);
+  border: 1px solid transparent;
+  border-radius: var(--radius-small);
+  white-space: nowrap;
+}
+
+.button--primary {
+  color: var(--surface-raised);
   background: var(--action-primary);
-  border: 0;
 }
 
-.quiet-button,
-.icon-button {
+.button--quiet {
+  color: var(--text-primary);
   background: transparent;
-  border: 0;
 }
 
-.quiet-button:hover,
-.icon-button:hover {
-  background: color-mix(in srgb, var(--text-primary) 8%, transparent);
+.button--quiet:hover {
+  background: color-mix(in srgb, var(--text-primary) 7%, transparent);
 }
 
-.icon-button {
-  width: 2.5rem;
+.button--primary:hover {
+  filter: brightness(1.06);
+}
+
+.button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.button--icon {
+  inline-size: 2.5rem;
   padding: 0;
-  font-size: 1.25rem;
 }
 
+/* 小写标签用数据字体，只给极短且稳定的元数据 */
 .utility-label {
-  margin: 0 0 var(--space-1);
+  margin: 0;
   color: var(--text-secondary);
   font-family: var(--font-data);
-  font-size: 0.7rem;
+  font-size: 0.6875rem;
   font-weight: 650;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
-:focus-visible {
-  outline: 3px solid color-mix(in srgb, var(--action-primary) 68%, transparent);
-  outline-offset: 2px;
+.supporting {
+  color: var(--text-secondary);
+}
+
+/* 所有会变化的数字：宽度不随刷新跳动 */
+.numeric {
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  button {
+  .button {
     transition:
-      scale 140ms ease,
-      background-color 140ms ease,
-      filter 140ms ease;
+      background-color var(--motion-fast) var(--ease-out),
+      filter var(--motion-fast) var(--ease-out),
+      scale var(--motion-fast) var(--ease-out);
   }
 
-  button:active {
-    scale: 0.97;
+  /* 点击立即给反馈，不等待请求完成 */
+  .button:active:not(:disabled) {
+    scale: 0.96;
   }
 }

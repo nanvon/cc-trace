@@ -18,6 +18,22 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon"] }
+# macos-private-api 支撑紧凑面板的透明窗口与 popover 材质（tauri.conf.json 的
+# macOSPrivateApi 与 windowEffects）。代价是不能上架 Mac App Store；CC Trace 走
+# 独立分发，见 docs/桌面壳验证记录.md。
+tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }
+# 常驻托盘应用必须单实例，否则二次启动会出现第二个图标与第二份设置写入。
+tauri-plugin-single-instance = "2"
+# 开机自动启动属首版必须能力，见 docs/产品范围.md「基础设置」。
+tauri-plugin-autostart = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# 契约里的时刻统一是 ISO 8601 UTC 字符串，退避与新鲜度计算需要真正的日历时间。
+chrono = "0.4"
+# 「跟随系统」的系统语言由 Rust 平台层解析，前端不读 navigator.language。
+sys-locale = "0.3"
+# 自动刷新循环与合成 Provider 的延迟。
+tokio = { version = "1", features = ["time"] }
+
+[dev-dependencies]
+tempfile = "3"

@@ -10,6 +10,7 @@
     "frontendDist": "../dist"
   },
   "app": {
+    "macOSPrivateApi": true,
     "windows": [
       {
         "label": "main",
@@ -33,9 +34,15 @@
         "maxHeight": 560,
         "resizable": false,
         "decorations": false,
+        "transparent": true,
         "alwaysOnTop": true,
         "skipTaskbar": true,
-        "visible": false
+        "visible": false,
+        "windowEffects": {
+          "effects": ["popover"],
+          "state": "active",
+          "radius": 16
+        }
       },
       {
         "label": "settings",
@@ -45,6 +52,16 @@
         "height": 560,
         "minWidth": 460,
         "minHeight": 500,
+        "center": true,
+        "visible": false
+      },
+      {
+        "label": "onboarding",
+        "title": "CC Trace",
+        "url": "/#/onboarding",
+        "width": 640,
+        "height": 520,
+        "resizable": false,
         "center": true,
         "visible": false
       }
@@ -60,13 +77,21 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["app", "dmg", "nsis"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "macOS": {
+      "minimumSystemVersion": "13.0"
+    },
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
+      }
+    }
   }
 }

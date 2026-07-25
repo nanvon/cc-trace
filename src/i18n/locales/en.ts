@@ -1,0 +1,162 @@
+/**
+ * English copy. Sentence case throughout; no all-caps labels beyond the confirmed
+ * short utility ones. Keys mirror `zh-CN.ts` exactly — both languages ship together.
+ */
+export default {
+  common: {
+    refresh: "Refresh",
+    settings: "Settings",
+    quit: "Quit",
+    details: "View details",
+    close: "Close",
+    retry: "Retry",
+  },
+
+  provider: {
+    codex: "Codex",
+    claude: "Claude Code",
+    plan: "{plan} plan",
+    account: "Account {hint}",
+  },
+
+  quota: {
+    window: {
+      fiveHour: "5-hour window",
+      weekly: "Weekly window",
+      modelWeekly: "{model} weekly window",
+      unknown: "Quota window",
+    },
+    resetsAt: "Resets {time}",
+    resetsUnknown: "Reset time unknown",
+    retryIn: "Retry {time}",
+    lastSuccess: "Last refreshed {time}",
+    neverRefreshed: "No successful refresh yet",
+    noValue: "—",
+  },
+
+  status: {
+    loading: "Checking quota",
+    refreshing: "Refreshing, showing last data",
+    live: "Quota is healthy",
+    stale: "Showing older data",
+    noCredentials: "No credentials found",
+    unsupported: "Credential type not supported",
+    offlineStale: "Offline, showing older data",
+    offlineEmpty: "Offline, no quota to show",
+    rateLimited: "Refresh rate-limited",
+    errorCredentials: "Credentials are no longer valid",
+    errorProtocol: "Could not read quota data",
+  },
+
+  impact: {
+    stale: "Showing data from {time}, not the current quota.",
+    empty: "There is no quota to show for this provider.",
+    noCredentials:
+      "CC Trace only reads credentials already on this machine and never asks you to paste a token.",
+    unsupported: "This provider's quota cannot be read right now.",
+    rateLimited: "The provider is limiting refreshes; your last data is kept.",
+  },
+
+  nextStep: {
+    stale: "Refresh to get the latest quota",
+    noCredentials: "Sign in with the CLI, then refresh",
+    unsupported: "This release supports auto-discovered OAuth credentials only",
+    offlineStale: "Refresh once you are back online",
+    offlineEmpty: "Check your connection and retry",
+    rateLimited: "You can refresh again after the cooldown",
+    errorCredentials: "Sign in again with the CLI",
+    errorProtocol: "Try again later; update CC Trace if it persists",
+  },
+
+  time: {
+    justNow: "just now",
+    underOneMinute: "under a minute",
+  },
+
+  overall: {
+    allHealthy: "Both providers are up to date",
+    focus: "{provider} · {status}",
+  },
+
+  main: {
+    explanationHeading: "What needs attention",
+  },
+
+  settings: {
+    title: "Settings",
+    general: "General",
+    refreshInterval: "Auto-refresh interval",
+    launchAtLogin: "Launch CC Trace at login",
+    appearanceAndLanguage: "Appearance & language",
+    language: "Language",
+    appearance: "Appearance",
+    about: "About",
+    version: "Version {version}",
+    privacy:
+      "CC Trace only reads the Codex and Claude Code credentials already on this machine. It uploads nothing, and it never reads or migrates cc-bar application data.",
+    intervalOption: {
+      m15: "15 minutes",
+      m30: "30 minutes",
+      m60: "60 minutes",
+    },
+    languageOption: {
+      system: "Follow system",
+      chinese: "中文",
+      english: "English",
+    },
+    appearanceOption: {
+      system: "Follow system",
+      light: "Light",
+      dark: "Dark",
+    },
+  },
+
+  onboarding: {
+    title: "Meet CC Trace",
+    intro: "CC Trace shows how much Codex and Claude Code quota you have left, and when it resets.",
+    residency:
+      "It lives in the system area. Click the icon for the compact panel, and open the main window when you need detail.",
+    checkHeading: "This machine",
+    boundaryHeading: "Data boundary",
+    boundary:
+      "Credentials are discovered locally by the Rust layer, read-only and minimally. Nothing is uploaded, and no cc-bar data is read or migrated.",
+    noCredentialsHint:
+      "You can continue without credentials. Sign in with the CLI and refresh whenever you are ready.",
+    done: "Start using CC Trace",
+    later: "Not now",
+  },
+
+  error: {
+    settingsWriteFailed: {
+      title: "Settings were not saved",
+      nextStep: "Your previous choice is kept; try again in a moment",
+    },
+  },
+
+  a11y: {
+    refreshAll: "Refresh all quota",
+    quotaRail: "{provider} {window}",
+    noQuota: "No quota available",
+    remaining: "{percent} remaining",
+    closePanel: "Close panel",
+    statusRegion: "Quota status",
+  },
+
+  preview: {
+    badge: "Synthetic data",
+    notice:
+      "These numbers do not come from Codex or Claude Code. They exist to verify the desktop shell and its status states.",
+    scenario: "Verification scenario",
+    scenarioOption: {
+      healthy: "Both healthy",
+      firstLoad: "First load",
+      noCredentials: "No credentials",
+      unsupported: "Unsupported credential",
+      offlineStale: "Offline, has snapshot",
+      offlineEmpty: "Offline, no snapshot",
+      rateLimited: "429, fault isolation",
+      errorStale: "Bad credentials, has snapshot",
+      errorEmpty: "Protocol error, no snapshot",
+    },
+  },
+};
