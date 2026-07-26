@@ -1,0 +1,59 @@
+{
+  "limits": [
+    {
+      "kind": "weekly_all",
+      "percent": 52,
+      "resets_at": "2026-07-20T00:00:00Z",
+      "is_active": true
+    },
+    {
+      "kind": "weekly_scoped",
+      "percent": 45,
+      "resets_at": null,
+      "is_active": true,
+      "scope": {
+        "model": {
+          "display_name": "Opus 4.1",
+          "id": "MODEL/OPUS-4.1"
+        }
+      }
+    },
+    {
+      "kind": "weekly_scoped",
+      "percent": 55,
+      "resets_at": "2026-07-20T00:00:00Z",
+      "is_active": true,
+      "scope": {
+        "model": {
+          "display_name": "Opus Latest",
+          "id": "model/opus-4.1"
+        }
+      }
+    },
+    {
+      "kind": "weekly_scoped",
+      "percent": 20,
+      "is_active": true,
+      "scope": {
+        "surface": {
+          "display_name": "Code Review",
+          "id": "SURFACE:REVIEW"
+        }
+      }
+    },
+    {
+      "kind": "weekly_scoped",
+      "percent": 10,
+      "is_active": true,
+      "scope": {
+        "surface": "terminal"
+      }
+    },
+    {
+      "kind": "monthly_beta",
+      "percent": 15,
+      "resets_at": 1800000000,
+      "is_active": true
+    }
+  ]
+}

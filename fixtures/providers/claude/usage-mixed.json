@@ -1,0 +1,57 @@
+{
+  "five_hour": {
+    "utilization": 9,
+    "resets_at": "2026-07-13T02:30:00.424333+00:00"
+  },
+  "seven_day": {
+    "utilization": 41,
+    "resets_at": 1784505600
+  },
+  "seven_day_opus": {
+    "utilization": 35,
+    "resets_at": "2026-07-20T00:00:00Z"
+  },
+  "seven_day_sonnet": null,
+  "limits": [
+    {
+      "kind": "session",
+      "percent": 12,
+      "resets_at": null,
+      "is_active": true,
+      "scope": null
+    },
+    {
+      "kind": "weekly_all",
+      "percent": 22,
+      "resets_at": "2026-07-20T00:00:00Z",
+      "is_active": true,
+      "scope": null
+    },
+    {
+      "kind": "weekly_scoped",
+      "percent": 30,
+      "resets_at": null,
+      "is_active": true,
+      "scope": {
+        "model": {
+          "display_name": "Opus 4.1",
+          "id": "claude-opus-4.1"
+        },
+        "surface": null
+      }
+    },
+    {
+      "kind": "weekly_scoped",
+      "percent": 0,
+      "resets_at": null,
+      "is_active": false,
+      "scope": {
+        "model": {
+          "display_name": "Fable",
+          "id": null
+        },
+        "surface": null
+      }
+    }
+  ]
+}

@@ -188,9 +188,8 @@ fn parse_reset_time(
 }
 
 fn unix_seconds(value: f64) -> Option<DateTime<Utc>> {
-    duration_from_seconds(value).and_then(|duration| {
-        DateTime::from_timestamp(0, 0)?.checked_add_signed(duration)
-    })
+    duration_from_seconds(value)
+        .and_then(|duration| DateTime::from_timestamp(0, 0)?.checked_add_signed(duration))
 }
 
 fn duration_from_seconds(value: f64) -> Option<Duration> {
@@ -216,8 +215,7 @@ fn non_empty(value: &str) -> Option<&str> {
 mod tests {
     use super::*;
 
-    const NORMAL: &str =
-        include_str!("../../../fixtures/providers/codex/usage-normal.json");
+    const NORMAL: &str = include_str!("../../../fixtures/providers/codex/usage-normal.json");
     const WEEKLY_ONLY: &str =
         include_str!("../../../fixtures/providers/codex/usage-weekly-only.json");
     const UNKNOWN_WINDOW: &str =
@@ -331,10 +329,7 @@ mod tests {
         )
         .expect("window duration is optional");
 
-        assert_eq!(
-            parsed.snapshot.windows[0].kind,
-            QuotaWindowKind::Unknown
-        );
+        assert_eq!(parsed.snapshot.windows[0].kind, QuotaWindowKind::Unknown);
         assert_eq!(parsed.snapshot.windows[0].id, "codex.unknown-unspecified");
         assert_eq!(parsed.snapshot.windows[0].window_seconds, None);
     }

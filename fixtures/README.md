@@ -11,5 +11,6 @@
 
 - `providers/codex/`：按已确认协议字段和旧版只读测试预期人工构造的 Codex
   Usage API 样本；不是真实账号响应，详细来源与预期见目录内 `README.md`。
-
-Claude Code Fixture 仍待其离线解析切片开始时加入。
+- `providers/claude/`：按已确认的 legacy／dynamic 字段语义和旧版只读测试预期人工
+  构造的 Claude Code OAuth Usage 样本；不是真实账号响应，详细来源与预期见目录内
+  `README.md`。
