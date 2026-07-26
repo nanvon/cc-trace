@@ -2,20 +2,20 @@ use tauri::AppHandle;
 
 use super::CommandError;
 use crate::platform::desktop::{
-    self, MAIN_WINDOW, ONBOARDING_WINDOW, SETTINGS_WINDOW, hide_compact, show_window,
+    self, MainNavigationTarget, ONBOARDING_WINDOW, hide_compact, show_main, show_window,
 };
 
 /// 打开并聚焦主窗口，同时收起紧凑面板，避免两个入口争夺焦点。
 #[tauri::command]
 pub fn window_open_main(app: AppHandle) -> Result<(), CommandError> {
     hide_compact(&app);
-    show_window(&app, MAIN_WINDOW).map_err(|_| CommandError::WINDOW_UNAVAILABLE)
+    show_main(&app, MainNavigationTarget::Quota).map_err(|_| CommandError::WINDOW_UNAVAILABLE)
 }
 
 #[tauri::command]
 pub fn window_open_settings(app: AppHandle) -> Result<(), CommandError> {
     hide_compact(&app);
-    show_window(&app, SETTINGS_WINDOW).map_err(|_| CommandError::WINDOW_UNAVAILABLE)
+    show_main(&app, MainNavigationTarget::Settings).map_err(|_| CommandError::WINDOW_UNAVAILABLE)
 }
 
 #[tauri::command]

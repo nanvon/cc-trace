@@ -7,17 +7,19 @@
  */
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
+import { useRouter } from "vue-router";
 
-import { useAppShell } from "../app/shell";
 import DevScenarioBar from "../components/DevScenarioBar.vue";
 import OverallSignal from "../components/OverallSignal.vue";
 import ProviderLane from "../components/ProviderLane.vue";
 import RefreshIcon from "../components/RefreshIcon.vue";
-import { openSettingsWindow } from "../features/app/windows";
+import { navigateMain } from "../features/app/navigation";
+import { useQuotaStore } from "../features/quota/store";
 import { presentOverall } from "../lib/status";
 
 const { t } = useI18n();
-const { quota } = useAppShell("main");
+const router = useRouter();
+const quota = useQuotaStore();
 
 const liveMessage = computed(() => {
   const leader = presentOverall(quota.ordered);
@@ -25,6 +27,10 @@ const liveMessage = computed(() => {
 });
 
 const isDev = import.meta.env.DEV;
+
+function openSettings(): void {
+  void navigateMain(router, "settings", "settings-title", "quota");
+}
 </script>
 
 <template>
@@ -33,9 +39,19 @@ const isDev = import.meta.env.DEV;
 
     <div class="main__inner">
       <header class="main__header">
-        <OverallSignal :providers="quota.ordered" variant="full">
+        <OverallSignal
+          :providers="quota.ordered"
+          variant="full"
+          title-id="main-quota-title"
+          :title-tabindex="-1"
+        >
           <template #actions>
-            <button type="button" class="button button--quiet" @click="openSettingsWindow">
+            <button
+              id="main-settings-trigger"
+              type="button"
+              class="button button--quiet"
+              @click="openSettings"
+            >
               {{ t("common.settings") }}
             </button>
             <button type="button" class="button button--primary" @click="quota.refresh()">

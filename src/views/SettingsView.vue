@@ -1,14 +1,15 @@
 <script setup lang="ts">
 /**
- * 设置窗口：只负责用户可以安全改变的应用偏好。
+ * 主窗口设置视图：只负责用户可以安全改变的应用偏好。
  *
  * 不承载额度详情、账号操作或 Provider 登录，见 `docs/信息架构与核心流程.md` 第 7 节。
  * 保存成功立即生效；写入失败时**保留原值**并明确提示。
  */
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
+import { useRoute, useRouter } from "vue-router";
 
-import { useAppShell } from "../app/shell";
+import { navigateMain } from "../features/app/navigation";
 import {
   APPEARANCE_OPTIONS,
   LANGUAGE_OPTIONS,
@@ -18,9 +19,12 @@ import {
   type RefreshIntervalOption,
   type SettingsUpdate,
 } from "../features/settings/contracts";
+import { useSettingsStore } from "../features/settings/store";
 
 const { t } = useI18n();
-const { settings } = useAppShell("settings");
+const route = useRoute();
+const router = useRouter();
+const settings = useSettingsStore();
 
 const current = computed(() => settings.settings);
 
@@ -60,89 +64,125 @@ async function commitLaunchAtLogin(event: Event) {
     checkbox.checked = current.value.launchAtLogin;
   }
 }
+
+function returnToQuota(): void {
+  const focusTarget = route.query.origin === "quota" ? "settings-trigger" : "quota-title";
+  void navigateMain(router, "quota", focusTarget);
+}
 </script>
 
 <template>
-  <main v-if="current" class="settings">
-    <header>
-      <h1>{{ t("settings.title") }}</h1>
-    </header>
+  <main class="settings">
+    <div class="settings__inner">
+      <header class="settings__header">
+        <button type="button" class="button button--quiet settings__back" @click="returnToQuota">
+          <span aria-hidden="true">←</span>
+          {{ t("settings.backToQuota") }}
+        </button>
+        <h1 id="main-settings-title" tabindex="-1">{{ t("settings.title") }}</h1>
+      </header>
 
-    <p v-if="settings.writeFailed" class="settings__error" role="alert">
-      <strong>{{ t("error.settingsWriteFailed.title") }}</strong>
-      <span>{{ t("error.settingsWriteFailed.nextStep") }}</span>
-    </p>
+      <template v-if="current">
+        <p v-if="settings.writeFailed" class="settings__error" role="alert">
+          <strong>{{ t("error.settingsWriteFailed.title") }}</strong>
+          <span>{{ t("error.settingsWriteFailed.nextStep") }}</span>
+        </p>
 
-    <section class="settings__group">
-      <h2>{{ t("settings.general") }}</h2>
+        <section class="settings__group">
+          <h2>{{ t("settings.general") }}</h2>
 
-      <label class="settings__row">
-        <span>{{ t("settings.refreshInterval") }}</span>
-        <select
-          :value="current.refreshInterval"
-          autocomplete="off"
-          @change="commit($event, 'refreshInterval')"
-        >
-          <option v-for="option in REFRESH_INTERVAL_OPTIONS" :key="option" :value="option">
-            {{ t(INTERVAL_LABEL[option]) }}
-          </option>
-        </select>
-      </label>
+          <label class="settings__row">
+            <span>{{ t("settings.refreshInterval") }}</span>
+            <select
+              name="refresh-interval"
+              :value="current.refreshInterval"
+              autocomplete="off"
+              @change="commit($event, 'refreshInterval')"
+            >
+              <option v-for="option in REFRESH_INTERVAL_OPTIONS" :key="option" :value="option">
+                {{ t(INTERVAL_LABEL[option]) }}
+              </option>
+            </select>
+          </label>
 
-      <label class="settings__row settings__row--check">
-        <input
-          type="checkbox"
-          :checked="current.launchAtLogin"
-          @change="commitLaunchAtLogin($event)"
-        />
-        <span>{{ t("settings.launchAtLogin") }}</span>
-      </label>
-    </section>
+          <label class="settings__row settings__row--check">
+            <input
+              type="checkbox"
+              name="launch-at-login"
+              :checked="current.launchAtLogin"
+              @change="commitLaunchAtLogin($event)"
+            />
+            <span>{{ t("settings.launchAtLogin") }}</span>
+          </label>
+        </section>
 
-    <section class="settings__group">
-      <h2>{{ t("settings.appearanceAndLanguage") }}</h2>
+        <section class="settings__group">
+          <h2>{{ t("settings.appearanceAndLanguage") }}</h2>
 
-      <label class="settings__row">
-        <span>{{ t("settings.language") }}</span>
-        <select :value="current.language" autocomplete="off" @change="commit($event, 'language')">
-          <option v-for="option in LANGUAGE_OPTIONS" :key="option" :value="option">
-            {{ t(LANGUAGE_LABEL[option]) }}
-          </option>
-        </select>
-      </label>
+          <label class="settings__row">
+            <span>{{ t("settings.language") }}</span>
+            <select
+              name="language"
+              :value="current.language"
+              autocomplete="off"
+              @change="commit($event, 'language')"
+            >
+              <option v-for="option in LANGUAGE_OPTIONS" :key="option" :value="option">
+                {{ t(LANGUAGE_LABEL[option]) }}
+              </option>
+            </select>
+          </label>
 
-      <label class="settings__row">
-        <span>{{ t("settings.appearance") }}</span>
-        <select
-          :value="current.appearance"
-          autocomplete="off"
-          @change="commit($event, 'appearance')"
-        >
-          <option v-for="option in APPEARANCE_OPTIONS" :key="option" :value="option">
-            {{ t(APPEARANCE_LABEL[option]) }}
-          </option>
-        </select>
-      </label>
-    </section>
+          <label class="settings__row">
+            <span>{{ t("settings.appearance") }}</span>
+            <select
+              name="appearance"
+              :value="current.appearance"
+              autocomplete="off"
+              @change="commit($event, 'appearance')"
+            >
+              <option v-for="option in APPEARANCE_OPTIONS" :key="option" :value="option">
+                {{ t(APPEARANCE_LABEL[option]) }}
+              </option>
+            </select>
+          </label>
+        </section>
 
-    <section class="settings__group">
-      <h2>{{ t("settings.about") }}</h2>
-      <p class="settings__version numeric">
-        {{ t("settings.version", { version: settings.version }) }}
-      </p>
-      <p class="settings__privacy supporting">{{ t("settings.privacy") }}</p>
-    </section>
+        <section class="settings__group">
+          <h2>{{ t("settings.about") }}</h2>
+          <p class="settings__version numeric">
+            {{ t("settings.version", { version: settings.version }) }}
+          </p>
+          <p class="settings__privacy supporting">{{ t("settings.privacy") }}</p>
+        </section>
+      </template>
+    </div>
   </main>
 </template>
 
 <style scoped>
 .settings {
+  min-block-size: 100vh;
+  padding: clamp(1.5rem, 4vw, 2.5rem);
+  background: var(--surface-primary);
+}
+
+.settings__inner {
   display: grid;
   align-content: start;
   gap: var(--space-6);
-  min-block-size: 100vh;
-  padding: var(--space-6);
-  background: var(--surface-primary);
+  inline-size: min(100%, 32.5rem);
+  margin-inline: auto;
+}
+
+.settings__header {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-4);
+}
+
+.settings__back {
+  margin-inline-start: calc(var(--space-4) * -1);
 }
 
 h1 {
@@ -179,7 +219,7 @@ h2 {
 }
 
 select {
-  min-block-size: 2.25rem;
+  min-block-size: 2.5rem;
   padding: 0 var(--space-2);
   color: var(--text-primary);
   background-color: var(--surface-raised);
@@ -218,5 +258,16 @@ input[type="checkbox"] {
   margin: 0;
   font-size: 0.8125rem;
   line-height: 1.6;
+}
+
+@media (max-width: 520px) {
+  .settings__row:not(.settings__row--check) {
+    grid-template-columns: 1fr;
+    gap: var(--space-2);
+  }
+
+  select {
+    inline-size: 100%;
+  }
 }
 </style>

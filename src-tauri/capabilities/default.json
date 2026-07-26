@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Minimal capability set for the CC Trace desktop shell. core:default enables invoke and event listening only. core:window:allow-hide backs one user-facing behaviour: closing the main, settings, or onboarding window with Cmd/Ctrl+W keeps the app resident in the system area instead of quitting. The frontend gets no filesystem, shell, HTTP, or secret access.",
-  "windows": ["main", "compact", "settings", "onboarding"],
+  "description": "Minimal capability set for the CC Trace desktop shell. core:default enables invoke and event listening only. core:window:allow-hide backs one user-facing behaviour: closing the main or onboarding window with Cmd/Ctrl+W keeps the app resident in the system area instead of quitting. The frontend gets no filesystem, shell, HTTP, or secret access.",
+  "windows": ["main", "compact", "onboarding"],
   "permissions": ["core:default", "core:window:allow-hide"]
 }

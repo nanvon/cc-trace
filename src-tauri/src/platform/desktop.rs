@@ -5,12 +5,27 @@
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use tauri::{AppHandle, Manager, PhysicalPosition, Position, WebviewWindow};
+use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, Position, WebviewWindow};
 
 pub const COMPACT_WINDOW: &str = "compact";
 pub const MAIN_WINDOW: &str = "main";
-pub const SETTINGS_WINDOW: &str = "settings";
 pub const ONBOARDING_WINDOW: &str = "onboarding";
+pub const EVENT_MAIN_NAVIGATION: &str = "navigation://main";
+
+#[derive(Clone, Copy)]
+pub enum MainNavigationTarget {
+    Quota,
+    Settings,
+}
+
+impl MainNavigationTarget {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Quota => "quota",
+            Self::Settings => "settings",
+        }
+    }
+}
 
 /// 紧凑面板与系统区域图标之间的间隙。
 const ANCHOR_GAP: f64 = 10.0;
@@ -40,6 +55,20 @@ fn last_anchor() -> &'static Mutex<Option<PhysicalPosition<f64>>> {
 pub fn show_window(app: &AppHandle, label: &str) -> Result<(), WindowError> {
     let window = app.get_webview_window(label).ok_or(WindowError)?;
 
+    present_window(&window)
+}
+
+/// 把一次性导航目标发给主窗口，再显示并聚焦同一个原生窗口。
+pub fn show_main(app: &AppHandle, target: MainNavigationTarget) -> Result<(), WindowError> {
+    let window = app.get_webview_window(MAIN_WINDOW).ok_or(WindowError)?;
+
+    window
+        .emit(EVENT_MAIN_NAVIGATION, target.as_str())
+        .map_err(|_| WindowError)?;
+    present_window(&window)
+}
+
+fn present_window(window: &WebviewWindow) -> Result<(), WindowError> {
     window.unminimize().map_err(|_| WindowError)?;
     window.show().map_err(|_| WindowError)?;
     window.set_focus().map_err(|_| WindowError)

@@ -84,6 +84,7 @@ export default {
 
   settings: {
     title: "Settings",
+    backToQuota: "Back to quota",
     general: "General",
     refreshInterval: "Auto-refresh interval",
     launchAtLogin: "Launch CC Trace at login",

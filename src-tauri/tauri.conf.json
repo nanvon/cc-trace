@@ -45,17 +45,6 @@
         }
       },
       {
-        "label": "settings",
-        "title": "CC Trace 设置",
-        "url": "/#/settings",
-        "width": 520,
-        "height": 560,
-        "minWidth": 460,
-        "minHeight": 500,
-        "center": true,
-        "visible": false
-      },
-      {
         "label": "onboarding",
         "title": "CC Trace",
         "url": "/#/onboarding",

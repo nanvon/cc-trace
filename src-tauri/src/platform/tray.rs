@@ -9,7 +9,7 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{App, AppHandle, Manager, Wry};
 
-use super::desktop::{MAIN_WINDOW, SETTINGS_WINDOW, hide_compact, show_window, toggle_compact};
+use super::desktop::{MainNavigationTarget, hide_compact, show_main, toggle_compact};
 use super::strings::{Lang, native};
 use crate::app::AppCore;
 use crate::scheduler::RefreshTrigger;
@@ -28,9 +28,9 @@ pub fn install(app: &App, lang: Lang) -> tauri::Result<()> {
         .menu(&build_menu(app, lang)?)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {
-            MENU_OPEN => open_window(app, MAIN_WINDOW),
+            MENU_OPEN => open_main(app, MainNavigationTarget::Quota),
             MENU_REFRESH => refresh_all(app),
-            MENU_SETTINGS => open_window(app, SETTINGS_WINDOW),
+            MENU_SETTINGS => open_main(app, MainNavigationTarget::Settings),
             MENU_QUIT => app.exit(0),
             _ => {}
         })
@@ -86,9 +86,9 @@ fn build_menu<M: Manager<Wry>>(manager: &M, lang: Lang) -> tauri::Result<Menu<Wr
     Menu::with_items(manager, &[&open, &refresh, &settings, &separator, &quit])
 }
 
-fn open_window(app: &AppHandle, label: &str) {
+fn open_main(app: &AppHandle, target: MainNavigationTarget) {
     hide_compact(app);
-    let _ = show_window(app, label);
+    let _ = show_main(app, target);
 }
 
 /// 原生菜单的「刷新额度」与界面共用同一个用例：同一份请求合并、节流与退避。

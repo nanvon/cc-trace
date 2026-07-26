@@ -85,6 +85,7 @@ export default {
 
   settings: {
     title: "设置",
+    backToQuota: "返回额度",
     general: "通用",
     refreshInterval: "自动刷新间隔",
     launchAtLogin: "开机时启动 CC Trace",

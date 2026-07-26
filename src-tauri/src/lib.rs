@@ -16,7 +16,7 @@ use tauri::{Manager, WindowEvent};
 
 use app::AppCore;
 use platform::desktop::{
-    self, COMPACT_WINDOW, MAIN_WINDOW, ONBOARDING_WINDOW, SETTINGS_WINDOW, hide_compact,
+    self, COMPACT_WINDOW, MAIN_WINDOW, MainNavigationTarget, ONBOARDING_WINDOW, hide_compact,
 };
 use platform::strings::Lang;
 use scheduler::RefreshTrigger;
@@ -27,7 +27,16 @@ pub fn run() {
         // 常驻托盘应用必须单实例：否则第二次启动会出现第二个图标，
         // 并让两个进程同时写同一份 settings.json。
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            let _ = desktop::show_compact_at_anchor(app);
+            hide_compact(app);
+            let onboarding_completed = app
+                .try_state::<Arc<AppCore>>()
+                .map_or(true, |core| core.settings().onboarding.completed);
+
+            if onboarding_completed {
+                let _ = desktop::show_main(app, MainNavigationTarget::Quota);
+            } else {
+                let _ = desktop::show_window(app, ONBOARDING_WINDOW);
+            }
         }))
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
@@ -72,7 +81,7 @@ pub fn run() {
             WindowEvent::CloseRequested { api, .. }
                 if matches!(
                     window.label(),
-                    COMPACT_WINDOW | MAIN_WINDOW | SETTINGS_WINDOW | ONBOARDING_WINDOW
+                    COMPACT_WINDOW | MAIN_WINDOW | ONBOARDING_WINDOW
                 ) =>
             {
                 api.prevent_close();

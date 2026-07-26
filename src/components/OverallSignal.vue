@@ -16,6 +16,8 @@ import { useTimeText } from "../lib/useTimeText";
 const props = defineProps<{
   providers: ProviderSnapshot[];
   variant: "compact" | "full";
+  titleId?: string;
+  titleTabindex?: number;
 }>();
 
 const { t } = useI18n();
@@ -63,7 +65,12 @@ const lastSuccess = computed(() => {
 <template>
   <div class="signal" :class="[`signal--${variant}`, `signal--${tone}`]">
     <div class="signal__text">
-      <component :is="variant === 'full' ? 'h1' : 'p'" class="signal__title">
+      <component
+        :is="variant === 'full' ? 'h1' : 'p'"
+        :id="titleId"
+        class="signal__title"
+        :tabindex="titleTabindex"
+      >
         {{ title }}
       </component>
       <p class="signal__meta numeric supporting">{{ lastSuccess }}</p>

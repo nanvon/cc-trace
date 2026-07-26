@@ -1,8 +1,8 @@
 /**
  * 每个窗口共用的启动流程：读取状态、订阅事件、绑定键盘。
  *
- * 四个窗口各自是独立的 webview，因此每个窗口都要自己订阅一次。所有窗口消费的是
- * 同一份 Rust 状态，不存在第二个状态源。
+ * 三个窗口各自是独立的 webview，因此每个窗口都要自己订阅一次。主窗口的额度与设置
+ * 子路由共用一份订阅；所有窗口消费的是同一份 Rust 状态，不存在第二个状态源。
  */
 
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -15,7 +15,7 @@ import { useQuotaStore } from "../features/quota/store";
 import { onSettingsUpdated } from "../features/settings/api";
 import { useSettingsStore } from "../features/settings/store";
 
-export type Surface = "compact" | "main" | "settings" | "onboarding";
+export type Surface = "compact" | "main" | "onboarding";
 
 export function useAppShell(surface: Surface) {
   const quota = useQuotaStore();

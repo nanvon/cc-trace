@@ -2,19 +2,26 @@ import { createRouter, createWebHashHistory } from "vue-router";
 
 import CompactView from "../views/CompactView.vue";
 import MainView from "../views/MainView.vue";
+import MainWindowView from "../views/MainWindowView.vue";
 import OnboardingView from "../views/OnboardingView.vue";
 import SettingsView from "../views/SettingsView.vue";
 
 /**
- * 每个 Tauri 窗口通过 hash 载入自己的表面，见 `src-tauri/tauri.conf.json`。
- * 这里没有跨窗口导航：窗口之间的关系由 Rust 平台层管理。
+ * 紧凑面板与首次启动仍各自通过 hash 载入独立表面。
+ * 额度总览与设置则是 `main` WebviewWindow 内的两个子路由。
  */
 export const router = createRouter({
   history: createWebHashHistory(),
   routes: [
-    { path: "/", name: "main", component: MainView },
+    {
+      path: "/",
+      component: MainWindowView,
+      children: [
+        { path: "", name: "main", component: MainView },
+        { path: "settings", name: "settings", component: SettingsView },
+      ],
+    },
     { path: "/compact", name: "compact", component: CompactView },
-    { path: "/settings", name: "settings", component: SettingsView },
     { path: "/onboarding", name: "onboarding", component: OnboardingView },
   ],
 });

@@ -3,9 +3,10 @@ name: CC Trace
 description: A restrained adaptive desktop system built around stable provider lanes and honest reset-state rails.
 ---
 
-<!-- Updated 2026-07-25 from the shipped implementation. Token values below are mirrored from
+<!-- Token values below are mirrored from the shipped implementation in
      `src/styles/tokens.css`, which is the single source of truth; component names map to
-     `src/components/`. The semantic-name ↔ CSS-variable table lives in
+     `src/components/`. Window topology includes the implemented ADR-0011 structure; desktop
+     validation is still pending. The semantic-name ↔ CSS-variable table lives in
      `docs/设计方向与状态规范.md` §3.4 and must be changed alongside any token rename. -->
 
 # Design System: CC Trace
@@ -84,9 +85,9 @@ Appearance is driven by `data-appearance` on the root element: absent or `system
 
 The core spatial grammar is a stack of stable provider lanes. Each lane reads from identity to remaining capacity to reset endpoint, then to freshness and recovery. Compact surfaces collapse details but preserve that order; larger windows add explanation below the same rail instead of changing the model.
 
-Use a four-point spacing rhythm. Dense control groups prefer 8–16 units; major content transitions use 24–32 units. Provider order never changes after refresh. Main-window content remains a single page and becomes one column before text or controls collide.
+Use a four-point spacing rhythm. Dense control groups prefer 8–16 units; major content transitions use 24–32 units. Provider order never changes after refresh. The main window's quota view remains a single page and becomes one column before text or controls collide; settings replaces it as a narrow secondary view rather than appearing beside it.
 
-Transient surfaces originate from their system trigger. The macOS compact panel is anchored to the Menu Bar icon; the Windows compact panel appears adjacent to the Tray. Main, settings and onboarding windows use the platform title bar and focus model.
+Transient surfaces originate from their system trigger. The macOS compact panel is anchored to the Menu Bar icon; the Windows compact panel appears adjacent to the Tray. The main window contains quota and settings views under one platform title bar and focus model; onboarding remains a separate window.
 
 **The Stable Lane Rule.** Risk changes emphasis, never spatial order.
 
@@ -94,7 +95,7 @@ Transient surfaces originate from their system trigger. The macOS compact panel 
 
 ## Elevation & Depth
 
-Depth is structural, not decorative. The compact panel may use the operating system's translucent or acrylic material at the outer shell, but its content surfaces remain solid enough for dependable contrast. Main and settings windows use tonal separation and hairlines before shadows.
+Depth is structural, not decorative. The compact panel may use the operating system's translucent or acrylic material at the outer shell, but its content surfaces remain solid enough for dependable contrast. The main window's quota and settings views use tonal separation and hairlines before shadows.
 
 Transient panels use one layered ambient shadow and a subtle neutral ring. Interactive cards do not float at rest; hover may strengthen the ring without moving the layout. Never stack translucent surfaces.
 
