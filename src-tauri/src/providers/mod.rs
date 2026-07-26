@@ -1,10 +1,12 @@
 //! Provider 凭据发现、额度请求、响应解析和标准化。
 //!
-//! 第 11 阶段只有 [`synthetic`] 这一个实现，产出合成快照用于验证桌面壳与状态矩阵。
+//! 当前运行时仍只有 [`synthetic`] 这一个实现，产出合成快照用于验证桌面壳与状态矩阵。
+//! [`codex`] 目前只包含获用户授权提前落地的离线解析器，不读取凭据、不请求网络。
 //! 第 12 阶段接入真实 Codex / Claude Code 时**只替换本模块内部的实现**：
 //! [`QuotaProvider`] trait、[`ProviderFetchOutcome`] 与 `crate::contracts` 保持不变，
 //! 调度、命令与前端都不需要改动。
 
+pub mod codex;
 pub mod synthetic;
 
 use std::future::Future;

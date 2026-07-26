@@ -7,4 +7,9 @@
 - 从 cc-bar 提取样本时，只引用业务事实和预期结果，不复制旧缓存格式作为新应用输入。
 - 每个 Fixture 必须说明来源类型、脱敏方式、覆盖的行为和预期结果。
 
-首个 Provider 最小闭环开始前再加入具体 Fixture。
+当前已加入：
+
+- `providers/codex/`：按已确认协议字段和旧版只读测试预期人工构造的 Codex
+  Usage API 样本；不是真实账号响应，详细来源与预期见目录内 `README.md`。
+
+Claude Code Fixture 仍待其离线解析切片开始时加入。
