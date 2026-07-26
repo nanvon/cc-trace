@@ -18,10 +18,7 @@ export function isMainNavigationTarget(value: unknown): value is MainNavigationT
   return value === "quota" || value === "settings";
 }
 
-export function mainRoute(
-  target: MainNavigationTarget,
-  origin?: "quota",
-): RouteLocationRaw {
+export function mainRoute(target: MainNavigationTarget, origin?: "quota"): RouteLocationRaw {
   if (target === "settings") {
     return {
       name: "settings",

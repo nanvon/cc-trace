@@ -30,7 +30,7 @@ pub fn run() {
             hide_compact(app);
             let onboarding_completed = app
                 .try_state::<Arc<AppCore>>()
-                .map_or(true, |core| core.settings().onboarding.completed);
+                .is_none_or(|core| core.settings().onboarding.completed);
 
             if onboarding_completed {
                 let _ = desktop::show_main(app, MainNavigationTarget::Quota);
