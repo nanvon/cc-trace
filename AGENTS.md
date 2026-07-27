@@ -109,6 +109,7 @@
 - CI 只做编译、类型、格式、lint 和测试；不打包、不签名、不发起真实 Provider 请求、不依赖 `../cc-bar`。
 - 改版本号时 `package.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json` 三处一起改。
 - 发布前逐项走 `docs/工程与发布.md` 的发布检查单；许可证由产品所有者决定，不代选。
+- **不得提出任何以购买 Apple 开发者账号或代码签名证书为前提的方案**，见 [ADR-0016](docs/决策/ADR-0016-不购买Apple开发者账号.md)。需要签名时一律使用免费的自签名证书。
 
 ### 5.7 改文档本身
 

@@ -56,6 +56,16 @@ Keychain 项属于 Claude Code 自己的存储，CC Trace 只读它、按 [ADR-0
 - Rust 侧新增 `credentials` 模块与 macOS 条件编译分支；Windows 分支只保留文件来源。
 - 首次读取 Keychain 会触发一次系统钥匙串访问授权弹窗。这是 macOS 的既有行为，需要写进首次启动说明与实机走查清单。
 - 应用签名变化（开发构建、正式签名、重新签名）会使已授予的钥匙串访问失效并重新弹窗，发布阶段需要复核。
+
+### 2026-07-27 实机记录
+
+首次实机运行确认每次重新编译后都会重新要求授权。原因是 `cargo build` 产出的是 adhoc 签名（`Signature=adhoc`、`flags=0x20002(adhoc,linker-signed)`），没有稳定的签名标识，钥匙串 ACL 只能按 CDHash 记录被授权的程序，而 CDHash 随二进制内容变化。
+
+Swift 版 cc-bar 不弹窗，是因为它通过 `/usr/bin/security` 子进程读取：写进 ACL 的是 Apple 签名、标识恒定的系统工具，不是 cc-bar 自己。代价是该授权对**所有**调用 `security` 的程序生效，边界比按应用授权弱。这一点不改变本 ADR 的选择。
+
+解决方式是用固定证书签名，使 ACL 记录 designated requirement 而非 CDHash。按 [ADR-0016](ADR-0016-不购买Apple开发者账号.md) 使用免费的自签名 Code Signing 证书即可，不需要 Apple 开发者账号。
+
+> 待确认：自签名证书能否让 ACL 在重新编译后仍然匹配，属于基于钥匙串 ACL 机制的推断，尚未实测。
 - 两平台凭据来源不一致，[测试策略](../测试策略.md) 与双平台验收必须分别记录 macOS 与 Windows 的凭据发现结果，不得互相推断。
 - Keychain 读取失败（用户拒绝授权、项被删除）必须落在 `no_credentials` 或凭据类 `error`，不得降级成 `offline`。
 
