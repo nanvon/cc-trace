@@ -149,6 +149,7 @@ export default {
       "These numbers do not come from Codex or Claude Code. They exist to verify the desktop shell and its status states.",
     scenario: "Verification scenario",
     scenarioOption: {
+      live: "Live data",
       healthy: "Both healthy",
       firstLoad: "First load",
       noCredentials: "No credentials",

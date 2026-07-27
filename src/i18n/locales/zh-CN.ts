@@ -147,6 +147,7 @@ export default {
     notice: "当前数值不来自 Codex 或 Claude Code，只用于验证桌面壳与状态表达。",
     scenario: "验证场景",
     scenarioOption: {
+      live: "真实数据",
       healthy: "两个都正常",
       firstLoad: "首次加载",
       noCredentials: "无凭据",

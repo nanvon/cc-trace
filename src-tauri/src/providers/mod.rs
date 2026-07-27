@@ -9,6 +9,8 @@
 
 pub mod claude;
 pub mod codex;
+pub mod credentials;
+pub mod http;
 pub mod synthetic;
 
 use std::future::Future;
@@ -28,6 +30,10 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 pub enum ProviderFetchOutcome {
     Success {
         identity: Option<ProviderIdentity>,
+        /// 身份指纹：account id 与邮箱的单向摘要，用于 `docs/额度领域模型.md` 第 4.1 节
+        /// 的身份变化判断。比较只在 Rust 内进行；它不进 command 载荷，只以摘要形式
+        /// 进入额度缓存，明文永远不离开凭据模块。
+        identity_key: Option<String>,
         snapshot: QuotaSnapshot,
     },
     /// 凭据文件缺失或无可用凭据，不发起请求。

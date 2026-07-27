@@ -4,13 +4,14 @@
  * 对应的 `dev_set_scenario` 命令也被 `#[cfg(debug_assertions)]` 编译掉。
  *
  * 它切换的是合成 Provider 的内部场景，数据仍走 `quota://updated` 这一条路径，
- * 不是第二套状态源。
+ * 不是第二套状态源。默认停在「真实数据」，切到任一合成场景才会脱离真实 Provider。
  */
 import { invoke } from "@tauri-apps/api/core";
 import { ref } from "vue";
 import { useI18n } from "vue-i18n";
 
 const SCENARIOS = [
+  "live",
   "healthy",
   "firstLoad",
   "noCredentials",
@@ -23,7 +24,8 @@ const SCENARIOS = [
 ] as const;
 
 const { t } = useI18n();
-const scenario = ref<(typeof SCENARIOS)[number]>("healthy");
+// 默认与 Rust 侧一致：debug 构建也走真实 Provider，合成场景只有显式切换才生效。
+const scenario = ref<(typeof SCENARIOS)[number]>("live");
 
 async function apply(): Promise<void> {
   try {

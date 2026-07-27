@@ -1,14 +1,37 @@
-//! Claude Code OAuth Usage API 的离线响应解析与标准化。
+//! Claude Code 额度来源：凭据发现、token 续期、OAuth Usage 请求与响应标准化。
 //!
-//! 本模块只处理已取得的 JSON 字符串：不发现凭据、不读取文件、不发起网络请求，也不
-//! 持有 token。输入按 `docs/额度领域模型.md` 第 3.2 节映射为现有脱敏 contract，
-//! 真实 Provider 接入后仍由同一个解析入口产出 [`QuotaSnapshot`]。
+//! 协议见 `docs/额度领域模型.md` 第 3.2 节，凭据来源与平台差异见第 5 节。响应解析
+//! ([`parse_usage_response`]) 与网络分开，因此 Fixture 测试不需要出网。
+//!
+//! 刷新回写落回**读到凭据的那个来源**（文件或 macOS 钥匙串）：Claude Code 的
+//! refresh token 会轮换，不回写会作废 CLI 手里的那份，见
+//! [ADR-0014](../../../docs/决策/ADR-0014-token刷新结果回写外部凭据.md)。
+
+use std::sync::Arc;
+use std::time::Duration as StdDuration;
 
 use chrono::{DateTime, Duration, Utc};
 use serde::Deserialize;
 use serde_json::Value;
+use tokio::sync::Mutex;
 
-use crate::contracts::{QuotaSnapshot, QuotaWindow, QuotaWindowKind};
+use super::credentials::claude::{ClaudeCredentials, RefreshedTokens};
+use super::credentials::{self, Discovery, Secret};
+use super::{BoxFuture, ProviderFetchOutcome, QuotaProvider, http};
+use crate::contracts::{
+    ErrorKind, ProviderId, ProviderIdentity, QuotaSnapshot, QuotaWindow, QuotaWindowKind,
+};
+use crate::scheduler::params::CLAUDE_TOKEN_REFRESH_SKEW_SECS;
+
+const USAGE_ENDPOINT: &str = "https://api.anthropic.com/api/oauth/usage";
+const TOKEN_ENDPOINT: &str = "https://platform.claude.com/v1/oauth/token";
+const OAUTH_BETA_HEADER: &str = "oauth-2025-04-20";
+/// Claude Code 的公开 OAuth client id，与 CLI 使用同一份，不是秘密。
+const OAUTH_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
+/// 刷新被拒后等待多久再重读来源：给抢先成功的其他客户端一点写入时间。
+const SOFT_RECOVERY_DELAY: StdDuration = StdDuration::from_secs(1);
+/// 刷新响应没给 `expires_in` 时的保守默认寿命（秒）。
+const DEFAULT_TOKEN_LIFETIME_SECS: i64 = 3_600;
 
 const FIVE_HOUR_SECONDS: u64 = 5 * 60 * 60;
 const WEEKLY_SECONDS: u64 = 7 * 24 * 60 * 60;
@@ -439,6 +462,254 @@ fn non_empty(value: &str) -> Option<&str> {
     (!value.is_empty()).then_some(value)
 }
 
+// --- 真实额度来源 ---
+
+/// 真实 Claude Code 额度来源：凭据发现 → 按需续期 → Usage 请求 → 标准化。
+pub struct ClaudeProvider {
+    /// 同一 Provider 进程内只允许一个刷新任务。Claude 的 refresh token 是一次性的，
+    /// 并发刷新会让其中一个必然拿到 `invalid_grant`。
+    refresh_lock: Mutex<()>,
+}
+
+impl ClaudeProvider {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            refresh_lock: Mutex::new(()),
+        })
+    }
+
+    async fn fetch_once(&self) -> ProviderFetchOutcome {
+        let credentials = match credentials::claude::discover() {
+            Discovery::Found(credentials) => credentials,
+            Discovery::Missing => return ProviderFetchOutcome::NoCredentials,
+            Discovery::Unsupported => return ProviderFetchOutcome::Unsupported,
+            // 钥匙串授权被拒也落这里：有登录态，只是我们拿不到。
+            Discovery::Unreadable => {
+                return ProviderFetchOutcome::Failed {
+                    kind: ErrorKind::Credentials,
+                };
+            }
+        };
+
+        let access_token = match self.ensure_fresh_access_token(&credentials).await {
+            Ok(token) => token,
+            Err(outcome) => return outcome,
+        };
+
+        let response = match http::client()
+            .get(USAGE_ENDPOINT)
+            .header(
+                reqwest::header::AUTHORIZATION,
+                format!("Bearer {}", access_token.expose()),
+            )
+            .header(reqwest::header::ACCEPT, "application/json")
+            .header("anthropic-beta", OAUTH_BETA_HEADER)
+            .send()
+            .await
+        {
+            Ok(response) => response,
+            Err(error) => return http::classify_transport(&error),
+        };
+        if let Some(failure) = http::classify_response(&response) {
+            return failure;
+        }
+
+        let body = match response.text().await {
+            Ok(body) => body,
+            Err(error) => return http::classify_transport(&error),
+        };
+
+        let parsed = match parse_usage_response(&body, Utc::now()) {
+            Ok(parsed) => parsed,
+            Err(_) => {
+                return ProviderFetchOutcome::Failed {
+                    kind: ErrorKind::Protocol,
+                };
+            }
+        };
+
+        ProviderFetchOutcome::Success {
+            identity: Some(ProviderIdentity {
+                account_hint: credentials.email.as_ref().map(Secret::hint),
+                plan: credentials.subscription.clone(),
+            }),
+            identity_key: credentials::identity_fingerprint(
+                "claude",
+                &[credentials.email.as_ref()],
+            ),
+            snapshot: parsed.snapshot,
+        }
+    }
+
+    async fn ensure_fresh_access_token(
+        &self,
+        credentials: &ClaudeCredentials,
+    ) -> Result<Secret, ProviderFetchOutcome> {
+        // 没有过期时刻就不主动刷新：让 Provider 用 401 告诉我们，而不是抢 refresh token。
+        let Some(expires_at) = credentials.expires_at else {
+            return Ok(credentials.access_token.clone());
+        };
+        if !is_expiring(expires_at, Utc::now()) {
+            return Ok(credentials.access_token.clone());
+        }
+
+        let Some(refresh_token) = credentials.refresh_token.clone() else {
+            return Err(ProviderFetchOutcome::Failed {
+                kind: ErrorKind::Credentials,
+            });
+        };
+
+        let _guard = self.refresh_lock.lock().await;
+
+        // 排队期间 Claude Code CLI 或另一次刷新可能已经写入新 token，先重读再决定。
+        let refresh_token = match reread() {
+            Some(latest) => {
+                if latest
+                    .expires_at
+                    .is_some_and(|expires_at| !is_expiring(expires_at, Utc::now()))
+                {
+                    return Ok(latest.access_token);
+                }
+                latest.refresh_token.unwrap_or(refresh_token)
+            }
+            None => refresh_token,
+        };
+
+        let refreshed = match refresh_tokens(&refresh_token).await {
+            Ok(refreshed) => refreshed,
+            // 服务端说这份 refresh token 已经作废：多半是别的客户端抢先刷成功了。
+            // 等一拍重读，发现新值就静默采用；否则报凭据类错误。首版不做 delegated
+            // refresh，见 ADR-0007。
+            Err(RefreshFailure::Revoked) => {
+                tokio::time::sleep(SOFT_RECOVERY_DELAY).await;
+                return recovered_token(&refresh_token).ok_or(ProviderFetchOutcome::Failed {
+                    kind: ErrorKind::Credentials,
+                });
+            }
+            Err(RefreshFailure::Outcome(outcome)) => return Err(outcome),
+        };
+
+        credentials::claude::write_back(credentials.source, &refreshed).map_err(|_| {
+            ProviderFetchOutcome::Failed {
+                kind: ErrorKind::Credentials,
+            }
+        })?;
+
+        Ok(refreshed.access_token)
+    }
+}
+
+impl QuotaProvider for ClaudeProvider {
+    fn id(&self) -> ProviderId {
+        ProviderId::Claude
+    }
+
+    fn fetch(&self) -> BoxFuture<'_, ProviderFetchOutcome> {
+        Box::pin(self.fetch_once())
+    }
+}
+
+/// 重新读取凭据来源，只关心 token 与过期时刻。
+fn reread() -> Option<ClaudeCredentials> {
+    match credentials::claude::discover() {
+        Discovery::Found(credentials) => Some(credentials),
+        _ => None,
+    }
+}
+
+/// 软恢复：别的客户端刷新成功时，来源里会出现一个与我们手里不同且仍新鲜的 token。
+fn recovered_token(attempted_refresh: &Secret) -> Option<Secret> {
+    let latest = reread()?;
+    let rotated = latest
+        .refresh_token
+        .as_ref()
+        .is_some_and(|token| token != attempted_refresh);
+    let fresh = latest
+        .expires_at
+        .is_some_and(|expires_at| expires_at > Utc::now());
+
+    (rotated && fresh).then_some(latest.access_token)
+}
+
+fn is_expiring(expires_at: DateTime<Utc>, now: DateTime<Utc>) -> bool {
+    expires_at - now < Duration::seconds(CLAUDE_TOKEN_REFRESH_SKEW_SECS)
+}
+
+/// 刷新失败的两种形态。`Revoked` 需要走软恢复，其余直接映射成展示状态。
+enum RefreshFailure {
+    Revoked,
+    Outcome(ProviderFetchOutcome),
+}
+
+async fn refresh_tokens(refresh_token: &Secret) -> Result<RefreshedTokens, RefreshFailure> {
+    let response = http::client()
+        .post(TOKEN_ENDPOINT)
+        .header(reqwest::header::ACCEPT, "application/json")
+        .form(&[
+            ("grant_type", "refresh_token"),
+            ("refresh_token", refresh_token.expose()),
+            ("client_id", OAUTH_CLIENT_ID),
+        ])
+        .send()
+        .await
+        .map_err(|error| RefreshFailure::Outcome(http::classify_transport(&error)))?;
+
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|error| RefreshFailure::Outcome(http::classify_transport(&error)))?;
+
+    if !status.is_success() {
+        return Err(if is_invalid_grant(status, &body) {
+            RefreshFailure::Revoked
+        } else {
+            RefreshFailure::Outcome(ProviderFetchOutcome::Failed {
+                kind: ErrorKind::Credentials,
+            })
+        });
+    }
+
+    parse_refresh_response(&body, refresh_token, Utc::now()).ok_or(RefreshFailure::Outcome(
+        ProviderFetchOutcome::Failed {
+            kind: ErrorKind::Credentials,
+        },
+    ))
+}
+
+/// `400 invalid_grant` 是「这份 refresh token 已被轮换掉」，不是普通的凭据失效。
+fn is_invalid_grant(status: reqwest::StatusCode, body: &str) -> bool {
+    status == reqwest::StatusCode::BAD_REQUEST && body.contains("invalid_grant")
+}
+
+fn parse_refresh_response(
+    body: &str,
+    previous_refresh: &Secret,
+    now: DateTime<Utc>,
+) -> Option<RefreshedTokens> {
+    let root: Value = serde_json::from_str(body).ok()?;
+
+    let access_token = non_empty(root.get("access_token")?.as_str()?)?;
+    let refresh_token = root
+        .get("refresh_token")
+        .and_then(Value::as_str)
+        .and_then(non_empty)
+        .map(Secret::new)
+        .unwrap_or_else(|| previous_refresh.clone());
+    let lifetime = root
+        .get("expires_in")
+        .and_then(Value::as_f64)
+        .filter(|seconds| seconds.is_finite() && *seconds > 0.0)
+        .map(|seconds| seconds as i64)
+        .unwrap_or(DEFAULT_TOKEN_LIFETIME_SECS);
+
+    Some(RefreshedTokens {
+        access_token: Secret::new(access_token),
+        refresh_token,
+        expires_at: now + Duration::seconds(lifetime),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -451,6 +722,90 @@ mod tests {
 
     fn captured_at() -> DateTime<Utc> {
         DateTime::from_timestamp(1_700_000_000, 0).expect("valid fixture timestamp")
+    }
+
+    // --- token 续期 ---
+
+    #[test]
+    fn a_refresh_response_turns_expires_in_into_an_absolute_instant() {
+        let previous = Secret::new("rt_old");
+        let now = captured_at();
+        let parsed = parse_refresh_response(
+            r#"{"access_token":"at_new","refresh_token":"rt_new","expires_in":28800}"#,
+            &previous,
+            now,
+        )
+        .expect("fixture parses");
+
+        assert_eq!(parsed.access_token.expose(), "at_new");
+        assert_eq!(parsed.refresh_token.expose(), "rt_new");
+        assert_eq!(parsed.expires_at, now + Duration::seconds(28_800));
+    }
+
+    #[test]
+    fn a_missing_or_nonsensical_lifetime_falls_back_to_one_hour() {
+        let previous = Secret::new("rt_old");
+        let now = captured_at();
+        for body in [
+            r#"{"access_token":"a"}"#,
+            r#"{"access_token":"a","expires_in":0}"#,
+            r#"{"access_token":"a","expires_in":-5}"#,
+            r#"{"access_token":"a","expires_in":"soon"}"#,
+        ] {
+            let parsed =
+                parse_refresh_response(body, &previous, now).expect("an access token is enough");
+            assert_eq!(
+                parsed.expires_at,
+                now + Duration::seconds(DEFAULT_TOKEN_LIFETIME_SECS),
+                "{body:?}"
+            );
+            assert_eq!(
+                parsed.refresh_token.expose(),
+                "rt_old",
+                "an absent refresh_token means it was not rotated"
+            );
+        }
+    }
+
+    #[test]
+    fn a_refresh_response_without_an_access_token_is_not_usable() {
+        let previous = Secret::new("rt_old");
+        for body in ["not json", "{}", r#"{"access_token":""}"#] {
+            assert!(
+                parse_refresh_response(body, &previous, captured_at()).is_none(),
+                "{body:?} must not produce tokens"
+            );
+        }
+    }
+
+    #[test]
+    fn only_a_400_invalid_grant_triggers_the_soft_recovery_path() {
+        assert!(is_invalid_grant(
+            reqwest::StatusCode::BAD_REQUEST,
+            r#"{"error":"invalid_grant"}"#
+        ));
+        assert!(!is_invalid_grant(
+            reqwest::StatusCode::BAD_REQUEST,
+            r#"{"error":"invalid_request"}"#
+        ));
+        assert!(
+            !is_invalid_grant(
+                reqwest::StatusCode::UNAUTHORIZED,
+                r#"{"error":"invalid_grant"}"#
+            ),
+            "a 401 is a plain credential failure, not a rotated token"
+        );
+    }
+
+    #[test]
+    fn refresh_starts_only_thirty_seconds_before_expiry() {
+        let now = captured_at();
+        assert!(
+            !is_expiring(now + Duration::seconds(31), now),
+            "CC Trace must leave the refresh token to Claude Code for as long as possible"
+        );
+        assert!(is_expiring(now + Duration::seconds(29), now));
+        assert!(is_expiring(now - Duration::hours(1), now));
     }
 
     #[test]

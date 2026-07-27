@@ -32,8 +32,22 @@ serde_json = "1"
 chrono = "0.4"
 # 「跟随系统」的系统语言由 Rust 平台层解析，前端不读 navigator.language。
 sys-locale = "0.3"
-# 自动刷新循环与合成 Provider 的延迟。
-tokio = { version = "1", features = ["time"] }
+# 自动刷新循环与合成 Provider 的延迟；`sync` 提供 token 刷新的单飞互斥锁。
+tokio = { version = "1", features = ["time", "sync"] }
+# Provider 额度请求与 token 刷新。rustls 而非系统 OpenSSL，两个平台构建条件一致；
+# 关掉默认 features 避免引入 cookie、代理自动探测等首版不需要的能力。
+reqwest = { version = "0.12", default-features = false, features = [
+  "rustls-tls",
+  "json",
+] }
+# 身份变化判断用的单向摘要。account id 与邮箱本身永远不落盘，缓存里只存摘要，
+# 见 docs/额度领域模型.md 第 4.1 节。
+sha2 = "0.10"
+
+# macOS 上 Claude Code 的凭据可能只存在于系统钥匙串，见 ADR-0013。使用系统 API 读写，
+# 不启动 `security` 子进程。
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3"
 
 [dev-dependencies]
 tempfile = "3"

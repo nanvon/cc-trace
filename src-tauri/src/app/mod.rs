@@ -9,17 +9,22 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration as StdDuration;
 
-use chrono::{Duration, Utc};
+#[cfg(debug_assertions)]
+use chrono::Duration;
+use chrono::{DateTime, Utc};
 use tauri::{AppHandle, Emitter};
 
 use crate::contracts::{
     ProviderId, QuotaState, RefreshState, RefreshStatePayload, Settings, SettingsUpdate,
 };
 use crate::providers::QuotaProvider;
+use crate::providers::claude::ClaudeProvider;
+use crate::providers::codex::CodexProvider;
+#[cfg(debug_assertions)]
 use crate::providers::synthetic::{Scenario, ScenarioHandle, SyntheticProvider};
 use crate::scheduler::params::jittered_seconds;
 use crate::scheduler::{ProviderRuntime, RefreshDecision, RefreshTrigger};
-use crate::storage::{LoadIssue, SettingsStore};
+use crate::storage::{CachedProvider, LoadIssue, QuotaCache, QuotaCacheStore, SettingsStore};
 
 /// 额度数据发生变化。载荷是完整的 [`QuotaState`]，前端不需要自己合并增量。
 pub const EVENT_QUOTA_UPDATED: &str = "quota://updated";
@@ -29,6 +34,7 @@ pub const EVENT_QUOTA_REFRESH_STATE: &str = "quota://refresh-state";
 pub const EVENT_SETTINGS_UPDATED: &str = "settings://updated";
 
 /// 预置旧快照时假装它来自多久以前，让 `stale` 场景的「上次成功」时间读起来可信。
+#[cfg(debug_assertions)]
 const SEEDED_SNAPSHOT_AGE_MINUTES: i64 = 132;
 
 /// 设置写入失败。不携带路径或系统错误原文。
@@ -44,9 +50,15 @@ pub struct SettingsOutcome {
 
 pub struct AppCore {
     store: SettingsStore,
+    cache_store: QuotaCacheStore,
     settings: Mutex<Settings>,
     runtimes: Mutex<BTreeMap<ProviderId, ProviderRuntime>>,
+    /// 真实额度来源。release 构建里这是唯一的来源。
     providers: BTreeMap<ProviderId, Arc<dyn QuotaProvider>>,
+    /// debug 构建的合成来源，只在显式切换到某个验证场景时才被使用。
+    #[cfg(debug_assertions)]
+    synthetic: BTreeMap<ProviderId, Arc<dyn QuotaProvider>>,
+    #[cfg(debug_assertions)]
     scenario: ScenarioHandle,
     /// 每次重启自动刷新循环时自增，旧循环发现代次不符就自行退出。
     schedule_generation: AtomicU64,
@@ -54,30 +66,72 @@ pub struct AppCore {
 
 impl AppCore {
     pub fn new(config_dir: PathBuf) -> (Arc<Self>, Option<LoadIssue>) {
-        let store = SettingsStore::new(config_dir);
+        let store = SettingsStore::new(config_dir.clone());
         let (settings, issue) = store.load();
+        let cache_store = QuotaCacheStore::new(config_dir);
 
-        let scenario = ScenarioHandle::default();
         let mut providers: BTreeMap<ProviderId, Arc<dyn QuotaProvider>> = BTreeMap::new();
+        providers.insert(ProviderId::Codex, CodexProvider::new());
+        providers.insert(ProviderId::Claude, ClaudeProvider::new());
+
         let mut runtimes = BTreeMap::new();
         for provider in ProviderId::ORDER {
-            providers.insert(
-                provider,
-                Arc::new(SyntheticProvider::new(provider, scenario.clone())),
-            );
             runtimes.insert(provider, ProviderRuntime::new(provider));
         }
+        restore_cached_snapshots(&cache_store, &mut runtimes);
+
+        #[cfg(debug_assertions)]
+        let scenario = ScenarioHandle::default();
+        #[cfg(debug_assertions)]
+        let synthetic = ProviderId::ORDER
+            .iter()
+            .map(|provider| {
+                let source: Arc<dyn QuotaProvider> =
+                    Arc::new(SyntheticProvider::new(*provider, scenario.clone()));
+                (*provider, source)
+            })
+            .collect();
 
         let core = Arc::new(Self {
             store,
+            cache_store,
             settings: Mutex::new(settings),
             runtimes: Mutex::new(runtimes),
             providers,
+            #[cfg(debug_assertions)]
+            synthetic,
+            #[cfg(debug_assertions)]
             scenario,
             schedule_generation: AtomicU64::new(0),
         });
 
         (core, issue)
+    }
+
+    /// 本次刷新该用哪个来源。
+    ///
+    /// release 构建里永远是真实 Provider。debug 构建里只有显式切到某个合成验证场景时
+    /// 才用合成来源，切回 [`Scenario::Live`] 立刻恢复真实数据——合成数据不是第二套
+    /// 业务状态源，见 [ADR-0009](../../../docs/决策/ADR-0009-合成数据下沉Rust并提前使用正式契约.md)。
+    fn source_for(&self, provider: ProviderId) -> Option<Arc<dyn QuotaProvider>> {
+        #[cfg(debug_assertions)]
+        if self.scenario.get() != Scenario::Live {
+            return self.synthetic.get(&provider).cloned();
+        }
+
+        self.providers.get(&provider).cloned()
+    }
+
+    /// 当前是否在使用真实数据。合成场景下不写额度缓存，避免污染真实快照。
+    fn uses_live_data(&self) -> bool {
+        #[cfg(debug_assertions)]
+        {
+            self.scenario.get() == Scenario::Live
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            true
+        }
     }
 
     // --- 设置 ---
@@ -185,7 +239,7 @@ impl AppCore {
 
         self.emit_refresh_state(app, provider, refresh_state);
 
-        let Some(source) = self.providers.get(&provider).cloned() else {
+        let Some(source) = self.source_for(provider) else {
             return;
         };
         let core = Arc::clone(self);
@@ -201,14 +255,46 @@ impl AppCore {
                 }
             }
 
+            core.persist_cache();
             core.emit_refresh_state(&app, provider, RefreshState::Idle);
             core.emit_quota_state(&app);
         });
     }
 
+    /// 把每个 Provider 的最新有效快照写进缓存，供下次启动先展示后刷新。
+    ///
+    /// 写入失败不影响本次展示：缓存缺失只是下次启动慢一步，不是错误。
+    fn persist_cache(&self) {
+        if !self.uses_live_data() {
+            return;
+        }
+
+        let providers: Vec<CachedProvider> = {
+            let runtimes = self.runtimes.lock().expect("runtimes lock");
+            ProviderId::ORDER
+                .iter()
+                .filter_map(|provider| {
+                    let runtime = runtimes.get(provider)?;
+                    Some(CachedProvider {
+                        provider: *provider,
+                        identity: runtime.snapshot.identity.clone(),
+                        identity_key: runtime.identity_key().map(str::to_owned),
+                        snapshot: runtime.snapshot.snapshot.clone()?,
+                        last_success_at: runtime.snapshot.last_success_at.clone()?,
+                    })
+                })
+                .collect()
+        };
+
+        let _ = self.cache_store.save(&QuotaCache::new(providers));
+    }
+
     // --- 桌面壳验证场景（合成数据） ---
 
     /// 切换验证场景：重置两个 Provider，按需要预置一份旧快照，再走一次正常刷新。
+    ///
+    /// 切到 [`Scenario::Live`] 会丢掉合成快照并重新向真实 Provider 取一次数据。
+    #[cfg(debug_assertions)]
     pub fn apply_scenario(self: &Arc<Self>, app: &AppHandle, scenario: Scenario) {
         self.scenario.set(scenario);
 
@@ -247,6 +333,35 @@ impl AppCore {
         let _ = app.emit(
             EVENT_QUOTA_REFRESH_STATE,
             RefreshStatePayload { provider, refresh },
+        );
+    }
+}
+
+/// 用缓存里的最新有效快照预热运行时，让界面在第一次刷新完成前就有内容可看。
+///
+/// 恢复出来的快照一律是 `stale`：它不是本次会话取得的，见
+/// `docs/技术架构.md`「UI 启动顺序」。
+fn restore_cached_snapshots(
+    cache_store: &QuotaCacheStore,
+    runtimes: &mut BTreeMap<ProviderId, ProviderRuntime>,
+) {
+    let Some(cache) = cache_store.load() else {
+        return;
+    };
+
+    for cached in cache.providers {
+        let Some(runtime) = runtimes.get_mut(&cached.provider) else {
+            continue;
+        };
+
+        let last_success_at = DateTime::parse_from_rfc3339(&cached.last_success_at)
+            .ok()
+            .map(|value| value.with_timezone(&Utc));
+        runtime.restore_from_cache(
+            cached.identity,
+            cached.identity_key,
+            cached.snapshot,
+            last_success_at,
         );
     }
 }

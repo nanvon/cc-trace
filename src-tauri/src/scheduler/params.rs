@@ -28,6 +28,16 @@ pub const TRANSIENT_BACKOFF_CAP_SECS: i64 = 5 * 60;
 /// 即使上次刷新成功也降级，并触发一次刷新。
 pub const STALE_AGE_INTERVAL_MULTIPLIER: u32 = 2;
 
+/// Codex token 刷新提前量（秒）：access token 距过期少于这个值就先续期。
+pub const CODEX_TOKEN_REFRESH_SKEW_SECS: i64 = 300;
+
+/// Claude Code token 刷新提前量（秒）。
+///
+/// 明显小于 Codex：CC Trace 是只读监控，把 refresh token 的使用主动权让给
+/// Claude Code CLI，避免和它抢同一个一次性 refresh token，见
+/// `docs/额度领域模型.md` 第 5.2 节。
+pub const CLAUDE_TOKEN_REFRESH_SKEW_SECS: i64 = 30;
+
 /// 对给定间隔施加 ±`AUTO_REFRESH_JITTER_RATIO` 抖动。
 ///
 /// 不引入随机数依赖：用调用序号和进程启动以来的纳秒做低成本扰动即可满足
@@ -79,5 +89,7 @@ mod tests {
         assert_eq!(TRANSIENT_BACKOFF_STEPS_SECS, [30, 60, 120]);
         assert_eq!(TRANSIENT_BACKOFF_CAP_SECS, 300);
         assert_eq!(STALE_AGE_INTERVAL_MULTIPLIER, 2);
+        assert_eq!(CODEX_TOKEN_REFRESH_SKEW_SECS, 300);
+        assert_eq!(CLAUDE_TOKEN_REFRESH_SKEW_SECS, 30);
     }
 }

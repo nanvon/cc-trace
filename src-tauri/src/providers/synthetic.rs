@@ -25,8 +25,11 @@ const SYNTHETIC_LATENCY: StdDuration = StdDuration::from_millis(700);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Scenario {
-    /// 两个 Provider 都刷新成功。
+    /// 使用真实 Provider，不产生任何合成数据。这是默认值：debug 构建启动时也走真实闭环，
+    /// 合成场景只有显式切换才生效。
     #[default]
+    Live,
+    /// 两个 Provider 都刷新成功。
     Healthy,
     /// 清空快照后重新加载，用于 `loading + empty`。
     FirstLoad,
@@ -61,7 +64,9 @@ impl Scenario {
     /// 该场景下这个 Provider 的请求结局。
     fn outcome_for(self, provider: ProviderId, now: DateTime<Utc>) -> ProviderFetchOutcome {
         match (self, provider) {
-            (Self::Healthy | Self::FirstLoad, _) => success(provider, now),
+            // `Live` 下 `AppCore` 根本不会选中合成来源；这里只是防御性兜底，
+            // 保证即便被误调用也不会 panic，也不会产生看起来像故障的数据。
+            (Self::Live | Self::Healthy | Self::FirstLoad, _) => success(provider, now),
 
             (Self::NoCredentials, _) => ProviderFetchOutcome::NoCredentials,
 
@@ -199,6 +204,8 @@ fn success(provider: ProviderId, now: DateTime<Utc>) -> ProviderFetchOutcome {
 
     ProviderFetchOutcome::Success {
         identity: Some(identity),
+        // 合成来源没有真实身份，指纹固定，因此场景切换不会触发身份变化丢弃。
+        identity_key: Some(format!("synthetic:{provider:?}")),
         snapshot: QuotaSnapshot {
             windows,
             captured_at: now.to_rfc3339(),

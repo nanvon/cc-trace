@@ -1,11 +1,16 @@
 //! CC Trace 自己的版本化持久化。
 //!
-//! 首版只持久化 `settings.json`（含首次启动完成标记）。额度缓存 `quota-cache.json`
-//! 属第 12 阶段 Provider 最小闭环，此处不预留空实现。
+//! - `settings.json`：偏好与首次启动完成标记，损坏时回退默认值并保留 `.corrupt` 副本。
+//! - `quota-cache.json`：每个 Provider 的最新有效脱敏快照，损坏时直接删除并重新获取。
+//!
+//! 两个文件都只包含脱敏数据：凭据、token 与响应原文永远不进入本模块。外部凭据来源的
+//! token 回写属于 `providers::credentials`，不走这里。
 //!
 //! 本模块只读写 CC Trace 自己的数据目录，不读取、迁移、覆盖或删除 Swift 版 cc-bar 的
 //! 任何数据，见 `docs/决策/ADR-0003-独立应用身份不迁移数据.md`。
 
+mod quota_cache;
 mod settings_store;
 
+pub use quota_cache::{CachedProvider, QuotaCache, QuotaCacheStore};
 pub use settings_store::{LoadIssue, SettingsStore};

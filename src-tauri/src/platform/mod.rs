@@ -4,5 +4,6 @@
 
 pub mod autostart;
 pub mod desktop;
+pub mod keychain;
 pub mod strings;
 pub mod tray;

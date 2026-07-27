@@ -8,7 +8,8 @@ use chrono::{DateTime, Duration, Utc};
 use super::backoff::Backoff;
 use super::params::{MANUAL_REFRESH_MIN_INTERVAL_SECS, STALE_AGE_INTERVAL_MULTIPLIER};
 use crate::contracts::{
-    AppError, ProviderAvailability, ProviderId, ProviderSnapshot, RefreshState, SnapshotFreshness,
+    AppError, ProviderAvailability, ProviderId, ProviderIdentity, ProviderSnapshot, QuotaSnapshot,
+    RefreshState, SnapshotFreshness,
 };
 use crate::providers::ProviderFetchOutcome;
 
@@ -45,6 +46,8 @@ pub struct ProviderRuntime {
     in_flight: bool,
     last_manual_refresh: Option<DateTime<Utc>>,
     last_success_instant: Option<DateTime<Utc>>,
+    /// 上一次成功刷新时的身份指纹。只在 Rust 内比较，不进 command 载荷。
+    identity_key: Option<String>,
 }
 
 impl ProviderRuntime {
@@ -55,7 +58,38 @@ impl ProviderRuntime {
             in_flight: false,
             last_manual_refresh: None,
             last_success_instant: None,
+            identity_key: None,
         }
+    }
+
+    pub fn identity_key(&self) -> Option<&str> {
+        self.identity_key.as_deref()
+    }
+
+    /// 从额度缓存恢复快照时一并恢复身份指纹，让重启后的第一次刷新也能发现身份变化。
+    pub fn restore_identity_key(&mut self, identity_key: Option<String>) {
+        self.identity_key = identity_key;
+    }
+
+    /// 用缓存里的最新有效快照初始化，供启动时先展示再刷新。
+    ///
+    /// 缓存内容按定义不是本次会话取得的，因此新鲜度是 `stale` 而不是 `live`——
+    /// 「有数值」不等于「刷新成功」，见 `docs/状态与错误模型.md` 第 7 节。
+    pub fn restore_from_cache(
+        &mut self,
+        identity: Option<ProviderIdentity>,
+        identity_key: Option<String>,
+        snapshot: QuotaSnapshot,
+        last_success_at: Option<DateTime<Utc>>,
+    ) {
+        self.identity_key = identity_key;
+        self.last_success_instant = last_success_at;
+        self.snapshot.identity = identity;
+        self.snapshot.snapshot = Some(snapshot);
+        self.snapshot.refresh = RefreshState::Idle;
+        self.snapshot.freshness = SnapshotFreshness::Stale;
+        self.snapshot.availability = ProviderAvailability::Ready;
+        self.snapshot.last_success_at = last_success_at.map(|value| value.to_rfc3339());
     }
 
     pub fn provider(&self) -> ProviderId {
@@ -106,12 +140,25 @@ impl ProviderRuntime {
 
     /// 把一次请求结局写进三个维度。
     pub fn apply(&mut self, outcome: ProviderFetchOutcome, now: DateTime<Utc>) {
+        // 身份变化必须先于任何写入：丢弃该 Provider 的快照与退避，界面一刻也不能展示
+        // 上一个身份的额度，见 docs/额度领域模型.md 第 4.1 节。
+        if let ProviderFetchOutcome::Success { identity_key, .. } = &outcome
+            && self.identity_changed(identity_key.as_deref())
+        {
+            self.discard_for_identity_change();
+        }
+
         self.in_flight = false;
         self.snapshot.refresh = RefreshState::Idle;
         self.snapshot.last_attempt_at = Some(now.to_rfc3339());
 
         match outcome {
-            ProviderFetchOutcome::Success { identity, snapshot } => {
+            ProviderFetchOutcome::Success {
+                identity,
+                identity_key,
+                snapshot,
+            } => {
+                self.identity_key = identity_key;
                 self.backoff.reset();
                 self.snapshot.identity = identity;
                 self.snapshot.snapshot = Some(snapshot);
@@ -176,12 +223,24 @@ impl ProviderRuntime {
         true
     }
 
+    /// 身份是否与上一次成功刷新不同。
+    ///
+    /// 任一侧认不出身份时返回 `false`：「没法比较」不等于「变了」，误丢一份有效快照
+    /// 比多显示一次更糟。
+    fn identity_changed(&self, next: Option<&str>) -> bool {
+        match (self.identity_key.as_deref(), next) {
+            (Some(previous), Some(next)) => previous != next,
+            _ => false,
+        }
+    }
+
     /// 身份变化时丢弃该 Provider 的快照与退避，见 docs/额度领域模型.md 第 4.1 节。
     pub fn discard_for_identity_change(&mut self) {
         let provider = self.snapshot.provider;
         self.snapshot = ProviderSnapshot::initial(provider);
         self.backoff.reset();
         self.last_success_instant = None;
+        self.identity_key = None;
     }
 
     /// 场景切换时预置一份「上一次成功」的快照，只供桌面壳验证使用。
@@ -245,8 +304,13 @@ mod tests {
     }
 
     fn success(now: DateTime<Utc>) -> ProviderFetchOutcome {
+        success_as("identity-one", now)
+    }
+
+    fn success_as(identity_key: &str, now: DateTime<Utc>) -> ProviderFetchOutcome {
         ProviderFetchOutcome::Success {
             identity: None,
+            identity_key: Some(identity_key.to_owned()),
             snapshot: snapshot_with(73.0, now),
         }
     }
@@ -499,6 +563,95 @@ mod tests {
             RefreshDecision::Start
         );
         assert!(runtime.snapshot.retry_after.is_none());
+    }
+
+    #[test]
+    fn a_new_identity_discards_the_previous_snapshot_before_writing_the_new_one() {
+        let mut runtime = refreshed_runtime();
+        assert!(runtime.snapshot.has_snapshot());
+
+        runtime.begin(RefreshTrigger::Auto, at(60));
+        runtime.apply(success_as("identity-two", at(60)), at(60));
+
+        assert_eq!(runtime.identity_key(), Some("identity-two"));
+        assert_eq!(
+            runtime.snapshot.freshness,
+            SnapshotFreshness::Live,
+            "the new identity's own snapshot must still be written"
+        );
+        assert_eq!(
+            runtime.snapshot.last_success_at,
+            Some(at(60).to_rfc3339()),
+            "the discarded run must not leave the previous success time behind"
+        );
+    }
+
+    #[test]
+    fn the_same_identity_keeps_the_snapshot_and_the_backoff_history() {
+        let mut runtime = refreshed_runtime();
+        runtime.begin(RefreshTrigger::Auto, at(60));
+        runtime.apply(success(at(60)), at(60));
+
+        assert_eq!(runtime.identity_key(), Some("identity-one"));
+        assert!(runtime.snapshot.has_snapshot());
+    }
+
+    #[test]
+    fn an_unidentifiable_provider_never_triggers_a_discard() {
+        let mut runtime = refreshed_runtime();
+        runtime.begin(RefreshTrigger::Auto, at(60));
+        runtime.apply(
+            ProviderFetchOutcome::Success {
+                identity: None,
+                identity_key: None,
+                snapshot: snapshot_with(50.0, at(60)),
+            },
+            at(60),
+        );
+
+        assert!(
+            runtime.snapshot.has_snapshot(),
+            "an absent fingerprint means 'cannot compare', not 'changed'"
+        );
+        assert_eq!(runtime.identity_key(), None);
+    }
+
+    #[test]
+    fn a_cached_snapshot_is_restored_as_stale_never_as_a_fresh_success() {
+        let mut runtime = ProviderRuntime::new(ProviderId::Codex);
+        runtime.restore_from_cache(None, None, snapshot_with(73.0, at(0)), Some(at(0)));
+
+        assert_eq!(runtime.snapshot.refresh, RefreshState::Idle);
+        assert_eq!(
+            runtime.snapshot.freshness,
+            SnapshotFreshness::Stale,
+            "a cached snapshot was not fetched in this session"
+        );
+        assert_eq!(runtime.snapshot.availability, ProviderAvailability::Ready);
+        assert!(runtime.snapshot.has_snapshot());
+    }
+
+    #[test]
+    fn a_refresh_over_a_restored_snapshot_is_refreshing_not_loading() {
+        let mut runtime = ProviderRuntime::new(ProviderId::Codex);
+        runtime.restore_from_cache(None, None, snapshot_with(73.0, at(0)), Some(at(0)));
+
+        assert_eq!(
+            runtime.begin(RefreshTrigger::Startup, at(1)),
+            RefreshState::Refreshing,
+            "the user already sees numbers, so this is not a first load"
+        );
+    }
+
+    #[test]
+    fn a_restored_identity_key_lets_the_first_refresh_after_restart_detect_a_change() {
+        let mut runtime = ProviderRuntime::new(ProviderId::Codex);
+        runtime.restore_identity_key(Some("identity-one".to_owned()));
+
+        runtime.begin(RefreshTrigger::Startup, at(0));
+        runtime.apply(success_as("identity-two", at(0)), at(0));
+
+        assert_eq!(runtime.identity_key(), Some("identity-two"));
     }
 
     #[test]
