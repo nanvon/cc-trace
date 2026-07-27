@@ -32,8 +32,7 @@
   --status-error: #f31260;
 
   /* 紧凑面板是悬浮层，阴影比主窗口里的卡片更明显 */
-  --shadow-panel:
-    0 14px 32px -12px rgb(17 17 17 / 20%), 0 3px 8px rgb(17 17 17 / 8%);
+  --shadow-panel: 0 14px 32px -12px rgb(17 17 17 / 20%), 0 3px 8px rgb(17 17 17 / 8%);
   --ring-panel: rgb(17 17 17 / 8%);
   /* Provider lane 静止时也带阴影，不需要交互才出现 */
   --shadow-lane: 0 1px 2px rgb(17 17 17 / 5%), 0 1px 1px rgb(17 17 17 / 4%);
@@ -80,8 +79,7 @@
     --status-warning: #fbbf24;
     --status-error: #f5455c;
 
-    --shadow-panel:
-      0 18px 40px -14px rgb(0 0 0 / 60%), 0 4px 10px rgb(0 0 0 / 35%);
+    --shadow-panel: 0 18px 40px -14px rgb(0 0 0 / 60%), 0 4px 10px rgb(0 0 0 / 35%);
     --ring-panel: rgb(255 255 255 / 8%);
     --shadow-lane: 0 1px 2px rgb(0 0 0 / 35%);
   }
