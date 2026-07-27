@@ -81,8 +81,6 @@ onBeforeUnmount(() => {
       />
     </section>
 
-    <p class="panel__preview supporting">{{ t("preview.notice") }}</p>
-
     <footer class="panel__actions">
       <button type="button" class="button button--primary" @click="openMainWindow">
         {{ t("common.details") }}
@@ -115,12 +113,6 @@ onBeforeUnmount(() => {
   display: grid;
   align-content: start;
   gap: var(--space-3);
-}
-
-.panel__preview {
-  margin: 0;
-  font-size: 0.6875rem;
-  line-height: 1.5;
 }
 
 .panel__actions {

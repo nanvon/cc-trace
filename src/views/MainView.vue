@@ -71,11 +71,6 @@ function openSettings(): void {
         />
       </section>
 
-      <footer class="main__note">
-        <p class="utility-label">{{ t("preview.badge") }}</p>
-        <p class="supporting">{{ t("preview.notice") }}</p>
-      </footer>
-
       <DevScenarioBar v-if="isDev" />
     </div>
   </main>
@@ -99,20 +94,6 @@ function openSettings(): void {
 .main__lanes {
   display: grid;
   gap: var(--space-4);
-}
-
-.main__note {
-  display: grid;
-  gap: var(--space-2);
-  padding-block-start: var(--space-6);
-  border-block-start: 1px solid var(--border-subtle);
-}
-
-.main__note p {
-  margin: 0;
-  max-inline-size: 42rem;
-  font-size: 0.8125rem;
-  line-height: 1.6;
 }
 
 @media (max-width: 640px) {

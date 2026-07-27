@@ -7,7 +7,7 @@
  * 不是第二套状态源。默认停在「真实数据」，切到任一合成场景才会脱离真实 Provider。
  */
 import { invoke } from "@tauri-apps/api/core";
-import { ref } from "vue";
+import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 
 const SCENARIOS = [
@@ -26,6 +26,12 @@ const SCENARIOS = [
 const { t } = useI18n();
 // 默认与 Rust 侧一致：debug 构建也走真实 Provider，合成场景只有显式切换才生效。
 const scenario = ref<(typeof SCENARIOS)[number]>("live");
+
+/**
+ * 「这些数字不是真的」这句话只在确实脱离真实 Provider 时才成立。
+ * 它必须跟着场景走：挂在真实额度下面会直接摧毁数据可信度。
+ */
+const isSynthetic = computed(() => scenario.value !== "live");
 
 async function apply(): Promise<void> {
   try {
@@ -46,11 +52,18 @@ async function apply(): Promise<void> {
         </option>
       </select>
     </label>
+
+    <p v-if="isSynthetic" class="dev__notice supporting" role="status">
+      <span class="utility-label">{{ t("preview.badge") }}</span>
+      {{ t("preview.notice") }}
+    </p>
   </aside>
 </template>
 
 <style scoped>
 .dev {
+  display: grid;
+  gap: var(--space-3);
   padding: var(--space-3) var(--space-4);
   border: 1px dashed var(--border-subtle);
   border-radius: var(--radius-small);
@@ -60,6 +73,17 @@ async function apply(): Promise<void> {
   display: flex;
   align-items: center;
   gap: var(--space-3);
+}
+
+.dev__notice {
+  margin: 0;
+  max-inline-size: 42rem;
+  font-size: 0.8125rem;
+  line-height: 1.6;
+}
+
+.dev__notice .utility-label {
+  margin-inline-end: var(--space-2);
 }
 
 select {

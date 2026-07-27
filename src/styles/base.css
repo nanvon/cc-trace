@@ -116,6 +116,12 @@ button {
   text-transform: uppercase;
 }
 
+/* 0.08em 是给大写拉丁字母补的字距，CJK 没有大小写也不需要它——
+   套在「5 小时窗口」这类标签上会明显松散。`<html lang>` 由 i18n 切换维护。 */
+:lang(zh) .utility-label {
+  letter-spacing: 0;
+}
+
 .supporting {
   color: var(--text-secondary);
 }

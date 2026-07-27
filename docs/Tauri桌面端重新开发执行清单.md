@@ -226,22 +226,24 @@
 > 刷新结果回写外部凭据来源——后者局部推翻第 4 阶段固化的数据边界，第 4 阶段
 > 「明确外部日志只读」等其余条目不受影响。
 
-> 实现进度（2026-07-27）：以下条目的**代码与自动化检查全部完成**，`cargo fmt`、
-> `cargo clippy`（debug 与 release）、`cargo test`（117 项）、`pnpm lint`、`pnpm test`
-> （26 项）、`pnpm build` 均在 macOS 主机通过。**但没有任何一条经过实机验证**：没有
-> 用真实凭据发起过一次请求，没有观察过真实响应，没有验证过钥匙串授权弹窗与 token
-> 回写对 Codex CLI／Claude Code CLI 的影响。因此下方条目一律不勾选。
+> 进度（2026-07-27）：代码与自动化检查全部完成（`cargo fmt`、`cargo clippy` 的 debug 与
+> release、`cargo test` 117 项、`pnpm lint`、`pnpm test` 26 项、`pnpm build`，均在 macOS
+> 主机通过）。**同日在 macOS 完成第一次真实数据验证**，两个 Provider 的额度闭环跑通，
+> 结果见 [桌面壳验证记录](桌面壳验证记录.md)「实机发现」。下方只勾选有实机证据的条目，
+> 其余保持未勾；**Windows 侧全部未验证**。
 
-- [ ] 只读发现一个 Provider 的外部凭据。（已实现：Codex `auth.json`、Claude Code 文件
-  与 macOS 钥匙串；PAT 判 `unsupported`；实机未验证）
-- [ ] 在 Rust 层获取并标准化额度数据。（已实现：两个 Provider 的请求、token 续期与
-  离线解析；实机未验证）
-- [ ] 通过 command 返回脱敏快照。（契约未变，已接真实数据；实机未验证）
-- [ ] 在紧凑入口展示额度。（前端未改动，实机未验证）
-- [ ] 在主窗口展示额度。（前端未改动，实机未验证）
-- [ ] 支持手动刷新。（调度未改动，实机未验证）
+- [x] 只读发现一个 Provider 的外部凭据。（macOS，2026-07-27：Codex 读 `auth.json`，
+  Claude Code 读 macOS 钥匙串；PAT 判 `unsupported` 只有 Fixture 覆盖）
+- [x] 在 Rust 层获取并标准化额度数据。（macOS，2026-07-27：两个 Provider 的真实响应
+  均正确解析，窗口类型全部命中，无 `unknown`）
+- [x] 通过 command 返回脱敏快照。（macOS，2026-07-27：账号显示为 `n***@gmail.com`，
+  载荷不含完整邮箱与 token）
+- [x] 在紧凑入口展示额度。（macOS，2026-07-27）
+- [x] 在主窗口展示额度。（macOS，2026-07-27）
+- [ ] 支持手动刷新。（调度未改动，手动刷新按钮与节流实机未验证）
 - [ ] 支持 `loading`、`live`、`stale`、`no_credentials`、`offline`、`rate_limited` 和 `error`。
-  （HTTP 与凭据失败已按状态与错误模型第 4 节分类，单元测试覆盖；实机未验证）
+  （HTTP 与凭据失败已按状态与错误模型第 4 节分类，单元测试覆盖；实机只见过 `live`，
+  其余六种未在真实数据下出现过）
 - [ ] 写入并读取新应用缓存。（已实现 `quota-cache.json`，含 schemaVersion、原子写、
   损坏即删除重取；实机未验证）
 - [ ] Provider 失败时保留新应用已有快照。（调度层已保证，单元测试覆盖；实机未验证）
@@ -249,7 +251,9 @@
 
 实机验证时必须一并复核：
 
-- [ ] 钥匙串首次读取的授权弹窗表现，以及拒绝授权时是否正确落 `error` 而不是 `no_credentials`。
+- [x] 钥匙串首次读取的授权弹窗表现。（macOS，2026-07-27：每次重新编译都会重新弹，
+  原因与解决方向见 [ADR-0013](决策/ADR-0013-macOS读取ClaudeCode钥匙串凭据.md) 实机记录）
+- [ ] 拒绝钥匙串授权时是否正确落 `error` 而不是 `no_credentials`。
 - [ ] CC Trace 刷新并回写后，Codex CLI 与 Claude Code CLI 仍能正常使用。
 - [ ] Codex CLI 或 Claude Code 刷新后，CC Trace 能读到新 token 并继续工作。
 - [ ] 真实响应字段与 `docs/额度领域模型.md` 第 6 节「待复核清单」逐项对照。

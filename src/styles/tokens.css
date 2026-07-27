@@ -29,6 +29,9 @@
   --action-primary: #006fee;
   --status-success: #17c964;
   --status-warning: #f5a524;
+  /* 余量四档里 warning 与 danger 之间的一档。HeroUI 官方语义色没有这一档，
+     取值由 ADR-0017 正式采纳 */
+  --status-low: #f3730e;
   --status-error: #f31260;
 
   /* 紧凑面板是悬浮层，阴影比主窗口里的卡片更明显 */
@@ -77,6 +80,7 @@
     --action-primary: #338ef7;
     --status-success: #45d483;
     --status-warning: #fbbf24;
+    --status-low: #ff8a3d;
     --status-error: #f5455c;
 
     --shadow-panel: 0 18px 40px -14px rgb(0 0 0 / 60%), 0 4px 10px rgb(0 0 0 / 35%);
@@ -96,6 +100,7 @@
   --action-primary: #338ef7;
   --status-success: #45d483;
   --status-warning: #fbbf24;
+  --status-low: #ff8a3d;
   --status-error: #f5455c;
 
   --shadow-panel: 0 18px 40px -14px rgb(0 0 0 / 60%), 0 4px 10px rgb(0 0 0 / 35%);
