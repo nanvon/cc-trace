@@ -5,7 +5,7 @@
  * 每条 lane 从身份读到剩余额度，再读到重置端点与新鲜度。失败时保持位置和既有数据，
  * 不切换成完全不同的错误卡片；无凭据时保持相同骨架，用说明替换额度区域。
  *
- * 左侧 spine 只在异常时着色：风险改变强调，不改变空间顺序。
+ * 层级靠阴影表达，不用左侧色条；风险只改变状态文字和下方说明的颜色。
  */
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
@@ -18,7 +18,7 @@ import {
 import { providerLabel, windowLabel } from "../lib/labels";
 import { hasQuotaValues, presentProvider } from "../lib/status";
 import { useTimeText } from "../lib/useTimeText";
-import ResetRail from "./ResetRail.vue";
+import QuotaProgress from "./QuotaProgress.vue";
 import StatusExplanation from "./StatusExplanation.vue";
 
 const props = defineProps<{
@@ -70,8 +70,6 @@ const showsExplanation = computed(() =>
 
 <template>
   <article class="lane" :class="[`lane--${variant}`, `lane--${presentation.tone}`]">
-    <span class="lane__spine" aria-hidden="true" />
-
     <div class="lane__body">
       <header class="lane__header">
         <div class="lane__identity">
@@ -88,7 +86,7 @@ const showsExplanation = computed(() =>
       </header>
 
       <div v-if="showsRails" class="lane__rails">
-        <ResetRail
+        <QuotaProgress
           :label="primary && variant === 'full' ? windowLabel(t, primary) : ''"
           :remaining-percent="primary?.remainingPercent ?? null"
           :resets-at="primary?.resetsAt ?? null"
@@ -102,7 +100,7 @@ const showsExplanation = computed(() =>
           emphasis="primary"
         />
 
-        <ResetRail
+        <QuotaProgress
           v-for="window in secondaries"
           :key="window.id"
           :label="windowLabel(t, window)"
@@ -125,39 +123,25 @@ const showsExplanation = computed(() =>
 </template>
 
 <style scoped>
+/* 层级靠阴影和圆角表达，不用左侧色条；风险只改变状态文字颜色 */
 .lane {
-  display: grid;
-  grid-template-columns: 2px minmax(0, 1fr);
-  gap: var(--space-4);
   background: var(--surface-raised);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-medium);
+  box-shadow: var(--shadow-lane);
   overflow: hidden;
-}
-
-.lane__spine {
-  background: var(--border-subtle);
-}
-
-.lane--warning .lane__spine {
-  background: var(--status-warning);
-}
-
-.lane--critical .lane__spine {
-  background: var(--status-error);
 }
 
 .lane__body {
   display: grid;
   gap: var(--space-4);
   min-inline-size: 0;
-  padding: var(--space-4) var(--space-4) var(--space-4) 0;
+  padding: var(--space-4);
 }
 
 .lane--full .lane__body {
   gap: var(--space-5);
-  padding-block: var(--space-5);
-  padding-inline-end: var(--space-5);
+  padding: var(--space-5);
 }
 
 .lane__header {

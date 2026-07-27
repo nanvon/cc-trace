@@ -1,12 +1,10 @@
 <script setup lang="ts">
 /**
- * Reset Rail —— CC Trace 的签名元素。
+ * Quota Progress —— CC Trace 的签名元素。
  *
- * 一条直轨道把「剩余多少」和「何时重置」放进同一条阅读路径：
- * 左端是数值，中间是带刻度的轨道，右端是终点标记与重置时刻。
- *
- * 它不是进度条：轨道是直的、端点只做轻微软化、右端有明确的终点标记，
- * 不使用圆形 Gauge、速度表或动画计数，见 `DESIGN.md` 的 Shapes 段。
+ * 左端是数值，中间是圆角进度条，右端是重置时刻。层级靠阴影和圆角表达，
+ * 正常态数值保持中性色，只有 warning／critical 才着色，
+ * 见 `docs/设计方向与状态规范.md` 第 7.2 节。
  */
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
@@ -24,7 +22,7 @@ const props = withDefaults(
     treatment: RailTreatment;
     tone: StatusTone;
     /**
-     * 轨道的无障碍名称，通常是「Provider 名 + 窗口名」。
+     * 进度条的无障碍名称，通常是「Provider 名 + 窗口名」。
      * 刻意不叫 `ariaLabel`：那会与元素自身的 `aria-label` 属性在模板里撞名。
      */
     a11yLabel: string;
@@ -43,7 +41,7 @@ const valueText = computed(() =>
     : t("quota.noValue"),
 );
 
-/** 轨道填充比例。没有数值时为 0，且不渲染填充块。 */
+/** 进度条填充比例。没有数值时为 0，且不渲染填充块。 */
 const fillPercent = computed(() =>
   hasValue.value && props.remainingPercent !== null
     ? Math.max(0, Math.min(100, props.remainingPercent))
@@ -70,14 +68,17 @@ const valueTextForA11y = computed(() =>
 </script>
 
 <template>
-  <div class="rail" :class="[`rail--${emphasis}`, `rail--${treatment}`, `rail--tone-${tone}`]">
-    <p v-if="label" class="rail__label utility-label">{{ label }}</p>
+  <div
+    class="progress"
+    :class="[`progress--${emphasis}`, `progress--${treatment}`, `progress--tone-${tone}`]"
+  >
+    <p v-if="label" class="progress__label utility-label">{{ label }}</p>
 
-    <div class="rail__row">
-      <span class="rail__value numeric">{{ valueText }}</span>
+    <div class="progress__row">
+      <span class="progress__value numeric">{{ valueText }}</span>
 
       <div
-        class="rail__track"
+        class="progress__track"
         role="progressbar"
         :aria-label="a11yLabel"
         aria-valuemin="0"
@@ -85,54 +86,56 @@ const valueTextForA11y = computed(() =>
         :aria-valuenow="hasValue ? fillPercent : undefined"
         :aria-valuetext="valueTextForA11y"
       >
-        <span v-if="hasValue" class="rail__fill" :style="{ inlineSize: `${fillPercent}%` }" />
-        <span class="rail__tick" style="inset-inline-start: 25%" aria-hidden="true" />
-        <span class="rail__tick" style="inset-inline-start: 50%" aria-hidden="true" />
-        <span class="rail__tick" style="inset-inline-start: 75%" aria-hidden="true" />
-        <span class="rail__terminal" aria-hidden="true" />
+        <span v-if="hasValue" class="progress__fill" :style="{ inlineSize: `${fillPercent}%` }" />
       </div>
 
-      <span class="rail__reset numeric" :title="resetTitle">{{ resetText }}</span>
+      <span class="progress__reset numeric" :title="resetTitle">{{ resetText }}</span>
     </div>
   </div>
 </template>
 
 <style scoped>
-.rail__label {
+.progress__label {
   margin-block-end: var(--space-2);
 }
 
-.rail__row {
+.progress__row {
   display: grid;
   grid-template-columns: auto minmax(3rem, 1fr) auto;
   align-items: center;
   gap: var(--space-3);
 }
 
-.rail__value {
-  /* 固定最小宽度：从 5% 变到 100% 时轨道起点不左右移动 */
+.progress__value {
+  /* 固定最小宽度：从 5% 变到 100% 时进度条起点不左右移动 */
   min-inline-size: 3.25ch;
   font-weight: 700;
   text-align: end;
 }
 
-.rail--primary .rail__value {
+.progress--primary .progress__value {
   font-size: 1.5rem;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.01em;
 }
 
-.rail--secondary .rail__value {
+.progress--secondary .progress__value {
   font-size: 0.9375rem;
 }
 
-.rail__track {
+/* 圆角进度条：层级靠阴影和体量表达，不是直轨道 */
+.progress__track {
   position: relative;
-  block-size: var(--rail-height);
+  block-size: 0.5rem;
   background: var(--track-background);
-  border-radius: var(--rail-radius);
+  border-radius: 999px;
+  overflow: hidden;
 }
 
-.rail__fill {
+.progress--secondary .progress__track {
+  block-size: 0.375rem;
+}
+
+.progress__fill {
   position: absolute;
   inset-block: 0;
   inset-inline-start: 0;
@@ -140,26 +143,7 @@ const valueTextForA11y = computed(() =>
   border-radius: inherit;
 }
 
-/* 刻度让它读起来是量规轨道，而不是加载条 */
-.rail__tick {
-  position: absolute;
-  inset-block-start: -2px;
-  inline-size: 1px;
-  block-size: calc(var(--rail-height) + 4px);
-  background: var(--rail-tick);
-}
-
-/* 终点标记：轨道到此为止，右侧紧跟重置时刻 */
-.rail__terminal {
-  position: absolute;
-  inset-block-start: -3px;
-  inset-inline-end: 0;
-  inline-size: 1px;
-  block-size: calc(var(--rail-height) + 6px);
-  background: var(--text-secondary);
-}
-
-.rail__reset {
+.progress__reset {
   color: var(--text-secondary);
   font-size: 0.75rem;
   white-space: nowrap;
@@ -167,52 +151,54 @@ const valueTextForA11y = computed(() =>
 
 /* --- 状态处理 --- */
 
-/* 旧快照：保留数值，但明确降级；终点标记换成警示色 */
-.rail--faded .rail__fill {
+/* 旧快照：保留数值，但明确降级 */
+.progress--faded .progress__fill {
   background: color-mix(in srgb, var(--text-primary) 38%, transparent);
 }
 
-.rail--faded .rail__value {
+.progress--faded .progress__value {
   color: var(--text-secondary);
 }
 
-.rail--tone-warning .rail__terminal {
+.progress--tone-warning .progress__fill {
   background: var(--status-warning);
-  inline-size: 2px;
 }
 
-.rail--tone-critical .rail__terminal {
+.progress--tone-warning .progress__value {
+  color: var(--status-warning);
+}
+
+.progress--tone-critical .progress__fill {
   background: var(--status-error);
-  inline-size: 2px;
 }
 
-.rail--loading .rail__track {
-  overflow: hidden;
+.progress--tone-critical .progress__value {
+  color: var(--status-error);
 }
 
-.rail--loading .rail__track::after {
+.progress--loading .progress__track::after {
   content: "";
   position: absolute;
   inset: 0;
-  background: linear-gradient(90deg, transparent, var(--rail-tick), transparent);
+  background: linear-gradient(90deg, transparent, var(--border-subtle), transparent);
 }
 
-.rail--loading .rail__value,
-.rail--empty .rail__value {
+.progress--loading .progress__value,
+.progress--empty .progress__value {
   color: var(--text-secondary);
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  .rail__fill {
+  .progress__fill {
     transition: inline-size var(--motion-base) var(--ease-out);
   }
 
-  .rail--loading .rail__track::after {
-    animation: rail-scan 1.5s var(--ease-out) infinite;
+  .progress--loading .progress__track::after {
+    animation: progress-scan 1.5s var(--ease-out) infinite;
   }
 }
 
-@keyframes rail-scan {
+@keyframes progress-scan {
   from {
     transform: translateX(-100%);
   }

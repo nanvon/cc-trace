@@ -1,8 +1,8 @@
 /**
  * CC Trace 设计 token —— 色值与尺寸的实现真值。
  *
- * 语义名 ↔ 变量名的映射表由 `docs/设计方向与状态规范.md` 第 3.4 节拥有；
- * 新增或改名必须两处同时修改。
+ * 视觉方向：HeroUI 风格（ADR-0012）。语义名 ↔ 变量名的映射表由
+ * `docs/设计方向与状态规范.md` 第 3.4 节拥有；新增或改名必须两处同时修改。
  *
  * 三种外观模式：
  * - `data-appearance="system"` 或缺失 → 跟随 `prefers-color-scheme`
@@ -17,22 +17,26 @@
     "Microsoft YaHei", sans-serif;
   --font-data: "SFMono-Regular", "Cascadia Mono", ui-monospace, monospace;
 
-  /* Mineral Canvas / Instrument Surface / Carbon Ink / Graphite Muted / Hairline / Rail Track */
-  --surface-primary: #f2f5f3;
+  /* 页面背景和卡片表面刻意非常接近：层级靠阴影表达，不是靠色差 */
+  --surface-primary: #fafafa;
   --surface-raised: #ffffff;
-  --text-primary: #161a18;
-  --text-secondary: #66706b;
-  --border-subtle: #dce2de;
-  --track-background: #e7ebe8;
+  --text-primary: #11181c;
+  --text-secondary: #71717a;
+  --border-subtle: #e4e4e7;
+  --track-background: #f4f4f5;
 
-  /* Trace Blue 只表达交互，不兼任成功、Provider 品牌或装饰色 */
-  --action-primary: #2f67d8;
-  --status-success: #247a55;
-  --status-warning: #b66a12;
-  --status-error: #b93636;
+  /* HeroUI primary，只表达交互，不兼任成功、Provider 品牌或装饰色 */
+  --action-primary: #006fee;
+  --status-success: #17c964;
+  --status-warning: #f5a524;
+  --status-error: #f31260;
 
-  --shadow-panel: 0 1px 2px rgb(22 26 24 / 8%), 0 12px 32px -8px rgb(22 26 24 / 18%);
-  --ring-panel: rgb(22 26 24 / 10%);
+  /* 紧凑面板是悬浮层，阴影比主窗口里的卡片更明显 */
+  --shadow-panel:
+    0 14px 32px -12px rgb(17 17 17 / 20%), 0 3px 8px rgb(17 17 17 / 8%);
+  --ring-panel: rgb(17 17 17 / 8%);
+  /* Provider lane 静止时也带阴影，不需要交互才出现 */
+  --shadow-lane: 0 1px 2px rgb(17 17 17 / 5%), 0 1px 1px rgb(17 17 17 / 4%);
 
   /* 4 / 8 / 12 / 16 / 20 / 24 / 32 */
   --space-1: 0.25rem;
@@ -43,15 +47,10 @@
   --space-6: 1.5rem;
   --space-8: 2rem;
 
-  --radius-small: 0.4375rem;
-  --radius-medium: 0.6875rem;
+  --radius-small: 0.75rem;
+  --radius-medium: 0.875rem;
   /* 紧凑面板外壳。改这里必须同时改 tauri.conf.json 的 windowEffects.radius */
   --radius-shell: 1rem;
-
-  /* Reset Rail：直轨道、微软化端点，不是胶囊进度条 */
-  --rail-height: 3px;
-  --rail-radius: 1.5px;
-  --rail-tick: rgb(22 26 24 / 14%);
 
   --motion-fast: 140ms;
   --motion-base: 200ms;
@@ -69,38 +68,39 @@
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-appearance="light"]) {
-    --surface-primary: #111513;
-    --surface-raised: #1a201d;
-    --text-primary: #eef3f0;
-    --text-secondary: #9da8a2;
-    --border-subtle: #303934;
-    --track-background: #2b332f;
+    --surface-primary: #000000;
+    --surface-raised: #18181b;
+    --text-primary: #ecedee;
+    --text-secondary: #a1a1aa;
+    --border-subtle: #27272a;
+    --track-background: #27272a;
 
-    --action-primary: #7ba3ff;
-    --status-success: #63c99a;
-    --status-warning: #f0aa52;
-    --status-error: #ff7b75;
+    --action-primary: #338ef7;
+    --status-success: #45d483;
+    --status-warning: #fbbf24;
+    --status-error: #f5455c;
 
-    --shadow-panel: 0 1px 2px rgb(0 0 0 / 40%), 0 16px 40px -10px rgb(0 0 0 / 55%);
-    --ring-panel: rgb(238 243 240 / 12%);
-    --rail-tick: rgb(238 243 240 / 16%);
+    --shadow-panel:
+      0 18px 40px -14px rgb(0 0 0 / 60%), 0 4px 10px rgb(0 0 0 / 35%);
+    --ring-panel: rgb(255 255 255 / 8%);
+    --shadow-lane: 0 1px 2px rgb(0 0 0 / 35%);
   }
 }
 
 :root[data-appearance="dark"] {
-  --surface-primary: #111513;
-  --surface-raised: #1a201d;
-  --text-primary: #eef3f0;
-  --text-secondary: #9da8a2;
-  --border-subtle: #303934;
-  --track-background: #2b332f;
+  --surface-primary: #000000;
+  --surface-raised: #18181b;
+  --text-primary: #ecedee;
+  --text-secondary: #a1a1aa;
+  --border-subtle: #27272a;
+  --track-background: #27272a;
 
-  --action-primary: #7ba3ff;
-  --status-success: #63c99a;
-  --status-warning: #f0aa52;
-  --status-error: #ff7b75;
+  --action-primary: #338ef7;
+  --status-success: #45d483;
+  --status-warning: #fbbf24;
+  --status-error: #f5455c;
 
-  --shadow-panel: 0 1px 2px rgb(0 0 0 / 40%), 0 16px 40px -10px rgb(0 0 0 / 55%);
-  --ring-panel: rgb(238 243 240 / 12%);
-  --rail-tick: rgb(238 243 240 / 16%);
+  --shadow-panel: 0 18px 40px -14px rgb(0 0 0 / 60%), 0 4px 10px rgb(0 0 0 / 35%);
+  --ring-panel: rgb(255 255 255 / 8%);
+  --shadow-lane: 0 1px 2px rgb(0 0 0 / 35%);
 }

@@ -3,7 +3,8 @@
  * 状态解释。
  *
  * 紧凑面板只给一行可执行的短说明；主窗口用「标题 / 影响 / 下一步」三级结构，
- * 见 `docs/设计方向与状态规范.md` 第 7.4 节。
+ * 见 `docs/设计方向与状态规范.md` 第 7.4 节。两个变体都用同一种 tint 底色的
+ * 提示条呈现：neutral 是灰调，warning／critical 才换成对应语义色。
  *
  * 文案永远来自 `lib/status.ts` 给出的 key：这里不重新判断状态。
  */
@@ -61,24 +62,29 @@ const nextStep = computed(() =>
 </template>
 
 <style scoped>
+/* tint 底色的提示条：neutral 是灰调，warning/critical 换成对应语义色，
+   颜色始终与状态词同时出现，不单独承担语义 */
 .explanation {
+  --tint: var(--text-secondary);
   display: grid;
   gap: var(--space-1);
+  padding: var(--space-3);
+  background: color-mix(in srgb, var(--tint) 10%, var(--surface-raised));
+  border-radius: var(--radius-small);
+}
+
+.explanation--full {
+  gap: var(--space-2);
+  padding: var(--space-4);
 }
 
 .explanation p {
   margin: 0;
 }
 
-.explanation--full {
-  gap: var(--space-2);
-  padding: var(--space-4);
-  background: var(--surface-primary);
-  border-radius: var(--radius-small);
-}
-
 .explanation__title {
   font-weight: 600;
+  color: var(--tint);
 }
 
 .explanation__impact,
@@ -95,12 +101,11 @@ const nextStep = computed(() =>
   font-size: 0.75rem;
 }
 
-/* 颜色只加在解释块的标题上，且始终与状态词同时出现 */
-.explanation--warning .explanation__title {
-  color: var(--status-warning);
+.explanation--warning {
+  --tint: var(--status-warning);
 }
 
-.explanation--critical .explanation__title {
-  color: var(--status-error);
+.explanation--critical {
+  --tint: var(--status-error);
 }
 </style>
