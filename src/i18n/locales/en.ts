@@ -123,9 +123,15 @@ export default {
     residency:
       "It lives in the system area. Click the icon for the compact panel, and open the main window when you need detail.",
     checkHeading: "This machine",
+    checkNow: "Check this machine",
+    checkAgain: "Check again",
+    checking: "Checking…",
+    notChecked: "Not checked yet",
+    keychainNotice:
+      "macOS may request Keychain access the first time CC Trace checks Claude Code. Choose “Always Allow” to avoid repeated prompts for this version.",
     boundaryHeading: "Data boundary",
     boundary:
-      "Credentials are discovered locally by the Rust layer, read-only and minimally. Nothing is uploaded, and no cc-bar data is read or migrated.",
+      "Credentials are accessed locally and minimally; only renewed tokens are written back in place. Nothing is uploaded, and no cc-bar data is read or migrated.",
     noCredentialsHint:
       "You can continue without credentials. Sign in with the CLI and refresh whenever you are ready.",
     done: "Start using CC Trace",

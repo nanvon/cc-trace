@@ -123,9 +123,15 @@ export default {
     intro: "CC Trace 让你随时看到 Codex 与 Claude Code 还剩多少额度、什么时候重置。",
     residency: "它常驻在系统区域。点击图标打开紧凑面板，需要细节时再打开主窗口。",
     checkHeading: "本机状态",
+    checkNow: "检查本机",
+    checkAgain: "重新检查",
+    checking: "检查中…",
+    notChecked: "等待检查",
+    keychainNotice:
+      "macOS 首次访问 Claude Code 凭据时可能请求钥匙串授权；选择“始终允许”可避免当前版本重复询问。",
     boundaryHeading: "数据边界",
     boundary:
-      "凭据只在本机由 Rust 层按只读、最小范围发现，不上传，也不会读取或迁移 cc-bar 的任何数据。",
+      "凭据只在本机按最小范围访问；仅 token 续期结果原位回写。数据不上传，也不读取或迁移 cc-bar 数据。",
     noCredentialsHint: "现在没有凭据也可以继续。在对应 CLI 登录后刷新即可。",
     done: "开始使用",
     later: "稍后再说",

@@ -32,7 +32,7 @@ CC Trace 让用户从 macOS 菜单栏或 Windows 系统托盘快速判断 Codex�
 
 CC Trace 是本机优先、权限克制的跨平台额度观察工具，不是 Provider 登录器、网页包装、聊天客户端或团队管理后台。
 
-它通过 Rust 层只读发现 Codex、Claude Code 的本机凭据并访问 Provider 接口，只把脱敏账号信息、额度快照和展示状态交给 Vue。它拥有独立于 Swift 版 cc-bar 的应用身份、数据目录、缓存和发布体系，不读取、迁移、覆盖或删除 cc-bar 的应用数据。
+它通过 Rust 层发现 Codex、Claude Code 的本机凭据并访问 Provider 接口；token 临近过期时按 OAuth 语义刷新并把结果原子回写同一来源，Vue 只接收脱敏账号信息、额度快照和展示状态。它拥有独立于 Swift 版 cc-bar 的应用身份、数据目录、缓存和发布体系，不读取、迁移、覆盖或删除 cc-bar 的应用数据。
 
 ## Operating Context
 

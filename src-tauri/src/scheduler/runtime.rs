@@ -129,6 +129,12 @@ impl ProviderRuntime {
             self.last_manual_refresh = Some(now);
         }
 
+        // 请求已经真正开始时，展示语义回到「可用性待本次结果确认」：
+        // 上一次失败原因与可重试时间不能和 loading/refreshing 同时残留。
+        self.snapshot.availability = ProviderAvailability::Ready;
+        self.snapshot.error = None;
+        self.snapshot.retry_after = None;
+
         let state = if self.snapshot.has_snapshot() {
             RefreshState::Refreshing
         } else {
@@ -156,8 +162,9 @@ impl ProviderRuntime {
             ProviderFetchOutcome::Success {
                 identity,
                 identity_key,
-                snapshot,
+                mut snapshot,
             } => {
+                preserve_future_resets(self.snapshot.snapshot.as_ref(), &mut snapshot, now);
                 self.identity_key = identity_key;
                 self.backoff.reset();
                 self.snapshot.identity = identity;
@@ -208,19 +215,33 @@ impl ProviderRuntime {
             return false;
         }
 
-        let Some(last_success) = self.last_success_instant else {
-            return false;
-        };
-
-        let threshold = Duration::seconds(
-            (auto_refresh_interval_secs * STALE_AGE_INTERVAL_MULTIPLIER as u64) as i64,
-        );
-        if now - last_success <= threshold {
+        if !self.is_past_stale_threshold(now, auto_refresh_interval_secs) {
             return false;
         }
 
         self.snapshot.freshness = SnapshotFreshness::Stale;
         true
+    }
+
+    /// 系统恢复时即使快照已经因读取或上次失败变成 `stale`，仍要能判断它是否足够旧。
+    pub fn is_past_stale_threshold(
+        &self,
+        now: DateTime<Utc>,
+        auto_refresh_interval_secs: u64,
+    ) -> bool {
+        self.is_older_than(
+            now,
+            auto_refresh_interval_secs * STALE_AGE_INTERVAL_MULTIPLIER as u64,
+        )
+    }
+
+    /// 判断上一份成功快照是否超过给定年龄；系统恢复使用一倍自动刷新间隔。
+    pub fn is_older_than(&self, now: DateTime<Utc>, age_secs: u64) -> bool {
+        let Some(last_success) = self.last_success_instant else {
+            return false;
+        };
+        let threshold = Duration::seconds(age_secs as i64);
+        now - last_success > threshold
     }
 
     /// 身份是否与上一次成功刷新不同。
@@ -277,6 +298,34 @@ impl ProviderRuntime {
     }
 }
 
+/// Provider 偶发省略重置时间时，沿用同一额度窗口尚未到期的已知值。
+///
+/// 只按稳定 `id + kind` 匹配；过期值、身份切换后被丢弃的值都不会跨快照传播。
+fn preserve_future_resets(
+    previous: Option<&QuotaSnapshot>,
+    next: &mut QuotaSnapshot,
+    now: DateTime<Utc>,
+) {
+    let Some(previous) = previous else {
+        return;
+    };
+
+    for window in &mut next.windows {
+        if window.resets_at.is_some() {
+            continue;
+        }
+
+        window.resets_at = previous
+            .windows
+            .iter()
+            .find(|candidate| candidate.id == window.id && candidate.kind == window.kind)
+            .and_then(|candidate| candidate.resets_at.as_deref())
+            .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+            .filter(|reset| reset.with_timezone(&Utc) > now)
+            .map(|reset| reset.with_timezone(&Utc).to_rfc3339());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -325,6 +374,15 @@ mod tests {
     // --- docs/状态与错误模型.md 第 2 节组合矩阵，逐行覆盖 ---
 
     #[test]
+    fn matrix_waiting_for_first_check() {
+        let runtime = ProviderRuntime::new(ProviderId::Codex);
+
+        assert_eq!(runtime.snapshot.refresh, RefreshState::Idle);
+        assert_eq!(runtime.snapshot.freshness, SnapshotFreshness::Empty);
+        assert_eq!(runtime.snapshot.availability, ProviderAvailability::Ready);
+    }
+
+    #[test]
     fn matrix_first_load() {
         let mut runtime = ProviderRuntime::new(ProviderId::Codex);
         assert_eq!(
@@ -347,6 +405,40 @@ mod tests {
             "an in-flight refresh must not clear the snapshot"
         );
         assert_eq!(runtime.snapshot.freshness, SnapshotFreshness::Live);
+    }
+
+    #[test]
+    fn a_real_retry_clears_the_previous_failure_presentation() {
+        let mut runtime = refreshed_runtime();
+        runtime.begin(RefreshTrigger::Auto, at(60));
+        runtime.apply(
+            ProviderFetchOutcome::Failed {
+                kind: ErrorKind::Credentials,
+            },
+            at(60),
+        );
+
+        assert_eq!(
+            runtime.begin(RefreshTrigger::Auto, at(90)),
+            RefreshState::Refreshing
+        );
+        assert_eq!(runtime.snapshot.availability, ProviderAvailability::Ready);
+        assert!(runtime.snapshot.error.is_none());
+        assert!(runtime.snapshot.retry_after.is_none());
+        assert_eq!(runtime.snapshot.freshness, SnapshotFreshness::Stale);
+    }
+
+    #[test]
+    fn retrying_after_no_credentials_returns_to_first_load() {
+        let mut runtime = refreshed_runtime();
+        runtime.begin(RefreshTrigger::Manual, at(60));
+        runtime.apply(ProviderFetchOutcome::NoCredentials, at(60));
+
+        assert_eq!(
+            runtime.begin(RefreshTrigger::Manual, at(100)),
+            RefreshState::Loading
+        );
+        assert_eq!(runtime.snapshot.availability, ProviderAvailability::Ready);
     }
 
     #[test]
@@ -490,6 +582,15 @@ mod tests {
         );
     }
 
+    #[test]
+    fn system_resume_refreshes_after_one_full_interval() {
+        let runtime = refreshed_runtime();
+        let interval = 1_800;
+
+        assert!(!runtime.is_older_than(at(interval as i64), interval));
+        assert!(runtime.is_older_than(at(interval as i64 + 1), interval));
+    }
+
     // --- 合并、节流与退避 ---
 
     #[test]
@@ -594,6 +695,54 @@ mod tests {
 
         assert_eq!(runtime.identity_key(), Some("identity-one"));
         assert!(runtime.snapshot.has_snapshot());
+    }
+
+    #[test]
+    fn a_missing_reset_keeps_the_same_windows_known_future_reset() {
+        let mut runtime = refreshed_runtime();
+        let expected = runtime.snapshot.snapshot.as_ref().unwrap().windows[0]
+            .resets_at
+            .clone();
+        let mut next = snapshot_with(50.0, at(60));
+        next.windows[0].resets_at = None;
+
+        runtime.begin(RefreshTrigger::Auto, at(60));
+        runtime.apply(
+            ProviderFetchOutcome::Success {
+                identity: None,
+                identity_key: Some("identity-one".to_owned()),
+                snapshot: next,
+            },
+            at(60),
+        );
+
+        assert_eq!(
+            runtime.snapshot.snapshot.as_ref().unwrap().windows[0].resets_at,
+            expected
+        );
+    }
+
+    #[test]
+    fn an_expired_reset_is_not_carried_into_a_new_snapshot() {
+        let mut runtime = refreshed_runtime();
+        let mut next = snapshot_with(50.0, at(20_000));
+        next.windows[0].resets_at = None;
+
+        runtime.begin(RefreshTrigger::Auto, at(20_000));
+        runtime.apply(
+            ProviderFetchOutcome::Success {
+                identity: None,
+                identity_key: Some("identity-one".to_owned()),
+                snapshot: next,
+            },
+            at(20_000),
+        );
+
+        assert!(
+            runtime.snapshot.snapshot.as_ref().unwrap().windows[0]
+                .resets_at
+                .is_none()
+        );
     }
 
     #[test]

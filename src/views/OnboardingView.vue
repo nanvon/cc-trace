@@ -2,10 +2,10 @@
 /**
  * 首次启动：建立信任并检查环境。
  *
- * 只做三件事——说明用途、解释只读边界、展示两个 Provider 的发现结果。
+ * 只做首次使用必要事项——说明用途与凭据边界、预告系统授权、展示 Provider 发现结果。
  * 不在应用内登录，不要求用户修复无凭据状态，也不读取或迁移 cc-bar 的任何数据。
  */
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 
 import symbolUrl from "../assets/brand/cc-trace-symbol.svg";
@@ -16,13 +16,25 @@ import { presentProvider } from "../lib/status";
 
 const { t } = useI18n();
 const { quota, settings, closeSurface } = useAppShell("onboarding");
+const initialCheckStarted = ref(false);
 
 const checks = computed(() =>
-  quota.ordered.map((provider) => ({
-    id: provider.provider,
-    name: providerLabel(t, provider.provider),
-    presentation: presentProvider(provider),
-  })),
+  quota.ordered.map((provider) => {
+    const presentation = presentProvider(provider);
+    const waitingForCheck =
+      !initialCheckStarted.value &&
+      provider.refresh === "idle" &&
+      provider.freshness === "empty" &&
+      provider.availability === "ready";
+
+    return {
+      id: provider.provider,
+      name: providerLabel(t, provider.provider),
+      presentation: waitingForCheck
+        ? { ...presentation, titleKey: "onboarding.notChecked", tone: "neutral" as const }
+        : presentation,
+    };
+  }),
 );
 
 /** 任一 Provider 没有凭据时，明确告诉用户仍然可以继续。 */
@@ -30,7 +42,20 @@ const showsNoCredentialsHint = computed(() =>
   quota.ordered.some((provider) => provider.availability === "no_credentials"),
 );
 
+const showsKeychainNotice = computed(() => settings.status?.platform === "macos");
+
+async function checkProviders(): Promise<void> {
+  initialCheckStarted.value = true;
+  await quota.refresh();
+}
+
 async function finish(): Promise<void> {
+  // “开始使用”本身也是明确的用户动作；若跳过了单独检查，先启动首次刷新，
+  // 避免进入紧凑面板后长时间停在尚未检查的空态。
+  if (!initialCheckStarted.value) {
+    await checkProviders();
+  }
+
   const saved = await settings.completeOnboarding();
   if (!saved) {
     // 写入失败：保持未完成状态，下次启动继续引导，不假装已完成。
@@ -51,8 +76,26 @@ async function finish(): Promise<void> {
     </header>
 
     <section class="onboarding__section">
-      <h2 class="utility-label">{{ t("onboarding.checkHeading") }}</h2>
-      <ul class="onboarding__checks">
+      <div class="onboarding__section-heading">
+        <h2 class="utility-label">{{ t("onboarding.checkHeading") }}</h2>
+        <button
+          type="button"
+          class="button button--quiet"
+          :disabled="!settings.status || quota.busy"
+          @click="checkProviders"
+        >
+          {{
+            t(
+              quota.busy
+                ? "onboarding.checking"
+                : initialCheckStarted
+                  ? "onboarding.checkAgain"
+                  : "onboarding.checkNow",
+            )
+          }}
+        </button>
+      </div>
+      <ul class="onboarding__checks" aria-live="polite" :aria-busy="quota.busy">
         <li v-for="check in checks" :key="check.id" :class="`tone-${check.presentation.tone}`">
           <span class="onboarding__provider" translate="no">{{ check.name }}</span>
           <span class="onboarding__state">{{ t(check.presentation.titleKey) }}</span>
@@ -66,6 +109,9 @@ async function finish(): Promise<void> {
     <section class="onboarding__section">
       <h2 class="utility-label">{{ t("onboarding.boundaryHeading") }}</h2>
       <p class="supporting">{{ t("onboarding.boundary") }}</p>
+      <p v-if="showsKeychainNotice" class="supporting onboarding__hint">
+        {{ t("onboarding.keychainNotice") }}
+      </p>
     </section>
 
     <p v-if="settings.writeFailed" class="onboarding__error" role="alert">
@@ -73,7 +119,12 @@ async function finish(): Promise<void> {
     </p>
 
     <footer class="onboarding__actions">
-      <button type="button" class="button button--primary" @click="finish">
+      <button
+        type="button"
+        class="button button--primary"
+        :disabled="!settings.status"
+        @click="finish"
+      >
         {{ t("onboarding.done") }}
       </button>
       <button type="button" class="button button--quiet" @click="closeSurface">
@@ -128,6 +179,13 @@ h1 {
   max-inline-size: 34rem;
   font-size: 0.875rem;
   line-height: 1.6;
+}
+
+.onboarding__section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
 }
 
 .onboarding__checks {

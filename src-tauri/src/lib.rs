@@ -64,9 +64,12 @@ pub fn run() {
             // 缓存里已有快照时，菜单栏在第一次刷新完成前就显示上一份数值。
             core.emit_quota_state(&handle);
 
-            // 启动后立即刷新一次，再交给自动刷新循环。
-            core.refresh_all(&handle, RefreshTrigger::Startup);
-            app::start_auto_refresh(&core, &handle);
+            // 已完成引导时启动后立即刷新。首次启动要先让用户看到权限说明，再由
+            // 「检查本机」明确触发同一个刷新用例。
+            if settings.onboarding.completed {
+                core.refresh_all(&handle, RefreshTrigger::Startup);
+                app::start_auto_refresh(&core, &handle);
+            }
 
             // 首次启动未完成时优先进入引导，不直接弹出紧凑面板。
             if !settings.onboarding.completed {

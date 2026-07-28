@@ -30,7 +30,7 @@ pub fn settings_update(
         autostart::apply(&app, outcome.settings.launch_at_login);
     }
 
-    if outcome.schedule_changed {
+    if outcome.schedule_changed && outcome.settings.onboarding.completed {
         app::start_auto_refresh(core, &app);
     }
 
@@ -47,10 +47,14 @@ pub fn onboarding_complete(
     core: State<'_, Arc<AppCore>>,
 ) -> Result<Settings, CommandError> {
     let core = core.inner();
+    let was_completed = core.settings().onboarding.completed;
     let settings = core
         .complete_onboarding()
         .map_err(|_| CommandError::SETTINGS_WRITE_FAILED)?;
 
+    if !was_completed {
+        app::start_auto_refresh(core, &app);
+    }
     core.emit_settings(&app, &settings);
     Ok(settings)
 }

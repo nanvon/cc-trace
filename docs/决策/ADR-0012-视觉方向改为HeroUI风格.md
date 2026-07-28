@@ -3,6 +3,9 @@
 - 状态：已确认
 - 日期：2026-07-27
 - 相关文档：[设计方向与状态规范](../设计方向与状态规范.md)、[DESIGN.md](../../DESIGN.md)、`src/styles/tokens.css`
+- 选定的探索稿：Artifact「CC Trace · HeroUI 方向」<https://claude.ai/code/artifact/5aef7024-5acb-4184-889a-24bfabd3a0ed>
+
+> 该 Artifact 托管在 claude.ai，不属于本仓库，离线不可用，也不受版本管理。它只是决策依据的历史留档，**不是样式真值来源**。样式真值是 `src/styles/tokens.css` 与[设计方向与状态规范](../设计方向与状态规范.md)；稿子与最终实现的差异以 [ADR-0017](ADR-0017-系统区域显示额度数字与余量分档.md) 为准。
 
 ## 背景
 

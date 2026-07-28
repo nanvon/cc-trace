@@ -7,6 +7,7 @@
 //! 返回值只有脱敏 contract。
 
 use std::sync::Arc;
+use std::time::Duration as StdDuration;
 
 use chrono::{DateTime, Duration, Utc};
 use serde::Deserialize;
@@ -24,6 +25,8 @@ const USAGE_ENDPOINT: &str = "https://chatgpt.com/backend-api/wham/usage";
 const TOKEN_ENDPOINT: &str = "https://auth.openai.com/oauth/token";
 /// Codex CLI 的公开 OAuth client id。它不是秘密：任何 Codex CLI 安装包里都有同一份。
 const OAUTH_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
+/// 并发客户端刚轮换 refresh token 时，给原子回写留一个很短的完成窗口。
+const SOFT_RECOVERY_DELAY: StdDuration = StdDuration::from_secs(1);
 
 const FIVE_HOUR_SECONDS: u64 = 5 * 60 * 60;
 const WEEKLY_SECONDS: u64 = 7 * 24 * 60 * 60;
@@ -246,8 +249,8 @@ impl CodexProvider {
             }
         };
 
-        let access_token = match self.ensure_fresh_access_token(&credentials).await {
-            Ok(token) => token,
+        let credentials = match self.ensure_fresh_credentials(credentials).await {
+            Ok(credentials) => credentials,
             Err(outcome) => return outcome,
         };
 
@@ -255,7 +258,7 @@ impl CodexProvider {
             .get(USAGE_ENDPOINT)
             .header(
                 reqwest::header::AUTHORIZATION,
-                format!("Bearer {}", access_token.expose()),
+                format!("Bearer {}", credentials.access_token.expose()),
             )
             .header(reqwest::header::ACCEPT, "application/json")
             .header(reqwest::header::USER_AGENT, "codex-cli");
@@ -295,43 +298,57 @@ impl CodexProvider {
         }
     }
 
-    /// 返回可用于本次请求的 access token，必要时先续期并回写 `auth.json`。
-    async fn ensure_fresh_access_token(
+    /// 返回可用于本次请求的完整凭据快照，必要时先续期并回写 `auth.json`。
+    async fn ensure_fresh_credentials(
         &self,
-        credentials: &CodexCredentials,
-    ) -> Result<Secret, ProviderFetchOutcome> {
+        credentials: CodexCredentials,
+    ) -> Result<CodexCredentials, ProviderFetchOutcome> {
         // 无法解出过期时刻（不透明 token）时不主动刷新：让 Provider 用 401 告诉我们。
         let Some(expires_at) = credentials.access_expires_at else {
-            return Ok(credentials.access_token.clone());
+            return Ok(credentials);
         };
         if !is_expiring(expires_at, Utc::now()) {
-            return Ok(credentials.access_token.clone());
+            return Ok(credentials);
         }
 
-        let Some(refresh_token) = credentials.refresh_token.clone() else {
+        let _guard = self.refresh_lock.lock().await;
+
+        // 拿到锁后重读：排队期间 Codex CLI 或另一次刷新可能已经写入了新 token。
+        let latest = match credentials::codex::discover() {
+            Discovery::Found(latest) => latest,
+            _ => {
+                return Err(ProviderFetchOutcome::Failed {
+                    kind: ErrorKind::Credentials,
+                });
+            }
+        };
+        match latest.access_expires_at {
+            // 与首次发现一致：无法判断过期时刻时不抢 refresh token。
+            None => return Ok(latest),
+            Some(expires_at) if !is_expiring(expires_at, Utc::now()) => return Ok(latest),
+            Some(_) => {}
+        }
+        let Some(refresh_token) = latest.refresh_token.as_ref() else {
             return Err(ProviderFetchOutcome::Failed {
                 kind: ErrorKind::Credentials,
             });
         };
 
-        let _guard = self.refresh_lock.lock().await;
-
-        // 拿到锁后重读：排队期间 Codex CLI 或另一次刷新可能已经写入了新 token。
-        let refresh_token = match credentials::codex::discover() {
-            Discovery::Found(latest) => {
-                if latest
-                    .access_expires_at
-                    .is_some_and(|expires_at| !is_expiring(expires_at, Utc::now()))
-                {
-                    return Ok(latest.access_token);
-                }
-                latest.refresh_token.unwrap_or(refresh_token)
+        let refreshed = match refresh_tokens(refresh_token).await {
+            Ok(refreshed) => refreshed,
+            // Codex CLI 可能刚用同一份 refresh token 抢先刷新成功。仅在确认来源里
+            // 出现一份不同且仍有效的新 token 时采用；否则维持凭据类错误。
+            Err(RefreshFailure::Revoked) => {
+                tokio::time::sleep(SOFT_RECOVERY_DELAY).await;
+                return recovered_credentials(refresh_token).ok_or(
+                    ProviderFetchOutcome::Failed {
+                        kind: ErrorKind::Credentials,
+                    },
+                );
             }
-            _ => refresh_token,
+            Err(RefreshFailure::Outcome(outcome)) => return Err(outcome),
         };
-
-        let refreshed = refresh_tokens(&refresh_token).await?;
-        credentials::codex::write_back(&refreshed, Utc::now()).map_err(|_| {
+        credentials::codex::write_back(&latest, &refreshed, Utc::now()).map_err(|_| {
             // 服务端已经轮换了 token，但我们没能存下来。报凭据类错误而不是静默继续：
             // 下次启动会拿着作废的 refresh token，用户需要知道。
             ProviderFetchOutcome::Failed {
@@ -339,7 +356,12 @@ impl CodexProvider {
             }
         })?;
 
-        Ok(refreshed.access_token)
+        match credentials::codex::discover() {
+            Discovery::Found(current) => Ok(current),
+            _ => Err(ProviderFetchOutcome::Failed {
+                kind: ErrorKind::Credentials,
+            }),
+        }
     }
 }
 
@@ -375,7 +397,28 @@ fn is_expiring(expires_at: DateTime<Utc>, now: DateTime<Utc>) -> bool {
     expires_at - now < Duration::seconds(CODEX_TOKEN_REFRESH_SKEW_SECS)
 }
 
-async fn refresh_tokens(refresh_token: &Secret) -> Result<RefreshedTokens, ProviderFetchOutcome> {
+/// 软恢复：另一个客户端刷新成功时，来源里会出现一份不同且仍有效的新 token。
+fn recovered_credentials(attempted_refresh: &Secret) -> Option<CodexCredentials> {
+    let Discovery::Found(latest) = credentials::codex::discover() else {
+        return None;
+    };
+    let rotated = latest
+        .refresh_token
+        .as_ref()
+        .is_some_and(|token| token != attempted_refresh);
+    let fresh = latest
+        .access_expires_at
+        .is_some_and(|expires_at| !is_expiring(expires_at, Utc::now()));
+
+    (rotated && fresh).then_some(latest)
+}
+
+enum RefreshFailure {
+    Revoked,
+    Outcome(ProviderFetchOutcome),
+}
+
+async fn refresh_tokens(refresh_token: &Secret) -> Result<RefreshedTokens, RefreshFailure> {
     let response = http::client()
         .post(TOKEN_ENDPOINT)
         .header(reqwest::header::ACCEPT, "application/json")
@@ -387,24 +430,35 @@ async fn refresh_tokens(refresh_token: &Secret) -> Result<RefreshedTokens, Provi
         ])
         .send()
         .await
-        .map_err(|error| http::classify_transport(&error))?;
+        .map_err(|error| RefreshFailure::Outcome(http::classify_transport(&error)))?;
 
-    if !response.status().is_success() {
-        // 刷新失败一律是凭据类：下一步是「在 Codex CLI 重新登录」，
-        // 不能伪装成离线，见 docs/状态与错误模型.md 第 4 节。
-        return Err(ProviderFetchOutcome::Failed {
-            kind: ErrorKind::Credentials,
-        });
-    }
-
+    let status = response.status();
     let body = response
         .text()
         .await
-        .map_err(|error| http::classify_transport(&error))?;
+        .map_err(|error| RefreshFailure::Outcome(http::classify_transport(&error)))?;
 
-    parse_refresh_response(&body, refresh_token).ok_or(ProviderFetchOutcome::Failed {
-        kind: ErrorKind::Credentials,
-    })
+    if !status.is_success() {
+        // 刷新失败一律是凭据类：下一步是「在 Codex CLI 重新登录」，
+        // 不能伪装成离线，见 docs/状态与错误模型.md 第 4 节。
+        return Err(if is_invalid_grant(status, &body) {
+            RefreshFailure::Revoked
+        } else {
+            RefreshFailure::Outcome(ProviderFetchOutcome::Failed {
+                kind: ErrorKind::Credentials,
+            })
+        });
+    }
+
+    parse_refresh_response(&body, refresh_token).ok_or(RefreshFailure::Outcome(
+        ProviderFetchOutcome::Failed {
+            kind: ErrorKind::Credentials,
+        },
+    ))
+}
+
+fn is_invalid_grant(status: reqwest::StatusCode, body: &str) -> bool {
+    status == reqwest::StatusCode::BAD_REQUEST && body.contains("invalid_grant")
 }
 
 /// 解析刷新响应。响应不返回 `refresh_token` 时沿用旧值——这是它未轮换的信号。
@@ -627,6 +681,22 @@ mod tests {
                 "{body:?} must not produce tokens"
             );
         }
+    }
+
+    #[test]
+    fn only_a_400_invalid_grant_triggers_the_soft_recovery_path() {
+        assert!(is_invalid_grant(
+            reqwest::StatusCode::BAD_REQUEST,
+            r#"{"error":"invalid_grant"}"#
+        ));
+        assert!(!is_invalid_grant(
+            reqwest::StatusCode::BAD_REQUEST,
+            r#"{"error":"invalid_request"}"#
+        ));
+        assert!(!is_invalid_grant(
+            reqwest::StatusCode::UNAUTHORIZED,
+            r#"{"error":"invalid_grant"}"#
+        ));
     }
 
     #[test]

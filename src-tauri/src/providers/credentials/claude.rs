@@ -39,6 +39,8 @@ pub struct ClaudeCredentials {
     pub subscription: Option<String>,
     pub expires_at: Option<DateTime<Utc>>,
     pub source: ClaudeSource,
+    /// 只在凭据来自 macOS 钥匙串时存在，用于把刷新结果写回刚才读到的精确条目。
+    pub keychain_account: Option<Secret>,
 }
 
 /// 手动实现：只暴露「有没有」与来源，不暴露任何取值。
@@ -51,6 +53,7 @@ impl fmt::Debug for ClaudeCredentials {
             .field("has_email", &self.email.is_some())
             .field("subscription", &self.subscription)
             .field("expires_at", &self.expires_at)
+            .field("has_keychain_account", &self.keychain_account.is_some())
             .finish()
     }
 }
@@ -116,7 +119,15 @@ fn read_file() -> Discovery<ClaudeCredentials> {
 
 fn read_keychain() -> Discovery<ClaudeCredentials> {
     match keychain::read_claude_credentials() {
-        KeychainRead::Found(payload) => parse(payload.expose(), ClaudeSource::Keychain),
+        KeychainRead::Found { payload, account } => {
+            match parse(payload.expose(), ClaudeSource::Keychain) {
+                Discovery::Found(credentials) => Discovery::Found(ClaudeCredentials {
+                    keychain_account: Some(account),
+                    ..credentials
+                }),
+                other => other,
+            }
+        }
         KeychainRead::Missing => Discovery::Missing,
         KeychainRead::Unreadable => Discovery::Unreadable,
     }
@@ -163,12 +174,13 @@ pub fn parse(raw: &str, source: ClaudeSource) -> Discovery<ClaudeCredentials> {
         ),
         expires_at: parse_expires_at(oauth.get("expiresAt")),
         source,
+        keychain_account: None,
     })
 }
 
 /// 把刷新结果原子回写读到它的那个来源。
-pub fn write_back(source: ClaudeSource, tokens: &RefreshedTokens) -> io::Result<()> {
-    match source {
+pub fn write_back(expected: &ClaudeCredentials, tokens: &RefreshedTokens) -> io::Result<()> {
+    match expected.source {
         ClaudeSource::File => {
             let path = credentials_path().ok_or_else(|| {
                 io::Error::new(
@@ -176,50 +188,107 @@ pub fn write_back(source: ClaudeSource, tokens: &RefreshedTokens) -> io::Result<
                     "claude credentials path is not resolvable",
                 )
             })?;
-            write_back_to_file(&path, tokens)
+            write_back_to_file(&path, expected, tokens)
         }
         ClaudeSource::Keychain => {
-            let existing = match keychain::read_claude_credentials() {
-                KeychainRead::Found(payload) => payload.expose().to_owned(),
-                _ => String::new(),
+            let account = expected.keychain_account.as_ref().ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "claude keychain account is unavailable for write back",
+                )
+            })?;
+            let existing = match keychain::read_claude_credentials_for_account(account) {
+                KeychainRead::Found { payload, .. } => payload,
+                KeychainRead::Missing => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::NotFound,
+                        "claude keychain source disappeared before write back",
+                    ));
+                }
+                KeychainRead::Unreadable => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "claude keychain source is not readable before write back",
+                    ));
+                }
             };
-            let updated = merged_payload(&existing, tokens);
+            let updated = merged_payload(
+                existing.expose(),
+                expected,
+                tokens,
+                ClaudeSource::Keychain,
+            )?;
             let serialized = serde_json::to_string(&updated)
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-            keychain::write_claude_credentials(&Secret::new(serialized))
+            keychain::write_claude_credentials(
+                account,
+                &existing,
+                &Secret::new(serialized),
+            )
         }
     }
 }
 
 /// 回写到指定文件。与 [`write_back`] 分开，让测试不必碰真实的凭据文件。
-pub fn write_back_to_file(path: &Path, tokens: &RefreshedTokens) -> io::Result<()> {
-    let existing = fs::read_to_string(path).unwrap_or_default();
-    let updated = merged_payload(&existing, tokens);
+pub fn write_back_to_file(
+    path: &Path,
+    expected: &ClaudeCredentials,
+    tokens: &RefreshedTokens,
+) -> io::Result<()> {
+    let existing = fs::read_to_string(path)?;
+    let updated = merged_payload(&existing, expected, tokens, ClaudeSource::File)?;
     replace_json_atomically(path, &updated)
 }
 
 /// 只替换 token 三件套，保留 payload 中其余字段（`subscriptionType`、`scopes` 等）。
-fn merged_payload(existing: &str, tokens: &RefreshedTokens) -> serde_json::Value {
-    let mut root = serde_json::from_str::<serde_json::Value>(existing)
-        .ok()
-        .filter(serde_json::Value::is_object)
-        .unwrap_or_else(|| serde_json::json!({}));
-
-    let object = root.as_object_mut().expect("root is an object");
-    let entry = object
-        .entry("claudeAiOauth")
-        .or_insert_with(|| serde_json::json!({}));
-    if !entry.is_object() {
-        *entry = serde_json::json!({});
+fn merged_payload(
+    existing: &str,
+    expected: &ClaudeCredentials,
+    tokens: &RefreshedTokens,
+    source: ClaudeSource,
+) -> io::Result<serde_json::Value> {
+    let Discovery::Found(current) = parse(existing, source) else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "claude credential source no longer contains supported OAuth credentials",
+        ));
+    };
+    if !same_token_version(&current, expected) {
+        return Err(io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "claude credential source changed during token refresh",
+        ));
     }
-    let oauth = entry.as_object_mut().expect("claudeAiOauth is an object");
+    let mut root = serde_json::from_str::<serde_json::Value>(existing)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
 
+    let oauth = root
+        .as_object_mut()
+        .and_then(|object| object.get_mut("claudeAiOauth"))
+        .and_then(serde_json::Value::as_object_mut)
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "claude OAuth payload is no longer writable",
+            )
+        })?;
+
+    let access_key = if oauth.contains_key("accessToken") {
+        "accessToken"
+    } else {
+        "access_token"
+    };
+    let refresh_key = if oauth.contains_key("refreshToken") {
+        "refreshToken"
+    } else {
+        "refresh_token"
+    };
     oauth.insert(
-        "accessToken".to_owned(),
+        access_key.to_owned(),
         serde_json::Value::String(tokens.access_token.expose().to_owned()),
     );
     oauth.insert(
-        "refreshToken".to_owned(),
+        refresh_key.to_owned(),
         serde_json::Value::String(tokens.refresh_token.expose().to_owned()),
     );
     // Claude Code 用毫秒时间戳，写回时必须保持同一单位，否则 CLI 会认为凭据早已过期。
@@ -228,7 +297,13 @@ fn merged_payload(existing: &str, tokens: &RefreshedTokens) -> serde_json::Value
         serde_json::Value::from(tokens.expires_at.timestamp_millis()),
     );
 
-    root
+    Ok(root)
+}
+
+fn same_token_version(current: &ClaudeCredentials, expected: &ClaudeCredentials) -> bool {
+    current.source == expected.source
+        && current.access_token == expected.access_token
+        && current.refresh_token == expected.refresh_token
 }
 
 fn field<'a>(oauth: &'a serde_json::Value, camel: &str, snake: &str) -> Option<&'a str> {
@@ -273,6 +348,13 @@ mod tests {
                 "scopes": ["user:inference"]
             }
         }"#
+    }
+
+    fn expected_credentials(raw: &str) -> ClaudeCredentials {
+        let Discovery::Found(credentials) = parse(raw, ClaudeSource::File) else {
+            panic!("fixture parses");
+        };
+        credentials
     }
 
     #[test]
@@ -352,8 +434,10 @@ mod tests {
         fs::write(&path, file_fixture()).expect("seed credentials");
 
         let expires_at = DateTime::from_timestamp(1_800_000_000, 0).expect("valid timestamp");
+        let expected = expected_credentials(file_fixture());
         write_back_to_file(
             &path,
+            &expected,
             &RefreshedTokens {
                 access_token: Secret::new("new-access"),
                 refresh_token: Secret::new("new-refresh"),
@@ -383,8 +467,10 @@ mod tests {
         fs::write(&path, file_fixture()).expect("seed credentials");
 
         let expires_at = DateTime::from_timestamp(1_800_000_000, 0).expect("valid timestamp");
+        let expected = expected_credentials(file_fixture());
         write_back_to_file(
             &path,
+            &expected,
             &RefreshedTokens {
                 access_token: Secret::new("new-access"),
                 refresh_token: Secret::new("new-refresh"),
@@ -399,6 +485,86 @@ mod tests {
         };
         assert_eq!(credentials.access_token.expose(), "new-access");
         assert_eq!(credentials.expires_at, Some(expires_at));
+    }
+
+    #[test]
+    fn write_back_preserves_snake_case_token_field_names() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join(".credentials.json");
+        let fixture =
+            r#"{"claudeAiOauth":{"access_token":"old-a","refresh_token":"old-r"}}"#;
+        fs::write(&path, fixture).expect("seed credentials");
+
+        write_back_to_file(
+            &path,
+            &expected_credentials(fixture),
+            &RefreshedTokens {
+                access_token: Secret::new("new-a"),
+                refresh_token: Secret::new("new-r"),
+                expires_at: DateTime::from_timestamp(1_800_000_000, 0).expect("timestamp"),
+            },
+        )
+        .expect("write back succeeds");
+
+        let root: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).expect("read back")).expect("json");
+        let oauth = &root["claudeAiOauth"];
+        assert_eq!(oauth["access_token"], "new-a");
+        assert_eq!(oauth["refresh_token"], "new-r");
+        assert!(oauth.get("accessToken").is_none());
+        assert!(oauth.get("refreshToken").is_none());
+    }
+
+    #[test]
+    fn write_back_refuses_to_replace_a_corrupt_or_missing_file() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join(".credentials.json");
+        let tokens = RefreshedTokens {
+            access_token: Secret::new("new-a"),
+            refresh_token: Secret::new("new-r"),
+            expires_at: DateTime::from_timestamp(1_800_000_000, 0).expect("timestamp"),
+        };
+        let expected = expected_credentials(file_fixture());
+
+        fs::write(&path, "{ not json").expect("seed corrupt credentials");
+        let corrupt = write_back_to_file(&path, &expected, &tokens)
+            .expect_err("corrupt external credentials must fail closed");
+        assert_eq!(corrupt.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(fs::read_to_string(&path).expect("read back"), "{ not json");
+
+        fs::remove_file(&path).expect("remove fixture");
+        let missing = write_back_to_file(&path, &expected, &tokens)
+            .expect_err("a missing source must stay missing");
+        assert_eq!(missing.kind(), io::ErrorKind::NotFound);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn write_back_refuses_to_overwrite_a_newer_token_version() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join(".credentials.json");
+        let expected = expected_credentials(file_fixture());
+        let changed =
+            r#"{"claudeAiOauth":{"accessToken":"newer-a","refreshToken":"newer-r"}}"#;
+        fs::write(&path, changed).expect("seed changed credentials");
+
+        let result = write_back_to_file(
+            &path,
+            &expected,
+            &RefreshedTokens {
+                access_token: Secret::new("ours-a"),
+                refresh_token: Secret::new("ours-r"),
+                expires_at: DateTime::from_timestamp(1_800_000_000, 0).expect("timestamp"),
+            },
+        );
+
+        assert_eq!(
+            result
+                .expect_err("a newer CLI token version must win")
+                .kind(),
+            io::ErrorKind::WouldBlock
+        );
+        assert_eq!(fs::read_to_string(&path).expect("read back"), changed);
     }
 
     #[test]

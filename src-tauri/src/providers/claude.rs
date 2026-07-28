@@ -481,8 +481,8 @@ impl ClaudeProvider {
             }
         };
 
-        let access_token = match self.ensure_fresh_access_token(&credentials).await {
-            Ok(token) => token,
+        let credentials = match self.ensure_fresh_credentials(credentials).await {
+            Ok(credentials) => credentials,
             Err(outcome) => return outcome,
         };
 
@@ -490,7 +490,7 @@ impl ClaudeProvider {
             .get(USAGE_ENDPOINT)
             .header(
                 reqwest::header::AUTHORIZATION,
-                format!("Bearer {}", access_token.expose()),
+                format!("Bearer {}", credentials.access_token.expose()),
             )
             .header(reqwest::header::ACCEPT, "application/json")
             .header("anthropic-beta", OAUTH_BETA_HEADER)
@@ -531,61 +531,66 @@ impl ClaudeProvider {
         }
     }
 
-    async fn ensure_fresh_access_token(
+    async fn ensure_fresh_credentials(
         &self,
-        credentials: &ClaudeCredentials,
-    ) -> Result<Secret, ProviderFetchOutcome> {
+        credentials: ClaudeCredentials,
+    ) -> Result<ClaudeCredentials, ProviderFetchOutcome> {
         // 没有过期时刻就不主动刷新：让 Provider 用 401 告诉我们，而不是抢 refresh token。
         let Some(expires_at) = credentials.expires_at else {
-            return Ok(credentials.access_token.clone());
+            return Ok(credentials);
         };
         if !is_expiring(expires_at, Utc::now()) {
-            return Ok(credentials.access_token.clone());
+            return Ok(credentials);
         }
 
-        let Some(refresh_token) = credentials.refresh_token.clone() else {
+        let _guard = self.refresh_lock.lock().await;
+
+        // 排队期间 Claude Code CLI 或另一次刷新可能已经写入新 token，先重读再决定。
+        let latest = match reread() {
+            Some(latest) => latest,
+            None => {
+                return Err(ProviderFetchOutcome::Failed {
+                    kind: ErrorKind::Credentials,
+                });
+            }
+        };
+        match latest.expires_at {
+            // 与首次发现一致：没有过期时刻时不主动刷新。
+            None => return Ok(latest),
+            Some(expires_at) if !is_expiring(expires_at, Utc::now()) => return Ok(latest),
+            Some(_) => {}
+        }
+        let Some(refresh_token) = latest.refresh_token.as_ref() else {
             return Err(ProviderFetchOutcome::Failed {
                 kind: ErrorKind::Credentials,
             });
         };
 
-        let _guard = self.refresh_lock.lock().await;
-
-        // 排队期间 Claude Code CLI 或另一次刷新可能已经写入新 token，先重读再决定。
-        let refresh_token = match reread() {
-            Some(latest) => {
-                if latest
-                    .expires_at
-                    .is_some_and(|expires_at| !is_expiring(expires_at, Utc::now()))
-                {
-                    return Ok(latest.access_token);
-                }
-                latest.refresh_token.unwrap_or(refresh_token)
-            }
-            None => refresh_token,
-        };
-
-        let refreshed = match refresh_tokens(&refresh_token).await {
+        let refreshed = match refresh_tokens(refresh_token).await {
             Ok(refreshed) => refreshed,
             // 服务端说这份 refresh token 已经作废：多半是别的客户端抢先刷成功了。
             // 等一拍重读，发现新值就静默采用；否则报凭据类错误。首版不做 delegated
             // refresh，见 ADR-0007。
             Err(RefreshFailure::Revoked) => {
                 tokio::time::sleep(SOFT_RECOVERY_DELAY).await;
-                return recovered_token(&refresh_token).ok_or(ProviderFetchOutcome::Failed {
-                    kind: ErrorKind::Credentials,
-                });
+                return recovered_credentials(refresh_token).ok_or(
+                    ProviderFetchOutcome::Failed {
+                        kind: ErrorKind::Credentials,
+                    },
+                );
             }
             Err(RefreshFailure::Outcome(outcome)) => return Err(outcome),
         };
 
-        credentials::claude::write_back(credentials.source, &refreshed).map_err(|_| {
+        credentials::claude::write_back(&latest, &refreshed).map_err(|_| {
             ProviderFetchOutcome::Failed {
                 kind: ErrorKind::Credentials,
             }
         })?;
 
-        Ok(refreshed.access_token)
+        reread().ok_or(ProviderFetchOutcome::Failed {
+            kind: ErrorKind::Credentials,
+        })
     }
 }
 
@@ -599,7 +604,7 @@ impl QuotaProvider for ClaudeProvider {
     }
 }
 
-/// 重新读取凭据来源，只关心 token 与过期时刻。
+/// 重新读取完整凭据，确保请求 token、身份与回写来源来自同一个快照。
 fn reread() -> Option<ClaudeCredentials> {
     match credentials::claude::discover() {
         Discovery::Found(credentials) => Some(credentials),
@@ -608,7 +613,7 @@ fn reread() -> Option<ClaudeCredentials> {
 }
 
 /// 软恢复：别的客户端刷新成功时，来源里会出现一个与我们手里不同且仍新鲜的 token。
-fn recovered_token(attempted_refresh: &Secret) -> Option<Secret> {
+fn recovered_credentials(attempted_refresh: &Secret) -> Option<ClaudeCredentials> {
     let latest = reread()?;
     let rotated = latest
         .refresh_token
@@ -616,9 +621,9 @@ fn recovered_token(attempted_refresh: &Secret) -> Option<Secret> {
         .is_some_and(|token| token != attempted_refresh);
     let fresh = latest
         .expires_at
-        .is_some_and(|expires_at| expires_at > Utc::now());
+        .is_some_and(|expires_at| !is_expiring(expires_at, Utc::now()));
 
-    (rotated && fresh).then_some(latest.access_token)
+    (rotated && fresh).then_some(latest)
 }
 
 fn is_expiring(expires_at: DateTime<Utc>, now: DateTime<Utc>) -> bool {

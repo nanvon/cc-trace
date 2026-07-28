@@ -18,7 +18,7 @@ use tauri::{App, AppHandle, Manager, Wry};
 use super::desktop::{MainNavigationTarget, hide_compact, show_main, toggle_compact};
 use super::strings::{Lang, native, provider_name};
 use crate::app::AppCore;
-use crate::contracts::{ProviderId, QuotaState};
+use crate::contracts::{ProviderAvailability, ProviderId, QuotaState};
 use crate::scheduler::RefreshTrigger;
 
 pub const TRAY_ID: &str = "cc-trace";
@@ -130,6 +130,15 @@ fn primary_window_text(state: &QuotaState, provider: ProviderId) -> String {
         .providers
         .iter()
         .find(|snapshot| snapshot.provider == provider)
+        .filter(|snapshot| {
+            !matches!(
+                snapshot.availability,
+                ProviderAvailability::NoCredentials
+                    | ProviderAvailability::Unsupported
+                    | ProviderAvailability::Offline
+                    | ProviderAvailability::Error
+            )
+        })
         .and_then(|snapshot| snapshot.snapshot.as_ref())
         .and_then(|snapshot| snapshot.windows.first())
         .map(|window| percent_text(window.remaining_percent))
@@ -246,6 +255,40 @@ mod tests {
             vec![window(QuotaWindowKind::Unknown, 62.0)],
         )]);
         assert_eq!(primary_window_text(&state, ProviderId::Codex), "62%");
+    }
+
+    #[test]
+    fn offline_and_error_hide_even_a_stale_snapshot_from_the_system_area() {
+        for availability in [
+            ProviderAvailability::Offline,
+            ProviderAvailability::Error,
+        ] {
+            let mut provider = with_windows(
+                ProviderId::Codex,
+                vec![window(QuotaWindowKind::FiveHour, 62.0)],
+            );
+            provider.availability = availability;
+
+            assert_eq!(
+                primary_window_text(&state(vec![provider]), ProviderId::Codex),
+                NO_VALUE,
+                "{availability:?} must use the documented system-area placeholder"
+            );
+        }
+    }
+
+    #[test]
+    fn rate_limiting_keeps_the_last_known_value_in_the_system_area() {
+        let mut provider = with_windows(
+            ProviderId::Codex,
+            vec![window(QuotaWindowKind::FiveHour, 62.0)],
+        );
+        provider.availability = ProviderAvailability::RateLimited;
+
+        assert_eq!(
+            primary_window_text(&state(vec![provider]), ProviderId::Codex),
+            "62%"
+        );
     }
 
     #[test]

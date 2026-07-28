@@ -36,6 +36,9 @@ pub const EVENT_SETTINGS_UPDATED: &str = "settings://updated";
 /// 预置旧快照时假装它来自多久以前，让 `stale` 场景的「上次成功」时间读起来可信。
 #[cfg(debug_assertions)]
 const SEEDED_SNAPSHOT_AGE_MINUTES: i64 = 132;
+/// 桌面端没有可靠的跨平台系统唤醒事件；用短周期墙钟检测睡眠造成的时间跳变。
+const WAKE_MONITOR_INTERVAL_SECS: u64 = 30;
+const WAKE_MONITOR_GAP_SECS: i64 = 45;
 
 /// 设置写入失败。不携带路径或系统错误原文。
 #[derive(Debug, Clone, Copy)]
@@ -147,13 +150,16 @@ impl AppCore {
     ) -> Result<SettingsOutcome, SettingsWriteError> {
         let (next, schedule_changed) = {
             let mut settings = self.settings.lock().expect("settings lock");
+            let mut next = settings.clone();
             let previous_interval = settings.refresh_interval;
-            update.apply_to(&mut settings);
-            let changed = previous_interval != settings.refresh_interval;
-            (settings.clone(), changed)
+            update.apply_to(&mut next);
+            let changed = previous_interval != next.refresh_interval;
+
+            self.persist(&next)?;
+            *settings = next.clone();
+            (next, changed)
         };
 
-        self.persist(&next)?;
         if schedule_changed {
             self.schedule_generation.fetch_add(1, Ordering::SeqCst);
         }
@@ -168,12 +174,15 @@ impl AppCore {
     pub fn complete_onboarding(&self) -> Result<Settings, SettingsWriteError> {
         let next = {
             let mut settings = self.settings.lock().expect("settings lock");
-            settings.onboarding.completed = true;
-            settings.onboarding.completed_at = Some(Utc::now().to_rfc3339());
-            settings.clone()
+            let mut next = settings.clone();
+            next.onboarding.completed = true;
+            next.onboarding.completed_at = Some(Utc::now().to_rfc3339());
+
+            self.persist(&next)?;
+            *settings = next.clone();
+            next
         };
 
-        self.persist(&next)?;
         Ok(next)
     }
 
@@ -208,6 +217,42 @@ impl AppCore {
         }
     }
 
+    /// 系统从睡眠恢复后，只刷新已经超过一倍自动刷新间隔的 Provider。
+    ///
+    /// 真正发请求仍经过 [`Self::refresh_provider`]，所以在飞请求会合并，退避也不会被绕过。
+    pub fn refresh_stale_after_wake(self: &Arc<Self>, app: &AppHandle) {
+        let settings = self.settings();
+        if !settings.onboarding.completed {
+            return;
+        }
+        let interval = settings.refresh_interval.seconds();
+        let now = Utc::now();
+        let stale = {
+            let mut runtimes = self.runtimes.lock().expect("runtimes lock");
+            ProviderId::ORDER
+                .iter()
+                .copied()
+                .filter(|provider| {
+                    let Some(runtime) = runtimes.get_mut(provider) else {
+                        return false;
+                    };
+                    let should_refresh = runtime.is_older_than(now, interval);
+                    runtime.expire_if_stale(now, interval);
+                    should_refresh
+                })
+                .collect::<Vec<_>>()
+        };
+
+        if stale.is_empty() {
+            return;
+        }
+
+        self.emit_quota_state(app);
+        for provider in stale {
+            self.refresh_provider(app, provider, RefreshTrigger::Startup);
+        }
+    }
+
     /// 刷新一个 Provider。并发触发合并到已在飞的任务；退避期内不发起真实请求。
     pub fn refresh_provider(
         self: &Arc<Self>,
@@ -237,6 +282,9 @@ impl AppCore {
             return;
         };
 
+        // `begin` 同时清除上一次的可用性错误与重试时间，必须先广播完整三维状态；
+        // 否则现有窗口和系统区域会在请求期间继续展示旧错误。
+        self.emit_quota_state(app);
         self.emit_refresh_state(app, provider, refresh_state);
 
         let Some(source) = self.source_for(provider) else {
@@ -377,6 +425,27 @@ fn restore_cached_snapshots(
 pub fn start_auto_refresh(core: &Arc<AppCore>, app: &AppHandle) {
     let generation = core.schedule_generation.load(Ordering::SeqCst);
 
+    {
+        let core = Arc::clone(core);
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            let mut previous_tick = Utc::now();
+            loop {
+                tokio::time::sleep(StdDuration::from_secs(WAKE_MONITOR_INTERVAL_SECS)).await;
+
+                if core.schedule_generation.load(Ordering::SeqCst) != generation {
+                    break;
+                }
+
+                let now = Utc::now();
+                if (now - previous_tick).num_seconds() > WAKE_MONITOR_GAP_SECS {
+                    core.refresh_stale_after_wake(&app);
+                }
+                previous_tick = now;
+            }
+        });
+    }
+
     for (index, provider) in ProviderId::ORDER.iter().copied().enumerate() {
         let core = Arc::clone(core);
         let app = app.clone();
@@ -400,5 +469,43 @@ pub fn start_auto_refresh(core: &Arc<AppCore>, app: &AppHandle) {
                 tick = tick.wrapping_add(1);
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::*;
+    use crate::contracts::RefreshInterval;
+
+    fn core_with_unwritable_config_path() -> (tempfile::TempDir, Arc<AppCore>) {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let config_path = dir.path().join("not-a-directory");
+        fs::write(&config_path, "blocks directory creation").expect("seed blocking file");
+        let (core, _) = AppCore::new(config_path);
+        (dir, core)
+    }
+
+    #[test]
+    fn failed_settings_write_does_not_commit_the_in_memory_update() {
+        let (_dir, core) = core_with_unwritable_config_path();
+        let original = core.settings();
+        let update = SettingsUpdate {
+            refresh_interval: Some(RefreshInterval::FifteenMinutes),
+            ..SettingsUpdate::default()
+        };
+
+        assert!(core.update_settings(&update).is_err());
+        assert_eq!(core.settings(), original);
+    }
+
+    #[test]
+    fn failed_onboarding_write_keeps_onboarding_incomplete() {
+        let (_dir, core) = core_with_unwritable_config_path();
+
+        assert!(core.complete_onboarding().is_err());
+        assert!(!core.settings().onboarding.completed);
+        assert!(core.settings().onboarding.completed_at.is_none());
     }
 }

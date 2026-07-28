@@ -23,7 +23,10 @@ const CLAUDE_SERVICE: &str = "Claude Code-credentials";
 /// 一次钥匙串读取的结局。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KeychainRead {
-    Found(Secret),
+    Found {
+        payload: Secret,
+        account: Secret,
+    },
     /// 没有这一项，或本平台没有这个来源。
     Missing,
     /// 项存在但读不出来：授权被拒、钥匙串已锁定、系统调用失败。
@@ -32,20 +35,33 @@ pub enum KeychainRead {
 
 #[cfg(target_os = "macos")]
 pub fn read_claude_credentials() -> KeychainRead {
+    read_claude_credentials_matching(None)
+}
+
+#[cfg(target_os = "macos")]
+pub fn read_claude_credentials_for_account(account: &Secret) -> KeychainRead {
+    read_claude_credentials_matching(Some(account))
+}
+
+#[cfg(target_os = "macos")]
+fn read_claude_credentials_matching(account: Option<&Secret>) -> KeychainRead {
     use security_framework::item::{ItemClass, ItemSearchOptions, Limit};
 
     /// `errSecItemNotFound`：没有匹配项，等价于「没登录过」。
     const ITEM_NOT_FOUND: i32 = -25_300;
 
-    let result = ItemSearchOptions::new()
+    let mut search = ItemSearchOptions::new();
+    search
         .class(ItemClass::generic_password())
         .service(CLAUDE_SERVICE)
         .load_attributes(true)
         .load_data(true)
-        .limit(Limit::Max(1))
-        .search();
+        .limit(Limit::Max(1));
+    if let Some(account) = account {
+        search.account(account.expose());
+    }
 
-    let items = match result {
+    let items = match search.search() {
         Ok(items) => items,
         Err(error) if error.code() == ITEM_NOT_FOUND => return KeychainRead::Missing,
         // 授权被拒或钥匙串锁定都落这里。不降级成 Missing：用户有登录态，只是我们拿不到。
@@ -56,49 +72,44 @@ pub fn read_claude_credentials() -> KeychainRead {
         return KeychainRead::Missing;
     };
 
-    match attributes.get("v_Data") {
-        Some(payload) if !payload.trim().is_empty() => KeychainRead::Found(Secret::new(payload)),
-        _ => KeychainRead::Missing,
+    let Some(payload) = attributes
+        .get("v_Data")
+        .filter(|payload| !payload.trim().is_empty())
+    else {
+        return KeychainRead::Missing;
+    };
+    let Some(account) = attributes
+        .get("acct")
+        .filter(|account| !account.trim().is_empty())
+    else {
+        // 没有 account 就无法保证刷新结果写回刚才读到的同一项，按不可读失败关闭。
+        return KeychainRead::Unreadable;
+    };
+
+    KeychainRead::Found {
+        payload: Secret::new(payload),
+        account: Secret::new(account),
     }
 }
 
 #[cfg(target_os = "macos")]
-pub fn write_claude_credentials(payload: &Secret) -> io::Result<()> {
-    use security_framework::passwords::set_generic_password;
+pub fn write_claude_credentials(
+    account: &Secret,
+    expected_payload: &Secret,
+    payload: &Secret,
+) -> io::Result<()> {
+    use security_framework::os::macos::passwords::find_generic_password;
 
-    let account = claude_account().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::NotFound,
-            "no keychain account to write back to",
-        )
-    })?;
-
-    set_generic_password(CLAUDE_SERVICE, &account, payload.expose().as_bytes())
+    let (current, mut item) = find_generic_password(None, CLAUDE_SERVICE, account.expose())
+        .map_err(|_| io::Error::other("existing keychain item is no longer writable"))?;
+    if current.as_ref() != expected_payload.expose().as_bytes() {
+        return Err(io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "claude keychain item changed during token refresh",
+        ));
+    }
+    item.set_password(payload.expose().as_bytes())
         .map_err(|_| io::Error::other("keychain write failed"))
-}
-
-/// 回写必须落回同一条目，因此 account 取自现有项的 `kSecAttrAccount`。
-///
-/// 读不到属性时退回登录用户名——Claude Code 就是用它写入的——但只在确实存在
-/// 条目的前提下才会走到这里，不会凭空创建新条目。
-#[cfg(target_os = "macos")]
-fn claude_account() -> Option<String> {
-    use security_framework::item::{ItemClass, ItemSearchOptions, Limit};
-
-    let attributes = ItemSearchOptions::new()
-        .class(ItemClass::generic_password())
-        .service(CLAUDE_SERVICE)
-        .load_attributes(true)
-        .limit(Limit::Max(1))
-        .search()
-        .ok()
-        .and_then(|items| items.first().and_then(|item| item.simplify_dict()));
-
-    attributes
-        .and_then(|attributes| attributes.get("acct").cloned())
-        .filter(|account| !account.trim().is_empty())
-        .or_else(|| std::env::var("USER").ok())
-        .filter(|account| !account.trim().is_empty())
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -108,7 +119,16 @@ pub fn read_claude_credentials() -> KeychainRead {
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn write_claude_credentials(_payload: &Secret) -> io::Result<()> {
+pub fn read_claude_credentials_for_account(_account: &Secret) -> KeychainRead {
+    KeychainRead::Missing
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn write_claude_credentials(
+    _account: &Secret,
+    _expected_payload: &Secret,
+    _payload: &Secret,
+) -> io::Result<()> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
         "this platform has no keychain credential source",
@@ -121,8 +141,12 @@ mod tests {
 
     #[test]
     fn a_read_result_never_prints_the_payload() {
-        let read = KeychainRead::Found(Secret::new("{\"claudeAiOauth\":{}}"));
+        let read = KeychainRead::Found {
+            payload: Secret::new("{\"claudeAiOauth\":{}}"),
+            account: Secret::new("private-account"),
+        };
         assert!(!format!("{read:?}").contains("claudeAiOauth"));
+        assert!(!format!("{read:?}").contains("private-account"));
     }
 
     /// 非 macOS 上钥匙串来源不存在，凭据发现必须退回文件来源而不是报错。
@@ -130,6 +154,17 @@ mod tests {
     #[test]
     fn platforms_without_a_keychain_report_the_source_as_absent() {
         assert_eq!(read_claude_credentials(), KeychainRead::Missing);
-        assert!(write_claude_credentials(&Secret::new("{}")).is_err());
+        assert!(matches!(
+            read_claude_credentials_for_account(&Secret::new("account")),
+            KeychainRead::Missing
+        ));
+        assert!(
+            write_claude_credentials(
+                &Secret::new("account"),
+                &Secret::new("{}"),
+                &Secret::new("{}")
+            )
+            .is_err()
+        );
     }
 }

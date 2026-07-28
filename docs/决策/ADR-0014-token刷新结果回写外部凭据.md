@@ -19,13 +19,13 @@
 推翻「不写回外部凭据文件」这一条数据边界，**仅针对 token 刷新结果**：
 
 - access token 距过期少于提前量（Codex `300` 秒、Claude Code `30` 秒）时，用 refresh_token 续期。
-- 续期成功后，把新的 access token、refresh token 与过期时刻**原子回写到读取它的同一个来源**：Codex 写 `auth.json`，Claude Code 写 `~/.claude/.credentials.json` 或 macOS Keychain 项，来源由 [ADR-0013](ADR-0013-macOS读取ClaudeCode钥匙串凭据.md) 的发现顺序决定。
-- 回写只更新 token 三件套与过期时刻，保留文件或 Keychain payload 中的其余字段。
+- 续期成功后，把新的 access token、refresh token、过期时刻与 Provider 自有刷新元数据**原子回写到读取它的同一个来源**：Codex 写 `auth.json` 并更新 `last_refresh`，Claude Code 写 `~/.claude/.credentials.json` 或 macOS Keychain 项，来源由 [ADR-0013](ADR-0013-macOS读取ClaudeCode钥匙串凭据.md) 的发现顺序决定。
+- 回写只更新上述刷新结果字段，保留文件或 Keychain payload 中的其余字段。
 - 发起刷新请求前重新读取凭据来源；若其他客户端已写入更新的 token，直接采用，不发请求。
 - 同一 Provider 进程内只允许一个刷新任务，其余调用等待同一结果。
 - 刷新失败归为凭据类 `error`，不伪装成 `offline`。
 
-数据边界的其余部分不变：**不创建、不删除外部凭据文件，不写入 token 之外的任何字段，不读取或写入 Swift 版 cc-bar 的任何数据。** 首版仍不提供账号导入，不新增 CC Trace 自有的凭据存储。
+数据边界的其余部分不变：**不创建、不删除外部凭据文件，不写入刷新结果与 Provider 自有刷新元数据之外的任何字段，不读取或写入 Swift 版 cc-bar 的任何数据。** 首版仍不提供账号导入，不新增 CC Trace 自有的凭据存储。
 
 首版仍不实现 [ADR-0007](ADR-0007-首版不实现CLI兜底与delegated-refresh.md) 排除的 delegated refresh：刷新被服务端拒绝（`invalid_grant`）时，等待一次并重读来源，若发现其他客户端已写入新 token 就静默采用，否则报凭据类 `error`，不启动外部进程自愈。
 
@@ -51,6 +51,11 @@
 - `docs/产品范围.md` 与 `docs/技术架构.md` 的数据边界表述需要标明这一例外及其范围。
 - `CLAUDE.md` 第 5.3 节「不写回、不修改、不删除外部凭据文件」需要收窄为「除 token 刷新结果外」。
 - 回写路径必须原子替换并保留原有权限位；写入失败时保留原文件，并把本次刷新按凭据类 `error` 处理。
+- 回写前重新读取的来源若缺失、不可读或不再是受支持的 OAuth 结构，必须失败关闭；
+  不得创建文件、修复损坏 payload，或新建 Keychain 条目。Keychain 回写只原位更新
+  已匹配到的精确条目。
+- 回写前后若发现外部 CLI 已轮换 token 或切换账号，必须放弃覆盖并按凭据类 `error`
+  处理；后续刷新重新发现完整凭据，不得把一次刷新得到的新 token 与旧账号身份或旧来源组合使用。
 - 持有 token 的类型必须手动屏蔽 `Debug`，回写路径不得进入日志，见 [日志与诊断](../日志与诊断.md)。
 - 实机走查必须验证：CC Trace 刷新后，Codex CLI 与 Claude Code CLI 仍能正常使用；两者刷新后 CC Trace 也能继续工作。
 - 第 4 阶段「固化数据边界」的结论被本决策局部推翻，执行清单对应条目需要注明例外。

@@ -163,34 +163,57 @@ pub fn parse(raw: &str) -> Discovery<CodexCredentials> {
     })
 }
 
-/// 把刷新结果原子回写 `auth.json`，只改 token 三件套与 `last_refresh`。
+/// 把刷新结果原子回写 `auth.json`，只改 token 三件套与 Codex 自己的刷新时间。
 ///
 /// 回写是 refresh token 轮换语义的必然要求，边界见 ADR-0014。写入失败时原文件不变，
 /// 调用方必须把本次刷新按凭据类 `error` 处理。
-pub fn write_back(tokens: &RefreshedTokens, now: DateTime<Utc>) -> io::Result<()> {
+pub fn write_back(
+    expected: &CodexCredentials,
+    tokens: &RefreshedTokens,
+    now: DateTime<Utc>,
+) -> io::Result<()> {
     let path = auth_path().ok_or_else(|| {
         io::Error::new(io::ErrorKind::NotFound, "codex auth path is not resolvable")
     })?;
 
-    write_back_to(&path, tokens, now)
+    write_back_to(&path, expected, tokens, now)
 }
 
 /// 回写到指定路径。与 [`write_back`] 分开，让测试不必碰真实的 `~/.codex/auth.json`。
-pub fn write_back_to(path: &Path, tokens: &RefreshedTokens, now: DateTime<Utc>) -> io::Result<()> {
-    let mut root = fs::read_to_string(path)
-        .ok()
-        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
-        .filter(serde_json::Value::is_object)
-        .unwrap_or_else(|| serde_json::json!({}));
-
-    let object = root.as_object_mut().expect("root is an object");
-    let entry = object
-        .entry("tokens")
-        .or_insert_with(|| serde_json::json!({}));
-    if !entry.is_object() {
-        *entry = serde_json::json!({});
+pub fn write_back_to(
+    path: &Path,
+    expected: &CodexCredentials,
+    tokens: &RefreshedTokens,
+    now: DateTime<Utc>,
+) -> io::Result<()> {
+    let raw = fs::read_to_string(path)?;
+    let Discovery::Found(current) = parse(&raw) else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "codex auth file no longer contains supported OAuth credentials",
+        ));
+    };
+    if !same_token_version(&current, expected) {
+        return Err(io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "codex auth file changed during token refresh",
+        ));
     }
-    let token_object = entry.as_object_mut().expect("tokens is an object");
+    let mut root = serde_json::from_str::<serde_json::Value>(&raw)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+
+    let object = root.as_object_mut().ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidData, "codex auth root is not an object")
+    })?;
+    let token_object = object
+        .get_mut("tokens")
+        .and_then(serde_json::Value::as_object_mut)
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "codex auth tokens are no longer writable",
+            )
+        })?;
 
     token_object.insert(
         "access_token".to_owned(),
@@ -206,13 +229,18 @@ pub fn write_back_to(path: &Path, tokens: &RefreshedTokens, now: DateTime<Utc>) 
             serde_json::Value::String(id_token.expose().to_owned()),
         );
     }
-
     object.insert(
         "last_refresh".to_owned(),
         serde_json::Value::String(now.to_rfc3339()),
     );
 
     replace_json_atomically(path, &root)
+}
+
+fn same_token_version(current: &CodexCredentials, expected: &CodexCredentials) -> bool {
+    current.access_token == expected.access_token
+        && current.refresh_token == expected.refresh_token
+        && current.account_id == expected.account_id
 }
 
 fn auth_claim(key: &str, claims: Option<&serde_json::Value>) -> Option<String> {
@@ -227,6 +255,13 @@ fn auth_claim(key: &str, claims: Option<&serde_json::Value>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn expected_credentials() -> CodexCredentials {
+        let Discovery::Found(credentials) = parse(&oauth_fixture()) else {
+            panic!("fixture parses");
+        };
+        credentials
+    }
 
     /// payload：`{"exp":1700000000,"email":"user@example.test",
     /// "https://api.openai.com/auth":{"chatgpt_account_id":"acct_fixture_0001",
@@ -325,9 +360,11 @@ mod tests {
         let path = dir.path().join("auth.json");
         fs::write(&path, oauth_fixture()).expect("seed auth.json");
 
+        let expected = expected_credentials();
         let now = DateTime::from_timestamp(1_800_000_000, 0).expect("valid timestamp");
         write_back_to(
             &path,
+            &expected,
             &RefreshedTokens {
                 access_token: Secret::new("new-access"),
                 refresh_token: Secret::new("new-refresh"),
@@ -354,25 +391,89 @@ mod tests {
     }
 
     #[test]
-    fn write_back_recovers_from_a_corrupt_auth_file() {
+    fn write_back_refuses_to_replace_a_corrupt_auth_file() {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("auth.json");
         fs::write(&path, "{ not json").expect("seed a broken file");
 
-        write_back_to(
+        let result = write_back_to(
             &path,
+            &expected_credentials(),
             &RefreshedTokens {
                 access_token: Secret::new("new-access"),
                 refresh_token: Secret::new("new-refresh"),
                 id_token: Some(Secret::new("new-id")),
             },
             Utc::now(),
-        )
-        .expect("write back succeeds");
+        );
 
-        let root: serde_json::Value =
-            serde_json::from_str(&fs::read_to_string(&path).expect("read back")).expect("json");
-        assert_eq!(root["tokens"]["id_token"], "new-id");
+        assert_eq!(
+            result.expect_err("corrupt external credentials must fail closed").kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert_eq!(
+            fs::read_to_string(&path).expect("read back"),
+            "{ not json",
+            "a failed write back must leave the external file untouched"
+        );
+    }
+
+    #[test]
+    fn write_back_does_not_recreate_a_removed_auth_file() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("auth.json");
+
+        let result = write_back_to(
+            &path,
+            &expected_credentials(),
+            &RefreshedTokens {
+                access_token: Secret::new("new-access"),
+                refresh_token: Secret::new("new-refresh"),
+                id_token: None,
+            },
+            Utc::now(),
+        );
+
+        assert_eq!(
+            result.expect_err("a missing source must stay missing").kind(),
+            io::ErrorKind::NotFound
+        );
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn write_back_refuses_to_overwrite_a_newer_token_version() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("auth.json");
+        let expected = expected_credentials();
+        let mut changed: serde_json::Value =
+            serde_json::from_str(&oauth_fixture()).expect("fixture json");
+        changed["tokens"]["refresh_token"] = serde_json::Value::String("rotated-by-cli".to_owned());
+        fs::write(
+            &path,
+            serde_json::to_string(&changed).expect("serialize changed fixture"),
+        )
+        .expect("seed changed auth.json");
+        let before = fs::read_to_string(&path).expect("read before");
+
+        let result = write_back_to(
+            &path,
+            &expected,
+            &RefreshedTokens {
+                access_token: Secret::new("new-access"),
+                refresh_token: Secret::new("new-refresh"),
+                id_token: None,
+            },
+            Utc::now(),
+        );
+
+        assert_eq!(
+            result
+                .expect_err("a newer CLI token version must win")
+                .kind(),
+            io::ErrorKind::WouldBlock
+        );
+        assert_eq!(fs::read_to_string(&path).expect("read after"), before);
     }
 
     #[test]

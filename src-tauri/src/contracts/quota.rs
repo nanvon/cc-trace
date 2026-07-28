@@ -133,11 +133,11 @@ pub struct ProviderSnapshot {
 }
 
 impl ProviderSnapshot {
-    /// 尚无任何数据时的初始状态：首次加载。
+    /// 尚未发起任何请求时的初始状态。真正开始请求后由调度层进入 `loading`。
     pub fn initial(provider: ProviderId) -> Self {
         Self {
             provider,
-            refresh: RefreshState::Loading,
+            refresh: RefreshState::Idle,
             freshness: SnapshotFreshness::Empty,
             availability: ProviderAvailability::Ready,
             identity: None,
