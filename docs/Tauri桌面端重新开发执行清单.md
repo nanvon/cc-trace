@@ -327,6 +327,7 @@
 - [x] 确认新应用版本从 `0.x` 演进。
 - [x] 首次正式版使用 `1.0.0`。
 - [x] 配置 GitHub tag、三处版本一致性门禁与 Draft Release。
+- [x] macOS Release 显式选择 Xcode 26 并校验 macOS 26 SDK，不依赖 runner 镜像的默认 Xcode。
 - [x] 配置 macOS Apple Silicon、Intel 两个独立 DMG，均使用 ad-hoc 签名且不上传个人证书。
 - [x] 配置 Windows x64 未签名 NSIS EXE。
 - [x] 配置自动生成 Release Notes 与 `SHA256SUMS.txt`。
