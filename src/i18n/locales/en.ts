@@ -73,13 +73,18 @@ export default {
     underOneMinute: "under a minute",
   },
 
-  overall: {
-    allHealthy: "Both providers are up to date",
-    focus: "{provider} · {status}",
+  compact: {
+    title: "Usage",
+    signal: {
+      live: "Data is current",
+      stale: "Some data is stale",
+      attention: "Something needs attention",
+      idle: "Not connected yet",
+    },
   },
 
   main: {
-    explanationHeading: "What needs attention",
+    title: "Quota overview",
   },
 
   settings: {

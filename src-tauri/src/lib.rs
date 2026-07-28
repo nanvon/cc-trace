@@ -61,6 +61,9 @@ pub fn run() {
             platform::autostart::apply(&handle, settings.launch_at_login);
             app.manage(Arc::clone(&core));
 
+            // 缓存里已有快照时，菜单栏在第一次刷新完成前就显示上一份数值。
+            core.emit_quota_state(&handle);
+
             // 启动后立即刷新一次，再交给自动刷新循环。
             core.refresh_all(&handle, RefreshTrigger::Startup);
             app::start_auto_refresh(&core, &handle);
@@ -103,6 +106,7 @@ pub fn run() {
         commands::window::window_open_onboarding,
         commands::window::window_open_compact,
         commands::window::window_hide_compact,
+        commands::window::window_set_compact_height,
         commands::window::app_quit,
         commands::dev::dev_set_scenario,
     ]);
@@ -120,6 +124,7 @@ pub fn run() {
         commands::window::window_open_onboarding,
         commands::window::window_open_compact,
         commands::window::window_hide_compact,
+        commands::window::window_set_compact_height,
         commands::window::app_quit,
     ]);
 

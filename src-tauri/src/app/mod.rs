@@ -321,8 +321,12 @@ impl AppCore {
 
     // --- 事件 ---
 
+    /// 界面与系统区域用同一份状态：菜单栏徽标不是第二个数据源，
+    /// 因此它在这里更新，而不是自己订阅事件再算一遍。
     pub fn emit_quota_state(&self, app: &AppHandle) {
-        let _ = app.emit(EVENT_QUOTA_UPDATED, self.quota_state());
+        let state = self.quota_state();
+        crate::platform::tray::present_quota(app, &state);
+        let _ = app.emit(EVENT_QUOTA_UPDATED, state);
     }
 
     pub fn emit_settings(&self, app: &AppHandle, settings: &Settings) {

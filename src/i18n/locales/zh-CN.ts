@@ -74,13 +74,18 @@ export default {
     underOneMinute: "不到 1 分钟",
   },
 
-  overall: {
-    allHealthy: "两个 Provider 都是最新数据",
-    focus: "{provider} · {status}",
+  compact: {
+    title: "用量",
+    signal: {
+      live: "数据是最新的",
+      stale: "部分数据已过期",
+      attention: "有需要处理的问题",
+      idle: "尚未连接",
+    },
   },
 
   main: {
-    explanationHeading: "需要处理什么",
+    title: "额度总览",
   },
 
   settings: {

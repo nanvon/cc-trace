@@ -38,7 +38,7 @@ export interface QuotaWindow {
   resetsAt: string | null;
   windowSeconds: number | null;
   isActive: boolean;
-  /** 主要额度：紧凑面板与主窗口的首要判断依据。 */
+  /** 是否为返回顺序中的第一项；仅作契约标记，展示主次始终以 `windows` 顺序为准。 */
   isPrimary: boolean;
 }
 
@@ -78,19 +78,18 @@ export interface RefreshStatePayload {
 /** Provider 的空间顺序永远稳定，不随风险重排。 */
 export const PROVIDER_ORDER: readonly ProviderId[] = ["codex", "claude"] as const;
 
-/** 主要额度窗口。缺失时退到第一个窗口，不返回 `undefined` 让调用方猜。 */
+/** Provider 返回的第一项就是主要额度，不按类型或 `isPrimary` 重新排序。 */
 export function primaryWindow(snapshot: QuotaSnapshot | null): QuotaWindow | null {
   if (!snapshot || snapshot.windows.length === 0) {
     return null;
   }
-  return snapshot.windows.find((window) => window.isPrimary) ?? snapshot.windows[0];
+  return snapshot.windows[0];
 }
 
-/** 除主要额度外的必要专项额度。 */
+/** 第一项之后的额度保持 Provider 返回顺序，作为次级数据。 */
 export function secondaryWindows(snapshot: QuotaSnapshot | null): QuotaWindow[] {
-  const primary = primaryWindow(snapshot);
-  if (!snapshot || !primary) {
+  if (!snapshot || snapshot.windows.length <= 1) {
     return [];
   }
-  return snapshot.windows.filter((window) => window.id !== primary.id);
+  return snapshot.windows.slice(1);
 }

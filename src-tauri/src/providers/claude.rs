@@ -171,18 +171,8 @@ pub fn parse_usage_response(
         return Err(ClaudeUsageParseError::MissingQuotaWindows);
     }
 
-    // 非生效窗口仍保留供完整展示，但不能进入主要额度判断。
-    if let Some(primary_index) = windows
-        .iter()
-        .position(|window| window.is_active && window.kind == QuotaWindowKind::FiveHour)
-        .or_else(|| {
-            windows
-                .iter()
-                .position(|window| window.is_active && window.kind == QuotaWindowKind::Weekly)
-        })
-    {
-        windows[primary_index].is_primary = true;
-    }
+    // Provider 标准化后的返回顺序拥有主次语义，不再按窗口类型或 active 状态重选。
+    windows[0].is_primary = true;
 
     Ok(ParsedClaudeUsage {
         snapshot: QuotaSnapshot {
@@ -936,7 +926,7 @@ mod tests {
     }
 
     #[test]
-    fn inactive_session_is_retained_but_active_weekly_becomes_primary() {
+    fn the_first_returned_window_stays_primary_even_when_inactive() {
         let input = r#"{
             "limits": [
                 {"kind":"session","percent":15,"is_active":false},
@@ -946,8 +936,8 @@ mod tests {
         let parsed = parse_usage_response(input, captured_at()).expect("response parses");
 
         assert!(!parsed.snapshot.windows[0].is_active);
-        assert!(!parsed.snapshot.windows[0].is_primary);
-        assert!(parsed.snapshot.windows[1].is_primary);
+        assert!(parsed.snapshot.windows[0].is_primary);
+        assert!(!parsed.snapshot.windows[1].is_primary);
     }
 
     #[test]

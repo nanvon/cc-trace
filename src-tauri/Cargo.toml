@@ -44,10 +44,14 @@ reqwest = { version = "0.12", default-features = false, features = [
 # 见 docs/额度领域模型.md 第 4.1 节。
 sha2 = "0.10"
 
-# macOS 上 Claude Code 的凭据可能只存在于系统钥匙串，见 ADR-0013。使用系统 API 读写，
-# 不启动 `security` 子进程。
 [target.'cfg(target_os = "macos")'.dependencies]
+# Claude Code 的凭据可能只存在于系统钥匙串，见 ADR-0013。使用系统 API 读写，
+# 不启动 `security` 子进程。
 security-framework = "3"
+# 菜单栏的「标识 + 百分比」徽标位图，见 ADR-0017。选 resvg 而不是自己用
+# tiny-skia + ab_glyph 排版：它能直接渲染现成的 Provider 标识 SVG 并用系统字体
+# 排文字，不需要自己处理字形布局。`tiny_skia` 与 `usvg` 由它 re-export。
+resvg = "0.45"
 
 [dev-dependencies]
 tempfile = "3"

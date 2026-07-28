@@ -77,17 +77,30 @@ button {
   white-space: nowrap;
 }
 
+/* 主动作。底部同色发光阴影是这套语言里颜色被真正花掉的地方，除语义色外只有它 */
 .button--primary {
   color: var(--surface-raised);
   background: var(--action-primary);
+  box-shadow: 0 8px 20px -6px color-mix(in srgb, var(--action-primary) 55%, transparent);
+}
+
+/* 次动作：有底色但不着色，与 quiet 的区别是它在视觉上是一个实体按钮 */
+.button--flat {
+  color: var(--text-primary);
+  background: var(--track-background);
+}
+
+.button--flat:hover {
+  background: color-mix(in srgb, var(--text-primary) 12%, var(--track-background));
 }
 
 .button--quiet {
-  color: var(--text-primary);
+  color: var(--text-secondary);
   background: transparent;
 }
 
 .button--quiet:hover {
+  color: var(--text-primary);
   background: color-mix(in srgb, var(--text-primary) 7%, transparent);
 }
 
@@ -103,6 +116,35 @@ button {
 .button--icon {
   inline-size: 2.5rem;
   padding: 0;
+}
+
+/* 紧凑面板头部专用。380px 宽度容不下四个 40px 按钮，32px 仍满足 WCAG 2.5.8 AA，
+   见 docs/设计方向与状态规范.md 第 5.1 节的例外说明 */
+.button--sm {
+  min-block-size: 2rem;
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-control);
+  font-size: 0.8125rem;
+}
+
+.button--sm.button--icon {
+  inline-size: 2rem;
+  padding: 0;
+}
+
+/* 状态标签：文本稳定且需要独立识别时才用胶囊形 */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  min-block-size: 1.375rem;
+  padding: 0 var(--space-2);
+  color: var(--text-secondary);
+  background: var(--track-background);
+  border-radius: 999px;
+  font-size: 0.71875rem;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 /* 小写标签用数据字体，只给极短且稳定的元数据 */

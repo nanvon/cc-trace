@@ -36,6 +36,15 @@ pub fn window_open_compact(app: AppHandle) -> Result<(), CommandError> {
     desktop::show_compact_at_anchor(&app).map_err(|_| CommandError::WINDOW_UNAVAILABLE)
 }
 
+/// 把紧凑面板的高度对齐到内容需要的高度，单位是逻辑像素。
+///
+/// 前端只报「内容需要多高」，收进允许区间、决定是否连带重新锚定都在平台层，
+/// 前端因此拿不到任意改窗口尺寸的能力。
+#[tauri::command]
+pub fn window_set_compact_height(app: AppHandle, content_height: f64) -> Result<(), CommandError> {
+    desktop::resize_compact(&app, content_height).map_err(|_| CommandError::WINDOW_UNAVAILABLE)
+}
+
 /// 结束常驻进程。只有明确的「退出 CC Trace」走这里。
 #[tauri::command]
 pub fn app_quit(app: AppHandle) {

@@ -89,19 +89,8 @@ pub fn parse_usage_response(
         windows.push(normalize_window(secondary, captured_at)?);
     }
 
-    // 主要额度按领域语义选择：优先 fiveHour，缺失时退到 weekly。
-    // unknown 仍可展示，但不能冒充主要额度。
-    if let Some(primary_index) = windows
-        .iter()
-        .position(|window| window.kind == QuotaWindowKind::FiveHour)
-        .or_else(|| {
-            windows
-                .iter()
-                .position(|window| window.kind == QuotaWindowKind::Weekly)
-        })
-    {
-        windows[primary_index].is_primary = true;
-    }
+    // Provider 返回顺序拥有主次语义：primary_window 永远是快照第一项。
+    windows[0].is_primary = true;
 
     let plan = response
         .plan_type
@@ -529,7 +518,10 @@ mod tests {
         assert_eq!(window.used_percent, 140.0);
         assert_eq!(window.remaining_percent, 0.0);
         assert!(window.resets_at.is_none());
-        assert!(!window.is_primary);
+        assert!(
+            window.is_primary,
+            "the first returned window stays primary even when its kind is unknown"
+        );
     }
 
     #[test]

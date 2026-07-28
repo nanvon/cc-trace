@@ -49,12 +49,16 @@ function openSettings(): void {
             <button
               id="main-settings-trigger"
               type="button"
-              class="button button--quiet"
+              class="button button--flat button--sm"
               @click="openSettings"
             >
               {{ t("common.settings") }}
             </button>
-            <button type="button" class="button button--primary" @click="quota.refresh()">
+            <button
+              type="button"
+              class="button button--primary button--sm"
+              @click="quota.refresh()"
+            >
               <RefreshIcon :spinning="quota.busy" />
               {{ t("common.refresh") }}
             </button>
@@ -85,20 +89,20 @@ function openSettings(): void {
 
 .main__inner {
   display: grid;
-  gap: var(--space-8);
-  /* 单列堆叠：Reset Rail 需要横向空间，两列会把轨道挤成短线 */
-  max-inline-size: 46rem;
+  gap: var(--space-5);
+  /* 单列堆叠：进度条需要横向空间，两列会把轨道挤成短线 */
+  max-inline-size: 45rem;
   margin-inline: auto;
 }
 
 .main__lanes {
   display: grid;
-  gap: var(--space-4);
+  gap: var(--space-5);
 }
 
 @media (max-width: 640px) {
   .main__inner {
-    gap: var(--space-6);
+    gap: var(--space-4);
   }
 }
 </style>

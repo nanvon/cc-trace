@@ -84,7 +84,7 @@ pub struct QuotaWindow {
     pub resets_at: Option<String>,
     pub window_seconds: Option<u64>,
     pub is_active: bool,
-    /// 主要额度：紧凑面板与主窗口的首要判断依据。由 Rust 按窗口分层规则判定。
+    /// 是否为返回顺序中的第一项。展示主次始终以 `QuotaSnapshot.windows` 顺序为准。
     pub is_primary: bool,
 }
 

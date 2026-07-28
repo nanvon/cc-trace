@@ -41,8 +41,9 @@ Values are light / dark pairs as shipped in `src/styles/tokens.css`.
 ### Secondary
 
 - **Success** `--status-success` `#17C964` / `#45D483`: current successful data and completed checks.
-- **Warning** `--status-warning` `#F5A524` / `#FBBF24`: stale data, rate limits and approaching quota risk.
-- **Danger** `--status-error` `#F31260` / `#F5455C`: unrecoverable or credential/protocol errors. It is not used for ordinary absence.
+- **Warning** `--status-warning` `#F5A524` / `#FBBF24`: stale data, rate limits and quota between 20% and 50% remaining.
+- **Low** `--status-low` `#F3730E` / `#FF8A3D`: under 20% of a quota window remaining. HeroUI has no official band between warning and danger; this value is adopted by ADR-0017.
+- **Danger** `--status-error` `#F31260` / `#F5455C`: unrecoverable or credential/protocol errors, and a fully consumed quota window. It is not used for ordinary absence.
 
 ### Neutral
 
@@ -58,6 +59,8 @@ Appearance is driven by `data-appearance` on the root element: absent or `system
 **The Semantic Color Rule.** Color only appears when it identifies interaction, freshness, warning or failure; it never decorates headings or fills arbitrary tiles.
 
 **The Dual Evidence Rule.** Every status color is paired with a word, symbol or readable explanation.
+
+**The Two Tones Rule.** Two independent tone dimensions coexist and neither substitutes for the other. *Availability* tone (`src/lib/status.ts`) drives the explanation banner, the status dot and the status word. *Remaining-quota* tone (`src/lib/quotaTone.ts`) drives the percentage reading and the progress fill, purely from the remaining percentage. "Credentials expired" and "only 3% left" are different facts and must both be readable at once. A snapshot that is not current downgrades the remaining-quota tone to neutral — stale data never claims in vivid color that quota is tight.
 
 ## Typography
 
@@ -101,7 +104,7 @@ Transient panels use a stronger layered ambient shadow (`--shadow-panel`) than r
 
 ## Shapes
 
-The double-C brand geometry supplies controlled arcs and round endpoints, not a license to make every object circular. Provider lanes and fields use a generous 12–14px radius; nested radii remain concentric. Buttons and inputs are rounded rectangles at 12px, not pills, except for true compact state labels whose text length is bounded.
+The double-C brand geometry supplies controlled arcs and round endpoints, not a license to make every object circular. Provider lanes and fields use a generous 12–14px radius; nested radii remain concentric. Buttons and inputs are rounded rectangles at 12px — 8px for the small icon buttons in the compact panel header, so a 32px square does not read as over-rounded — not pills, except for true compact state labels whose text length is bounded, such as the plan chip on a provider lane.
 
 Quota progress uses a pill-shaped track, not a straight rail. It does not become a circular gauge, speedometer or decorative waveform.
 
@@ -109,15 +112,18 @@ Quota progress uses a pill-shaped track, not a straight rail. It does not become
 
 | Element | Component | Notes |
 |---|---|---|
-| Quota progress | `src/components/QuotaProgress.vue` | Rounded pill track, neutral fill at `ready`, coloured only on `warning`/`critical` |
-| Provider lane | `src/components/ProviderLane.vue` | Shadow-driven card, no left status spine; risk changes text color only |
-| Overall signal | `src/components/OverallSignal.vue` | Raises the weight of the highest-risk provider without reordering anything |
-| Status explanation | `src/components/StatusExplanation.vue` | Tint-background alert in both the compact panel (one line) and the main window (title / impact / next step) |
+| Quota progress | `src/components/QuotaProgress.vue` | Rounded pill track. Primary windows stack a large reading above a full-width bar; secondary windows are a single row. Fill and reading are coloured by remaining quota, not by availability |
+| Provider lane | `src/components/ProviderLane.vue` | Shadow-driven card, no left status spine. Header is name + plan chip + masked account; secondary windows sit under a dashed divider |
+| Overall signal | `src/components/OverallSignal.vue` | Raises the weight of the highest-risk provider without reordering anything. Both surfaces use a stable surface name as the title — never a status sentence; a status dot with an accessible name carries the overall state |
+| Status explanation | `src/components/StatusExplanation.vue` | Tint-background alert with the icon in a same-tint circle, in both the compact panel (one line) and the main window (title / impact / next step) |
 | Refresh icon | `src/components/RefreshIcon.vue` | Spins only during a real refresh; static under reduced motion |
+| Menu bar badge | `src-tauri/src/platform/menubar_badge.rs` | macOS only: provider marks and five-hour percentages rendered into a single-colour template bitmap (ADR-0017) |
 
-Spacing follows a four-point rhythm (`--space-1` … `--space-8` = 4/8/12/16/20/24/32). Radii are `--radius-small` 12px, `--radius-medium` 14px, `--radius-shell` 16px. Motion uses `--motion-fast` 140ms, `--motion-base` 200ms, `--motion-panel` 320ms with a single `--ease-out` curve and no overshoot.
+Spacing follows a four-point rhythm (`--space-1` … `--space-8` = 4/8/12/16/20/24/32). Radii are `--radius-control` 8px, `--radius-small` 12px, `--radius-medium` 14px, `--radius-shell` 16px. Motion uses `--motion-fast` 140ms, `--motion-base` 200ms, `--motion-panel` 320ms with a single `--ease-out` curve and no overshoot.
 
-The mapping from the three status dimensions to copy keys, tone and progress treatment exists in exactly one place: `src/lib/status.ts`. Components never re-derive status from `availability` themselves.
+Each tone dimension has exactly one implementation and components never re-derive either: the three status dimensions map to copy keys, availability tone and progress treatment in `src/lib/status.ts`; remaining percentage maps to a quota band in `src/lib/quotaTone.ts`.
+
+Desktop controls keep a 40 × 40 minimum target, with one exception: the four icon buttons in the compact panel header are 32 × 32, which still meets WCAG 2.5.8 AA. At 380px wide the panel cannot hold four 40px buttons.
 
 ## Do's and Don'ts
 

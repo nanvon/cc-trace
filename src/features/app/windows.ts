@@ -15,6 +15,19 @@ async function call(command: string): Promise<void> {
   }
 }
 
+/**
+ * 上报紧凑面板内容需要的高度，单位是 CSS 像素。
+ *
+ * 只是「需要多高」的量测结果：收进允许区间、决定要不要连带重新锚定都在 Rust 平台层。
+ */
+export async function setCompactHeight(contentHeight: number): Promise<void> {
+  try {
+    await invoke("window_set_compact_height", { contentHeight });
+  } catch {
+    // 纯浏览器预览没有 Tauri 桥；面板在固定视口下仍按 100vh 正确渲染。
+  }
+}
+
 export const openMainWindow = () => call("window_open_main");
 export const openSettingsWindow = () => call("window_open_settings");
 export const openOnboardingWindow = () => call("window_open_onboarding");

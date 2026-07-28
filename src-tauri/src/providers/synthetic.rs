@@ -260,8 +260,11 @@ mod tests {
                 let outcome = scenario.outcome_for(provider, now());
                 if let ProviderFetchOutcome::Success { snapshot, .. } = &outcome {
                     assert!(
-                        snapshot.windows.iter().any(|window| window.is_primary),
-                        "{scenario:?}/{provider:?} must expose one primary window"
+                        snapshot
+                            .windows
+                            .first()
+                            .is_some_and(|window| window.is_primary),
+                        "{scenario:?}/{provider:?} must mark the first window as primary"
                     );
                 }
             }
@@ -310,11 +313,7 @@ mod tests {
             panic!("codex synthesizes a successful snapshot");
         };
 
-        let primary = snapshot
-            .windows
-            .iter()
-            .find(|window| window.is_primary)
-            .expect("primary window");
+        let primary = snapshot.windows.first().expect("primary window");
         assert_eq!(primary.remaining_percent, 73.0);
         assert_eq!(primary.kind, QuotaWindowKind::FiveHour);
     }

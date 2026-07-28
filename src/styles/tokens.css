@@ -49,6 +49,8 @@
   --space-6: 1.5rem;
   --space-8: 2rem;
 
+  /* 紧凑面板头部的小图标按钮。比 --radius-small 更收，避免 32px 方块看起来过圆 */
+  --radius-control: 0.5rem;
   --radius-small: 0.75rem;
   --radius-medium: 0.875rem;
   /* 紧凑面板外壳。改这里必须同时改 tauri.conf.json 的 windowEffects.radius */
