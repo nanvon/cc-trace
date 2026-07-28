@@ -1,0 +1,8 @@
+# `cargo run`（`tauri dev` 走的就是它）在启动二进制前先经过 runner。
+# 这里用 runner 重新签名，避免每次重新编译都要重新授权钥匙串访问，见
+# docs/决策/ADR-0013-macOS读取ClaudeCode钥匙串凭据.md。
+#
+# 路径相对 cargo 的工作目录，也就是 src-tauri/。
+# 非 macOS 与没有签名身份时脚本会直接放行，不影响其他平台和 CI。
+[target.'cfg(target_os = "macos")']
+runner = "../scripts/dev-sign.sh"

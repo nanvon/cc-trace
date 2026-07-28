@@ -55,7 +55,7 @@ Keychain 项属于 Claude Code 自己的存储，CC Trace 只读它、按 [ADR-0
 - `docs/额度领域模型.md` 第 5 节凭据来源表与 5.1 决策表需要改写，原「待确认（风险）」条目转为已解决。
 - Rust 侧新增 `credentials` 模块与 macOS 条件编译分支；Windows 分支只保留文件来源。
 - 首次读取 Keychain 会触发一次系统钥匙串访问授权弹窗。这是 macOS 的既有行为，需要写进首次启动说明与实机走查清单。
-- 应用签名变化（开发构建、正式签名、重新签名）会使已授予的钥匙串访问失效并重新弹窗，发布阶段需要复核。
+- 已授予的钥匙串访问在 designated requirement 变化时失效并重新弹窗。DR 由签名标识和证书 CN 共同决定，两者都不变时重新编译、重新签名都不影响，见下方 2026-07-28 实机记录；换用不同证书或改 `identifier` 则会失效。
 
 ### 2026-07-27 实机记录
 
@@ -63,9 +63,29 @@ Keychain 项属于 Claude Code 自己的存储，CC Trace 只读它、按 [ADR-0
 
 Swift 版 cc-bar 不弹窗，是因为它通过 `/usr/bin/security` 子进程读取：写进 ACL 的是 Apple 签名、标识恒定的系统工具，不是 cc-bar 自己。代价是该授权对**所有**调用 `security` 的程序生效，边界比按应用授权弱。这一点不改变本 ADR 的选择。
 
-解决方式是用固定证书签名，使 ACL 记录 designated requirement 而非 CDHash。按 [ADR-0016](ADR-0016-不购买Apple开发者账号.md) 使用免费的自签名 Code Signing 证书即可，不需要 Apple 开发者账号。
+解决方式是用固定证书签名，使 ACL 记录 designated requirement 而非 CDHash。按 [ADR-0016](ADR-0016-不购买Apple开发者账号.md) 使用免费手段取得的证书即可，不需要 Apple 开发者账号。
 
-> 待确认：自签名证书能否让 ACL 在重新编译后仍然匹配，属于基于钥匙串 ACL 机制的推断，尚未实测。
+### 2026-07-28 实机记录：开发期签名已验证有效
+
+在 macOS 上实测，上一条的推断成立：固定证书签名后，钥匙串授权一次长期有效，重新编译不再弹窗。
+
+实现是 `src-tauri/.cargo/config.toml` 的 cargo runner `scripts/dev-sign.sh`，在每次 `cargo run` 启动二进制前重新签名，流程见 [工程与发布](../工程与发布.md) 第 1.1 节。
+
+两个实测发现改变了原计划：
+
+**用 Apple Development 证书，不用自签名证书。** 产品所有者机器上已有免费 Apple ID 通过 Xcode 取得的 Apple Development 证书（有效期至 2027-05-27），不涉及付费账号，与 ADR-0016 不冲突。它比自签名更好，因为签出的 designated requirement 是：
+
+```
+identifier "com.nanvon.cctrace" and anchor apple generic
+  and certificate leaf[subject.CN] = "Apple Development: <账号> (<ID>)"
+  and certificate 1[field.1.2.840.113635.100.6.2.1]
+```
+
+证书按 **subject.CN** 匹配而非指纹。证书到期后 Xcode 换发的同名证书 CN 不变，ACL 仍然匹配，不需要重新授权。自签名证书没有 anchor，DR 会退化成绑定证书指纹，换证书即失效。
+
+**签名标识必须显式指定。** cargo 默认写入的是 `cc_trace-<metadata hash>`，该 hash 由构建配置决定，改 feature、profile 或依赖都可能让它变化，而它是 DR 的组成部分。脚本从 `tauri.conf.json` 读 `identifier` 并用 `codesign --identifier` 钉死，dev 与打包产物的 DR 因此是同一个。
+
+> 待确认：正式打包产物（`tauri build`）的 DR 是否与 dev 一致，尚未实测。若不一致，用户从 dev 切到正式版本时会被要求重新授权一次。
 - 两平台凭据来源不一致，[测试策略](../测试策略.md) 与双平台验收必须分别记录 macOS 与 Windows 的凭据发现结果，不得互相推断。
 - Keychain 读取失败（用户拒绝授权、项被删除）必须落在 `no_credentials` 或凭据类 `error`，不得降级成 `offline`。
 
