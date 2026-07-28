@@ -1,0 +1,132 @@
+name: Release
+
+# 发布打包与日常 CI 分离：只有推送与应用版本一致的 v* tag 才创建 Draft Release。
+on:
+  push:
+    tags:
+      - 'v*'
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    name: Verify release version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Check tag and application versions
+        run: node scripts/check-release-version.mjs "${GITHUB_REF_NAME}"
+
+  package:
+    name: ${{ matrix.name }}
+    needs: prepare
+    runs-on: ${{ matrix.platform }}
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS Apple Silicon
+            platform: macos-15
+            target: aarch64-apple-darwin
+            bundles: dmg
+            apple_signing_identity: '-'
+            asset_name_pattern: 'CC-Trace_[version]_macOS-Apple-Silicon[ext]'
+          - name: macOS Intel
+            platform: macos-15-intel
+            target: x86_64-apple-darwin
+            bundles: dmg
+            apple_signing_identity: '-'
+            asset_name_pattern: 'CC-Trace_[version]_macOS-Intel[ext]'
+          - name: Windows x64
+            platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            bundles: nsis
+            apple_signing_identity: ''
+            asset_name_pattern: 'CC-Trace_[version]_Windows-x64-Setup[ext]'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: release-${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: |
+            release-${{ runner.os }}-${{ matrix.target }}-cargo-
+            ${{ runner.os }}-cargo-
+
+      - name: Build and upload bundle
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_SIGNING_IDENTITY: ${{ matrix.apple_signing_identity }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'CC Trace ${{ github.ref_name }}'
+          releaseBody: |
+            自动构建产物：
+
+            - macOS Apple Silicon：下载文件名含 `macOS-Apple-Silicon`
+            - macOS Intel：下载文件名含 `macOS-Intel`
+            - Windows x64：下载 `Windows-x64-Setup.exe`
+
+            macOS 产物使用 ad-hoc 签名且未经过 Apple 公证，首次打开需要在系统设置中手动放行。安装新版本后，首次读取 Claude Code 钥匙串凭据时可能再次出现授权弹窗。
+
+            Windows 产物未做代码签名，首次安装可能触发 SmartScreen 提示。
+          releaseDraft: true
+          prerelease: false
+          generateReleaseNotes: true
+          args: '--target ${{ matrix.target }} --bundles ${{ matrix.bundles }}'
+          releaseAssetNamePattern: ${{ matrix.asset_name_pattern }}
+
+  checksums:
+    name: Generate checksums
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Download release assets
+        run: gh release download "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --dir release-assets
+
+      - name: Generate SHA-256 checksums
+        run: |
+          cd release-assets
+          find . -maxdepth 1 -type f ! -name 'SHA256SUMS.txt' -print0 \
+            | sort -z \
+            | xargs -0 sha256sum > ../SHA256SUMS.txt
+
+      - name: Upload checksums
+        run: gh release upload "${GITHUB_REF_NAME}" SHA256SUMS.txt --repo "${GITHUB_REPOSITORY}" --clobber
