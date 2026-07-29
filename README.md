@@ -1,105 +1,96 @@
-# CC Trace
+<img src="design/brand/cc-trace-lockup-horizontal.svg" alt="CC Trace" height="56">
 
-CC Trace 是一款面向使用 Codex 与 Claude Code 的开发者的跨平台桌面应用，让用户通过 macOS 菜单栏或 Windows 系统托盘，快速查看 AI 编程工具的额度、重置时间、刷新状态与异常风险。
+> **CC Trace 分两个仓库：**
+> 🖥️ 桌面端（macOS／Windows）—— 本仓库 [nanvon/cc-trace](https://github.com/nanvon/cc-trace)
+> 📱 移动端 —— [nanvon/cc-trace-mobile](https://github.com/nanvon/cc-trace-mobile)
+>
+> 本文档只涵盖桌面端；移动端的功能、平台支持和安装方式请看移动端仓库。
 
-当前处于 `0.1.0` 第 11 阶段：四个窗口、Tray 入口、三维状态模型、刷新调度与退避、设置持久化和首次启动引导都已实现，额度数据来自 Rust 内的合成 Provider，走与真实 Provider 完全相同的契约与事件路径。全部自动化检查（类型、lint、格式、Rust 与前端测试）通过；**双平台实机走查尚未重跑**，真实 Provider 的凭据发现与额度请求尚未开始。
+**在菜单栏／托盘里看一眼，就知道 Codex 和 Claude Code 的额度还剩多少。**
 
-## 首版边界
+CC Trace 是一款 macOS 与 Windows 桌面小工具。它常驻在 macOS 菜单栏或 Windows 系统托盘，随时告诉你两个 AI 编程工具的额度余量、什么时候重置、数据是不是最新的——不用再打开网页后台，也不用敲诊断命令。
 
-首版聚焦：
+> ⚠️ **当前是开发中的 `0.1.0`，还没有发布可下载的安装包。** 想现在体验只能自行构建，见下方[安装](#安装)。
 
-- Codex 与 Claude Code 当前额度。
-- macOS Menu Bar 与 Windows System Tray。
-- 手动／自动刷新、节流、429 退避和故障隔离。
-- 完整的加载、实时、旧快照、无凭据、不支持、离线、刷新受限与错误状态。
-- 独立设置、最新有效快照和基础偏好。
+## 它能做什么
 
-首版不包含本地用量、Conversations、Timeline、Pricing、其他账号和桌面悬浮窗，也不读取或迁移 Swift 版 cc-bar 的应用数据。
+- **两个 Provider 一起看** — Codex 与 Claude Code 的额度并排显示，自动识别你本机已登录的账号，不需要在应用里再登录一次。
+- **一眼看出风险** — 剩余额度按余量分档着色，菜单栏／托盘图标旁直接显示关键数字，紧张时不用点开也能发现。
+- **知道什么时候恢复** — 显示每项额度的重置时间，以及上一次成功刷新的时间。
+- **自动刷新，也能手动刷新** — 后台按你设置的间隔（15／30／60 分钟）刷新，随时可以手动点一下。
+- **数据诚实** — 拿不到新数据时，明确告诉你现在看到的是旧快照、离线、暂时被限流还是出错了，而不是把过期数据伪装成最新，也不会在读不到账号时显示一个假的 `0%`。
+- **一个出问题，另一个照常** — Codex 请求失败不会拖累 Claude Code，反之亦然。
+- **中英文、深浅色** — 都可以跟随系统。
+- **可开机自动启动** — 设置里一个开关。
 
-## 文档入口
+## 隐私与安全
 
-从 **[文档地图](docs/README.md)** 开始：它说明每份文档的职责、每个事实由谁拥有，以及修改文档的规则。
+这类工具要碰你的登录凭据，所以边界写在前面：
 
-**规范**
+- **完全在本机运行。** CC Trace 没有自己的服务器，只直接访问 Codex 与 Claude Code 官方接口，你的凭据不会被发送到任何第三方。
+- **只读你已有的登录信息。** 应用不提供登录页，也不导入浏览器 Cookie、不抓取网页，只读取 Codex 与 Claude Code 自己在本机保存的凭据。
+- **唯一的写入是续期。** 登录凭据即将过期时，CC Trace 会按官方 OAuth 流程续期，并把结果写回原来的位置——除此之外不修改、不删除你的任何凭据或日志。
+- **凭据不进界面、不进日志。** 处理凭据的代码全在应用的 Rust 内核里，界面只拿到脱敏后的账号信息和额度数字；access token、refresh token 一律不写入日志文件和缓存。
+- **开源可查。** 以上每一条都可以在本仓库源码里核对。
 
-- [产品定义](docs/产品定义.md)
-- [首版产品范围](docs/产品范围.md)
-- [信息架构与核心流程](docs/信息架构与核心流程.md)
-- [状态与错误模型](docs/状态与错误模型.md)
-- [额度领域模型](docs/额度领域模型.md)
-- [设计方向与状态规范](docs/设计方向与状态规范.md)
-- [技术架构](docs/技术架构.md)
-- [文案与国际化](docs/文案与国际化.md)
-- [日志与诊断](docs/日志与诊断.md)
-- [测试策略](docs/测试策略.md)
-- [工程与发布](docs/工程与发布.md)
+macOS 上首次读取 Claude Code 的钥匙串凭据时，系统会弹出授权窗口，请选择「**始终允许**」；选「允许」只对这一次生效，下次还会再问。
 
-**决策**
+## 系统要求
 
-- [决策记录索引](docs/决策/README.md)
+| 平台 | 要求 |
+|---|---|
+| macOS | 13 或更高（Apple Silicon 与 Intel） |
+| Windows | 10 22H2 或更高（64 位，需系统 WebView2，安装器会自动处理） |
 
-**进度与验证**
+需要你已经在本机登录过 Codex 或 Claude Code。两者只装了一个也能用，另一个会显示为「未发现凭据」。
 
-- [执行清单](docs/Tauri桌面端重新开发执行清单.md)
-- [双平台交互原型](docs/双平台交互原型.md) · [可交互原型页面](prototypes/tray-shell/index.html)
-- [Tauri Tray 桌面壳验证记录](docs/桌面壳验证记录.md)
+## 安装
 
-**AI 协作与品牌**
+**目前还没有发布安装包。** 计划在 Releases 提供 macOS DMG（Apple Silicon／Intel 各一份）与 Windows 安装程序，届时也会附带 `SHA256SUMS.txt` 供校验。
 
-- [AI 协作与 Skills 规范](AGENTS.md)
-- [AI 设计产品上下文](PRODUCT.md) · [设计系统种子](DESIGN.md)
-- [品牌与跨端图标](design/brand/README.md)
-
-**外部参考**
-
-- [cc-bar 只读参考资料](docs/cc-bar-reference/README.md)
-- [历史规划归档](docs/archive/)
-
-## 技术栈
-
-- Tauri 2
-- Vue 3 + TypeScript + Vite
-- Pinia + Vue Router + Vue I18n
-- Rust
-- pnpm + Cargo
-
-## 本地环境
-
-- Node.js 22 或更高版本
-- pnpm 11
-- 当前稳定 Rust 工具链
-- Tauri 对应平台依赖
-
-完整平台准备说明见 [Tauri 官方 prerequisites](https://v2.tauri.app/start/prerequisites/)。
-
-## 常用命令
+想先体验的话，可以自行构建：
 
 ```bash
 pnpm install
-pnpm tauri dev
-pnpm lint
-pnpm test
-pnpm build
+pnpm tauri build
 ```
 
-Rust 侧在 `src-tauri/` 下执行 `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test`。
+构建前需要准备 Node.js 22+、pnpm 11、Rust 稳定版工具链，以及 [Tauri 官方要求的平台依赖](https://v2.tauri.app/start/prerequisites/)。
 
-仓库初始化阶段没有自动运行开发服务器、构建或测试。执行这些命令前，请先确认当前工作目标确实需要。
+**关于安全提示：** CC Trace 不购买 Apple 开发者账号和 Windows 代码签名证书，所以未来发布的安装包会是未签名的。macOS 首次打开需要在「访达」里右键点图标选「打开」，Windows 可能出现 SmartScreen 的「不常见应用」提示——这是未签名应用的预期表现，不代表出了问题。（Windows 上的具体提示形式尚未实机验证。）
 
-## 目录
+## 怎么用
 
-```text
-src/                    Vue 应用：视图、组件、features、lib、国际化与样式
-src-tauri/              Rust 核心：contracts、providers、scheduler、storage、platform、commands
-docs/                   规范、决策记录、进度与验证、外部参考
-docs/决策/              ADR：已确认决策的背景、理由与复审条件
-docs/archive/           历史规划文档，冲突时以现行规范为准
-design/brand/           CC Trace 品牌母版与跨端图标源文件
-fixtures/               CC Trace 自己的脱敏测试输入
-prototypes/tray-shell/  第 8 阶段双平台交互原型（不属于正式应用）
-```
+1. 启动后应用会驻留在菜单栏／托盘，**不会**在程序坞或任务栏留下窗口。
+2. **单击图标** 打开紧凑面板：总体状态、两个 Provider 的额度概览、刷新按钮。再点一次或按 `Esc` 关闭。
+3. 需要看细节时从面板进入**主窗口**：完整额度项、重置时间、状态解释和恢复建议。
+4. **设置**在主窗口里（语言、外观、刷新间隔、开机启动、版本信息），不是单独的窗口。
+5. 关闭窗口不等于退出；要真正退出请用面板或托盘菜单里的「退出 CC Trace」（macOS 也可以 `⌘Q`）。
 
-应用标识为 `com.nanvon.cctrace`，与 Swift 版 cc-bar 的 `com.nanvon.ccbar` 完全独立。
+## 常见问题
+
+**它会显示我花了多少钱、聊了多少次吗？**
+不会。首版只做「当前额度」这一件事。用量统计、会话列表、历史曲线、价格换算都不在范围内，留待后续版本评估。
+
+**能管理多个账号吗？**
+不能。首版只跟踪本机当前登录的一个 Codex 身份和一个 Claude Code 身份，不支持账号切换或导入。
+
+**和之前的 cc-bar 是什么关系？**
+CC Trace 是全新的跨平台重写版，与 Swift 版 cc-bar 是两个完全独立的应用（标识、数据目录、缓存都不共用）。它**不会**迁移 cc-bar 的设置和数据，也不会自动卸载它——两者可以同时装在一台机器上。
+
+**为什么额度显示成「旧数据」？**
+说明最近一次刷新没成功，界面上会同时说明原因（离线、限流、出错等）和这份数据的时间。手动刷新一次通常就能恢复。
+
+## 开发状态
+
+`0.1.0` 开发中，尚未正式发布。目前已完成桌面壳、状态模型、刷新调度与设置持久化，Codex 与 Claude Code 的真实数据闭环已在 macOS 跑通一次；**Windows 侧尚未实机验证**，功能与体验都可能继续调整。
+
+## 参与开发
+
+- 项目文档从 **[文档地图](docs/README.md)** 开始，那里说明每份文档的职责与事实归属。
+- 常用命令与 CI／发布规则见 [工程与发布](docs/工程与发布.md)；产品边界见 [首版产品范围](docs/产品范围.md)。
+- 技术栈：Tauri 2 + Vue 3 + TypeScript + Rust。
+- 与 AI 协作的规范见 [AGENTS.md](AGENTS.md)。
 
 ## 许可证
 
