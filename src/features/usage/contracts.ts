@@ -43,10 +43,21 @@ export interface UsageCostTotals {
   pricingFingerprint: string | null;
 }
 
+export interface UsageFastTotals {
+  rawTokens: number;
+  /** 十进制定点字符串，避免大 Token 数跨 command 边界丢失精度。 */
+  billingEquivalentTokens: string;
+  /** 混合模型时显示最小值到最大值；未知倍率为 null。 */
+  minimumMultiplier: string | null;
+  maximumMultiplier: string | null;
+  hasUnpricedEquivalent: boolean;
+}
+
 export interface UsageSummaryRow {
   key: UsageSource;
   entryCount: number;
   tokens: UsageTokenTotals;
+  fast: UsageFastTotals;
   cost: UsageCostTotals;
 }
 
@@ -54,8 +65,11 @@ export interface UsageSummary {
   rows: UsageSummaryRow[];
   entryCount: number;
   tokens: UsageTokenTotals;
+  fast: UsageFastTotals;
   cost: UsageCostTotals;
 }
+
+export type PricingCatalogRefreshStatus = "complete" | "partial" | "failed";
 
 export interface UsageScanStatus {
   state: UsageScanState;

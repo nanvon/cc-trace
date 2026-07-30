@@ -1,8 +1,6 @@
-use std::collections::HashSet;
-use std::fs;
-use std::io::{self, Write};
+use std::collections::{HashMap, HashSet};
+use std::io;
 use std::path::PathBuf;
-use std::sync::Mutex;
 
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
@@ -11,11 +9,15 @@ use sha2::{Digest, Sha256};
 use crate::contracts::{UsageSource, UsageSpeed};
 
 use super::model::{InferenceGeo, RepriceRow, UsageEntry};
+use super::pricing_remote::{PricingCachePayload, RemoteModelPrice, RemotePricingStore};
+pub(crate) use super::pricing_remote::{PricingRefreshMode, PricingRefreshOutcome};
 
-const CATALOG_FILE: &str = "pricing-catalog.json";
-const TEMP_FILE: &str = "pricing-catalog.json.tmp";
 const CATALOG_SCHEMA_VERSION: u32 = 1;
 const BUNDLED_CATALOG: &str = include_str!("pricing-catalog.v1.json");
+const LOCAL_OVERRIDE_PRIORITY: u8 = 0;
+const REMOTE_PRIORITY: u8 = 1;
+const LOCAL_FALLBACK_PRIORITY: u8 = 2;
+const PRICING_POLICY_VERSION: u32 = 2;
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -54,6 +56,7 @@ struct CatalogEntry {
 
 #[derive(Clone)]
 struct CompiledEntry {
+    priority: u8,
     source: UsageSource,
     model_prefix: String,
     speed: UsageSpeed,
@@ -82,6 +85,36 @@ pub struct PriceEstimate {
     pub assumed_geo: bool,
 }
 
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub(crate) struct PricingUsageKey {
+    pub source: UsageSource,
+    pub model: String,
+    pub speed: UsageSpeed,
+}
+
+impl PricingUsageKey {
+    pub(crate) fn new(source: UsageSource, model: &str, speed: UsageSpeed) -> Self {
+        let mut model = normalize_model_key(model);
+        if source == UsageSource::Claude {
+            model = model.replace('.', "-");
+        }
+        Self {
+            source,
+            model,
+            speed,
+        }
+    }
+
+    pub(crate) fn persisted_key(&self) -> String {
+        format!(
+            "{}|{}|{}",
+            self.source.as_db(),
+            self.speed.as_db(),
+            self.model
+        )
+    }
+}
+
 impl PricingCatalog {
     fn parse(raw: &str) -> Result<Self, ()> {
         let document: CatalogDocument = serde_json::from_str(raw).map_err(|_| ())?;
@@ -97,8 +130,6 @@ impl PricingCatalog {
             return Err(());
         }
 
-        let canonical = serde_json::to_vec(&document).map_err(|_| ())?;
-        let fingerprint = hex_sha256(&canonical);
         let mut keys = HashSet::new();
         let mut entries = Vec::with_capacity(document.entries.len());
 
@@ -136,6 +167,7 @@ impl PricingCatalog {
             }
 
             let compiled = CompiledEntry {
+                priority: local_priority(&item),
                 source: item.source,
                 model_prefix: prefix,
                 speed: item.speed,
@@ -172,13 +204,8 @@ impl PricingCatalog {
             entries.push(compiled);
         }
 
-        entries.sort_by(|left, right| {
-            right
-                .model_prefix
-                .len()
-                .cmp(&left.model_prefix.len())
-                .then_with(|| left.effective_from.cmp(&right.effective_from))
-        });
+        sort_entries(&mut entries);
+        let fingerprint = compiled_fingerprint(&entries);
 
         Ok(Self {
             entries,
@@ -190,8 +217,63 @@ impl PricingCatalog {
         Self::parse(BUNDLED_CATALOG).expect("bundled pricing catalog must be valid")
     }
 
+    fn merged(remote: &PricingCachePayload) -> Self {
+        let mut catalog = Self::bundled();
+        let local_entries = catalog.entries.clone();
+        catalog
+            .entries
+            .extend(compile_remote_entries(remote, &local_entries));
+        sort_entries(&mut catalog.entries);
+        catalog.fingerprint = compiled_fingerprint(&catalog.entries);
+        catalog
+    }
+
     pub fn fingerprint(&self) -> &str {
         &self.fingerprint
+    }
+
+    fn scoped_to_known_usage(mut self, known_usage: &HashSet<PricingUsageKey>) -> Self {
+        let relevant = self
+            .entries
+            .iter()
+            .filter(|entry| {
+                known_usage.iter().any(|key| {
+                    let matches = key.source == entry.source
+                        && key.speed == entry.speed
+                        && model_matches(&key.model, &entry.model_prefix);
+                    matches
+                        && self
+                            .entries
+                            .iter()
+                            .filter(|candidate| {
+                                candidate.source == key.source
+                                    && candidate.speed == key.speed
+                                    && model_matches(&key.model, &candidate.model_prefix)
+                            })
+                            .map(|candidate| candidate.priority)
+                            .min()
+                            == Some(entry.priority)
+                })
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut multiplier_body = String::new();
+        let mut keys = known_usage.iter().collect::<Vec<_>>();
+        keys.sort_by(|left, right| left.persisted_key().cmp(&right.persisted_key()));
+        for key in keys {
+            use std::fmt::Write as _;
+            let (_, multiplier) =
+                self.fast_billing_equivalent(key.source, Some(&key.model), key.speed, 1);
+            let _ = write!(multiplier_body, "{}={:?};", key.persisted_key(), multiplier);
+        }
+        self.fingerprint = hex_sha256(
+            format!(
+                "policy={PRICING_POLICY_VERSION};rates={};multipliers={multiplier_body}",
+                compiled_fingerprint(&relevant)
+            )
+            .as_bytes(),
+        );
+        self
     }
 
     pub fn estimate_entry(&self, entry: &UsageEntry) -> PriceEstimate {
@@ -226,7 +308,7 @@ impl PricingCatalog {
         tokens: &super::model::TokenFacts,
     ) -> PriceEstimate {
         let Some(model) = model.map(|value| {
-            let normalized = value.to_ascii_lowercase();
+            let normalized = normalize_model_key(value);
             if source == UsageSource::Claude {
                 normalized.replace('.', "-")
             } else {
@@ -251,6 +333,16 @@ impl PricingCatalog {
             };
         };
         let time = time.with_timezone(&Utc);
+
+        if source == UsageSource::Codex
+            && speed == UsageSpeed::Fast
+            && tokens.input_tokens() > 272_000
+        {
+            return PriceEstimate {
+                cost_nanos: None,
+                assumed_geo: false,
+            };
+        }
 
         let Some(price) = self.entries.iter().find(|item| {
             item.source == source
@@ -381,60 +473,409 @@ impl PricingCatalog {
             assumed_geo,
         }
     }
+
+    pub(crate) fn needs_remote_refresh(
+        &self,
+        source: UsageSource,
+        model: &str,
+        speed: UsageSpeed,
+    ) -> bool {
+        if speed == UsageSpeed::Unknown {
+            return false;
+        }
+        let mut model = normalize_model_key(model);
+        if source == UsageSource::Claude {
+            model = model.replace('.', "-");
+        }
+        if model.is_empty()
+            || model == "codex-auto-review"
+            || model == "<synthetic>"
+            || model.starts_with('<')
+        {
+            return false;
+        }
+        !self.entries.iter().any(|item| {
+            item.source == source
+                && item.speed == speed
+                && model_matches(&model, &item.model_prefix)
+        })
+    }
+
+    /// Fast 原始 Token 对应的计费等效 Token。返回值均以 1e-9 为固定精度，
+    /// 不使用浮点数，也不会覆盖原始 Token 事实。
+    pub(crate) fn fast_billing_equivalent(
+        &self,
+        source: UsageSource,
+        model: Option<&str>,
+        speed: UsageSpeed,
+        total_tokens: i64,
+    ) -> (Option<i64>, Option<i64>) {
+        if speed != UsageSpeed::Fast || total_tokens < 0 {
+            return (None, None);
+        }
+        let Some(mut model) = model.map(normalize_model_key) else {
+            return (None, None);
+        };
+        if source == UsageSource::Claude {
+            model = model.replace('.', "-");
+        }
+        let multiplier_nanos = match source {
+            UsageSource::Codex => codex_fast_multiplier_nanos(&model),
+            UsageSource::Claude => claude_fast_multiplier_nanos(&model)
+                .or_else(|| self.derived_claude_fast_multiplier_nanos(&model)),
+        };
+        let Some(multiplier_nanos) = multiplier_nanos else {
+            return (None, None);
+        };
+        let equivalent = i128::from(total_tokens)
+            .checked_mul(i128::from(multiplier_nanos))
+            .and_then(|value| i64::try_from(value).ok());
+        (equivalent, equivalent.map(|_| multiplier_nanos))
+    }
+
+    fn derived_claude_fast_multiplier_nanos(&self, model: &str) -> Option<i64> {
+        let now = Utc::now();
+        let standard = self.current_entry(UsageSource::Claude, model, UsageSpeed::Standard, now)?;
+        let fast = self.current_entry(UsageSource::Claude, model, UsageSpeed::Fast, now)?;
+        let pairs = [
+            (
+                standard.uncached_input_nanos_per_m_tok,
+                fast.uncached_input_nanos_per_m_tok,
+            ),
+            (standard.output_nanos_per_m_tok, fast.output_nanos_per_m_tok),
+            (
+                standard.cache_read_nanos_per_m_tok,
+                fast.cache_read_nanos_per_m_tok,
+            ),
+            (
+                standard.cache_write_5m_nanos_per_m_tok,
+                fast.cache_write_5m_nanos_per_m_tok,
+            ),
+        ];
+        let mut ratio = None;
+        for (base, premium) in pairs {
+            if base == 0 {
+                if premium != 0 {
+                    return None;
+                }
+                continue;
+            }
+            let numerator = u128::from(premium).checked_mul(1_000_000_000)?;
+            if numerator % u128::from(base) != 0 {
+                return None;
+            }
+            let current = i64::try_from(numerator / u128::from(base)).ok()?;
+            if ratio.is_some_and(|value| value != current) {
+                return None;
+            }
+            ratio = Some(current);
+        }
+        ratio
+    }
+
+    fn current_entry(
+        &self,
+        source: UsageSource,
+        model: &str,
+        speed: UsageSpeed,
+        time: DateTime<Utc>,
+    ) -> Option<&CompiledEntry> {
+        self.entries.iter().find(|item| {
+            item.source == source
+                && item.speed == speed
+                && model_matches(model, &item.model_prefix)
+                && item.effective_from.is_none_or(|from| time >= from)
+                && item.effective_until.is_none_or(|until| time < until)
+        })
+    }
 }
 
 pub struct PricingCatalogStore {
-    directory: PathBuf,
-    load_lock: Mutex<()>,
+    remote: RemotePricingStore,
 }
 
 impl PricingCatalogStore {
     pub fn new(directory: PathBuf) -> Self {
         Self {
-            directory,
-            load_lock: Mutex::new(()),
+            remote: RemotePricingStore::new(directory),
         }
     }
 
     pub fn load(&self) -> io::Result<PricingCatalog> {
-        let _guard = self.load_lock.lock().expect("pricing catalog load lock");
-        fs::create_dir_all(&self.directory)?;
-        let path = self.directory.join(CATALOG_FILE);
+        Ok(PricingCatalog::merged(&self.remote.active()))
+    }
 
-        match fs::read_to_string(&path) {
-            Ok(raw) => match PricingCatalog::parse(&raw) {
-                Ok(catalog) => Ok(catalog),
-                Err(()) => {
-                    self.quarantine(&path);
-                    self.write_bundled()?;
-                    Ok(PricingCatalog::bundled())
-                }
-            },
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                self.write_bundled()?;
-                Ok(PricingCatalog::bundled())
-            }
-            Err(error) => Err(error),
+    pub(crate) fn load_for_known_usage(
+        &self,
+        known_usage: &HashSet<PricingUsageKey>,
+    ) -> io::Result<PricingCatalog> {
+        Ok(PricingCatalog::merged(&self.remote.active()).scoped_to_known_usage(known_usage))
+    }
+
+    pub(crate) fn is_refresh_due(&self) -> bool {
+        self.remote.is_due()
+    }
+
+    pub(crate) async fn refresh(&self, mode: PricingRefreshMode) -> PricingRefreshOutcome {
+        self.remote.refresh(mode).await
+    }
+
+    pub(crate) fn mark_missing_refresh_attempts(
+        &self,
+        keys: &HashSet<PricingUsageKey>,
+    ) -> io::Result<bool> {
+        let persisted = keys.iter().map(PricingUsageKey::persisted_key).collect();
+        self.remote.mark_missing_refresh_attempts(&persisted)
+    }
+
+    pub(crate) fn commit_pending(&self) {
+        let _ = self.remote.commit_pending();
+    }
+}
+
+fn local_priority(item: &CatalogEntry) -> u8 {
+    let fixed_standard = item.speed == UsageSpeed::Standard
+        && (item.effective_from.is_some()
+            || item.effective_until.is_some()
+            || item.long_context_threshold_tokens.is_some()
+            || item.model_prefix == "gpt-5.5-pro");
+    let fixed_fast = item.speed == UsageSpeed::Fast
+        && matches!(
+            item.model_prefix.as_str(),
+            "gpt-5.5" | "gpt-5.5-codex" | "claude-opus-4-7" | "claude-opus-4-6"
+        );
+    if fixed_standard || fixed_fast {
+        LOCAL_OVERRIDE_PRIORITY
+    } else {
+        LOCAL_FALLBACK_PRIORITY
+    }
+}
+
+fn codex_fast_multiplier_nanos(model: &str) -> Option<i64> {
+    match model {
+        "gpt-5.6" | "gpt-5.6-sol" | "gpt-5.6-terra" | "gpt-5.6-luna" | "gpt-5.5"
+        | "gpt-5.5-codex" => Some(2_500_000_000),
+        "gpt-5.4" | "gpt-5.4-codex" => Some(2_000_000_000),
+        _ => None,
+    }
+}
+
+fn claude_fast_multiplier_nanos(model: &str) -> Option<i64> {
+    match model {
+        "claude-opus-5" | "claude-opus-4-8" => Some(2_000_000_000),
+        "claude-opus-4-7" | "claude-opus-4-6" => Some(6_000_000_000),
+        _ => None,
+    }
+}
+
+fn sort_entries(entries: &mut [CompiledEntry]) {
+    entries.sort_by(|left, right| {
+        left.priority
+            .cmp(&right.priority)
+            .then_with(|| right.model_prefix.len().cmp(&left.model_prefix.len()))
+            .then_with(|| left.source.as_db().cmp(right.source.as_db()))
+            .then_with(|| left.speed.as_db().cmp(right.speed.as_db()))
+            .then_with(|| left.model_prefix.cmp(&right.model_prefix))
+            .then_with(|| left.effective_from.cmp(&right.effective_from))
+    });
+}
+
+fn compile_remote_entries(
+    remote: &PricingCachePayload,
+    local_entries: &[CompiledEntry],
+) -> Vec<CompiledEntry> {
+    let mut output = Vec::new();
+    let standard_keys = union_keys([
+        &remote.lite_llm.standard_rates,
+        &remote.models_dev.standard_rates,
+    ]);
+    for key in standard_keys {
+        let Some(price) = remote
+            .lite_llm
+            .standard_rates
+            .get(&key)
+            .or_else(|| remote.models_dev.standard_rates.get(&key))
+        else {
+            continue;
+        };
+        for source in UsageSource::ALL {
+            output.push(remote_entry(
+                source,
+                &key,
+                UsageSpeed::Standard,
+                price,
+                local_entries,
+            ));
         }
     }
 
-    fn write_bundled(&self) -> io::Result<()> {
-        let temp = self.directory.join(TEMP_FILE);
+    let codex_fast_keys = union_keys([
+        &remote.models_dev.codex_fast_rates,
+        &remote.lite_llm.codex_fast_rates,
+    ]);
+    for key in codex_fast_keys {
+        if let Some(price) = remote
+            .models_dev
+            .codex_fast_rates
+            .get(&key)
+            .or_else(|| remote.lite_llm.codex_fast_rates.get(&key))
         {
-            let mut file = fs::File::create(&temp)?;
-            file.write_all(BUNDLED_CATALOG.as_bytes())?;
-            file.sync_all()?;
+            output.push(remote_entry(
+                UsageSource::Codex,
+                &key,
+                UsageSpeed::Fast,
+                price,
+                local_entries,
+            ));
         }
-        fs::rename(temp, self.directory.join(CATALOG_FILE))
     }
 
-    fn quarantine(&self, path: &std::path::Path) {
-        let suffix = Utc::now().format("%Y%m%dT%H%M%S%.3fZ");
-        let target = self
-            .directory
-            .join(format!("{CATALOG_FILE}.corrupt-{suffix}"));
-        let _ = fs::rename(path, target);
+    let claude_fast_keys = union_keys([
+        &remote.models_dev.claude_fast_rates,
+        &remote.lite_llm.claude_fast_rates,
+    ]);
+    for key in claude_fast_keys {
+        if let Some(price) = remote
+            .models_dev
+            .claude_fast_rates
+            .get(&key)
+            .or_else(|| remote.lite_llm.claude_fast_rates.get(&key))
+        {
+            output.push(remote_entry(
+                UsageSource::Claude,
+                &key,
+                UsageSpeed::Fast,
+                price,
+                local_entries,
+            ));
+        }
     }
+    output
+}
+
+fn union_keys<const N: usize>(maps: [&HashMap<String, RemoteModelPrice>; N]) -> Vec<String> {
+    let mut keys = HashSet::new();
+    for map in maps {
+        keys.extend(map.keys().cloned());
+    }
+    let mut keys: Vec<_> = keys.into_iter().collect();
+    keys.sort();
+    keys
+}
+
+fn remote_entry(
+    source: UsageSource,
+    model: &str,
+    speed: UsageSpeed,
+    price: &RemoteModelPrice,
+    local_entries: &[CompiledEntry],
+) -> CompiledEntry {
+    let inherited_geo = local_entries
+        .iter()
+        .find(|entry| {
+            entry.source == source
+                && entry.speed == speed
+                && model_matches(model, &entry.model_prefix)
+        })
+        .map_or(10_000, |entry| entry.us_inference_multiplier_bps);
+    let cache_write_1h = if source == UsageSource::Claude {
+        price
+            .uncached_input_nanos_per_m_tok
+            .checked_mul(2)
+            .unwrap_or(u64::MAX)
+    } else {
+        price.cache_write_nanos_per_m_tok
+    };
+    CompiledEntry {
+        priority: REMOTE_PRIORITY,
+        source,
+        model_prefix: model.to_owned(),
+        speed,
+        effective_from: None,
+        effective_until: None,
+        uncached_input_nanos_per_m_tok: price.uncached_input_nanos_per_m_tok,
+        cache_read_nanos_per_m_tok: price.cache_read_nanos_per_m_tok,
+        cache_write_5m_nanos_per_m_tok: price.cache_write_nanos_per_m_tok,
+        cache_write_1h_nanos_per_m_tok: cache_write_1h,
+        output_nanos_per_m_tok: price.output_nanos_per_m_tok,
+        us_inference_multiplier_bps: inherited_geo,
+        long_context_threshold_tokens: None,
+        long_context_input_multiplier_bps: 10_000,
+        long_context_output_multiplier_bps: 10_000,
+        long_context_priced: true,
+    }
+}
+
+fn compiled_fingerprint(entries: &[CompiledEntry]) -> String {
+    let mut body = String::new();
+    for entry in entries {
+        use std::fmt::Write as _;
+        let _ = write!(
+            body,
+            "{}|{}|{}|{}|{:?}|{:?}|{}|{}|{}|{}|{}|{}|{:?}|{}|{}|{};",
+            entry.priority,
+            entry.source.as_db(),
+            entry.model_prefix,
+            entry.speed.as_db(),
+            entry.effective_from,
+            entry.effective_until,
+            entry.uncached_input_nanos_per_m_tok,
+            entry.cache_read_nanos_per_m_tok,
+            entry.cache_write_5m_nanos_per_m_tok,
+            entry.cache_write_1h_nanos_per_m_tok,
+            entry.output_nanos_per_m_tok,
+            entry.us_inference_multiplier_bps,
+            entry.long_context_threshold_tokens,
+            entry.long_context_input_multiplier_bps,
+            entry.long_context_output_multiplier_bps,
+            entry.long_context_priced,
+        );
+    }
+    hex_sha256(body.as_bytes())
+}
+
+pub(crate) fn normalize_model_key(model: &str) -> String {
+    let mut value = model.trim().to_ascii_lowercase();
+    for prefix in ["openai/", "anthropic/", "deepseek/"] {
+        if let Some(stripped) = value.strip_prefix(prefix) {
+            value = stripped.to_owned();
+            break;
+        }
+    }
+    if let Some((base, suffix)) = value.split_once('@')
+        && is_compact_date(suffix)
+    {
+        value = base.to_owned();
+    }
+    if value.len() >= 11 {
+        let split = value.len() - 11;
+        let suffix = &value[split..];
+        if suffix.starts_with('-') && is_dashed_date(&suffix[1..]) {
+            value.truncate(split);
+        }
+    }
+    if value.len() >= 9 {
+        let split = value.len() - 9;
+        let suffix = &value[split..];
+        if suffix.starts_with('-') && is_compact_date(&suffix[1..]) {
+            value.truncate(split);
+        }
+    }
+    value
+}
+
+fn is_compact_date(value: &str) -> bool {
+    value.len() == 8 && value.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+fn is_dashed_date(value: &str) -> bool {
+    value.len() == 10
+        && value.as_bytes()[4] == b'-'
+        && value.as_bytes()[7] == b'-'
+        && value
+            .bytes()
+            .enumerate()
+            .all(|(index, byte)| matches!(index, 4 | 7) || byte.is_ascii_digit())
 }
 
 fn parse_optional_time(value: Option<&str>) -> Result<Option<DateTime<Utc>>, ()> {
@@ -509,6 +950,8 @@ fn hex_sha256(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
     use crate::usage::model::{InferenceGeo, TokenFacts, UsageEntry};
 
@@ -528,6 +971,8 @@ mod tests {
                 ..TokenFacts::default()
             },
             api_equivalent_cost_nanos: None,
+            billing_equivalent_tokens_nanos: None,
+            fast_multiplier_nanos: None,
             pricing_fingerprint: None,
         }
     }
@@ -574,8 +1019,20 @@ mod tests {
                     UsageSpeed::Standard
                 ))
                 .cost_nanos,
-            None,
-            "a broad family prefix must not misprice a distinct model variant"
+            Some(210_000_000_000),
+            "gpt-5.5-pro uses its audited fixed local price"
+        );
+        let mut pro_cache_write = entry(UsageSource::Codex, "gpt-5.5-pro", UsageSpeed::Standard);
+        pro_cache_write.tokens = TokenFacts {
+            cache_write_5m_input_tokens: 1_000_000,
+            ..TokenFacts::default()
+        };
+        assert_eq!(
+            PricingCatalog::bundled()
+                .estimate_entry(&pro_cache_write)
+                .cost_nanos,
+            Some(0),
+            "gpt-5.5-pro cache creation is not billed by the cc-bar policy"
         );
         assert_eq!(
             PricingCatalog::bundled()
@@ -681,6 +1138,23 @@ mod tests {
     }
 
     #[test]
+    fn sonnet_5_price_switches_at_the_effective_time_boundary() {
+        let catalog = PricingCatalog::bundled();
+        let mut usage = entry(UsageSource::Claude, "claude-sonnet-5", UsageSpeed::Standard);
+        usage.occurred_at = "2026-08-31T23:59:59Z".to_owned();
+        assert_eq!(
+            catalog.estimate_entry(&usage).cost_nanos,
+            Some(12_000_000_000)
+        );
+
+        usage.occurred_at = "2026-09-01T00:00:00Z".to_owned();
+        assert_eq!(
+            catalog.estimate_entry(&usage).cost_nanos,
+            Some(18_000_000_000)
+        );
+    }
+
+    #[test]
     fn sol_long_context_uses_documented_multipliers_and_priority_stays_unpriced() {
         let catalog = PricingCatalog::bundled();
         let mut standard = entry(UsageSource::Codex, "gpt-5.6-sol", UsageSpeed::Standard);
@@ -700,9 +1174,139 @@ mod tests {
     }
 
     #[test]
-    fn corrupt_external_catalog_is_retained_and_reseeded() {
+    fn terra_and_luna_long_context_use_documented_multipliers() {
+        let catalog = PricingCatalog::bundled();
+        let mut standard = entry(UsageSource::Codex, "gpt-5.6-terra", UsageSpeed::Standard);
+        standard.tokens = TokenFacts {
+            uncached_input_tokens: 300_000,
+            output_tokens: 100_000,
+            ..TokenFacts::default()
+        };
+
+        assert_eq!(
+            catalog.estimate_entry(&standard).cost_nanos,
+            Some(3_750_000_000)
+        );
+
+        standard.model = Some("gpt-5.6-luna".to_owned());
+        assert_eq!(
+            catalog.estimate_entry(&standard).cost_nanos,
+            Some(1_500_000_000)
+        );
+    }
+
+    #[test]
+    fn fast_billing_equivalent_uses_known_multiplier_without_changing_raw_tokens() {
+        let catalog = PricingCatalog::bundled();
+        assert_eq!(
+            catalog.fast_billing_equivalent(
+                UsageSource::Codex,
+                Some("gpt-5.6-terra"),
+                UsageSpeed::Fast,
+                120,
+            ),
+            (Some(300_000_000_000), Some(2_500_000_000))
+        );
+        assert_eq!(
+            catalog.fast_billing_equivalent(
+                UsageSource::Claude,
+                Some("claude-opus-4.7"),
+                UsageSpeed::Fast,
+                10,
+            ),
+            (Some(60_000_000_000), Some(6_000_000_000))
+        );
+    }
+
+    #[test]
+    fn scoped_fingerprint_ignores_unrelated_remote_models() {
+        let known = HashSet::from([PricingUsageKey::new(
+            UsageSource::Claude,
+            "claude-opus-5",
+            UsageSpeed::Fast,
+        )]);
+        let base = PricingCatalog::merged(&PricingCachePayload::default())
+            .scoped_to_known_usage(&known)
+            .fingerprint()
+            .to_owned();
+        let mut remote = PricingCachePayload::default();
+        remote.models_dev.standard_rates.insert(
+            "unrelated-model".to_owned(),
+            RemoteModelPrice {
+                uncached_input_nanos_per_m_tok: 1,
+                output_nanos_per_m_tok: 2,
+                ..RemoteModelPrice::default()
+            },
+        );
+        let next = PricingCatalog::merged(&remote)
+            .scoped_to_known_usage(&known)
+            .fingerprint()
+            .to_owned();
+
+        assert_eq!(base, next);
+    }
+
+    #[test]
+    fn scoped_fingerprint_changes_for_related_fast_price() {
+        let known = HashSet::from([PricingUsageKey::new(
+            UsageSource::Claude,
+            "claude-future",
+            UsageSpeed::Fast,
+        )]);
+        let base = PricingCatalog::merged(&PricingCachePayload::default())
+            .scoped_to_known_usage(&known)
+            .fingerprint()
+            .to_owned();
+        let mut remote = PricingCachePayload::default();
+        remote.models_dev.claude_fast_rates.insert(
+            "claude-future".to_owned(),
+            RemoteModelPrice {
+                uncached_input_nanos_per_m_tok: 10,
+                output_nanos_per_m_tok: 50,
+                ..RemoteModelPrice::default()
+            },
+        );
+        let next = PricingCatalog::merged(&remote)
+            .scoped_to_known_usage(&known)
+            .fingerprint()
+            .to_owned();
+
+        assert_ne!(base, next);
+    }
+
+    #[test]
+    fn scoped_fingerprint_ignores_remote_price_shadowed_by_local_policy() {
+        let known = HashSet::from([PricingUsageKey::new(
+            UsageSource::Codex,
+            "gpt-5.5",
+            UsageSpeed::Standard,
+        )]);
+        let base = PricingCatalog::merged(&PricingCachePayload::default())
+            .scoped_to_known_usage(&known)
+            .fingerprint()
+            .to_owned();
+        let mut remote = PricingCachePayload::default();
+        remote.lite_llm.standard_rates.insert(
+            "gpt-5.5".to_owned(),
+            RemoteModelPrice {
+                uncached_input_nanos_per_m_tok: 1,
+                output_nanos_per_m_tok: 1,
+                ..RemoteModelPrice::default()
+            },
+        );
+        let next = PricingCatalog::merged(&remote)
+            .scoped_to_known_usage(&known)
+            .fingerprint()
+            .to_owned();
+
+        assert_eq!(base, next);
+    }
+
+    #[test]
+    fn legacy_external_catalog_is_retained_and_migrated_to_v2_cache() {
         let dir = tempfile::tempdir().expect("temp dir");
-        fs::write(dir.path().join(CATALOG_FILE), "{not json").expect("seed corrupt");
+        fs::write(dir.path().join("pricing-catalog.json"), BUNDLED_CATALOG)
+            .expect("seed legacy catalog");
         let store = PricingCatalogStore::new(dir.path().to_path_buf());
 
         let catalog = store.load().expect("recover catalog");
@@ -715,11 +1319,11 @@ mod tests {
             .filter_map(Result::ok)
             .filter_map(|entry| entry.file_name().into_string().ok())
             .collect::<Vec<_>>();
-        assert!(names.iter().any(|name| name == CATALOG_FILE));
+        assert!(names.iter().any(|name| name == "pricing-catalog.json"));
         assert!(
             names
                 .iter()
-                .any(|name| name.starts_with("pricing-catalog.json.corrupt-"))
+                .any(|name| name.starts_with("pricing-catalog.json.legacy-v1-"))
         );
     }
 }

@@ -5,11 +5,12 @@
  * 不承载额度详情、账号操作或 Provider 登录，见 `docs/信息架构与核心流程.md` 第 7 节。
  * 保存成功立即生效；写入失败时**保留原值**并明确提示。
  */
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 
 import { navigateMain } from "../features/app/navigation";
+import { refreshPricingCatalog } from "../features/usage/api";
 import {
   APPEARANCE_OPTIONS,
   LANGUAGE_OPTIONS,
@@ -25,6 +26,13 @@ const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
 const settings = useSettingsStore();
+const pricingRefreshState = ref<"idle" | "success" | "partial" | "failure">("idle");
+const pricingRefreshPending = ref(false);
+const PRICING_REFRESH_STATE = {
+  complete: "success",
+  partial: "partial",
+  failed: "failure",
+} as const;
 
 const current = computed(() => settings.settings);
 
@@ -62,6 +70,20 @@ async function commitLaunchAtLogin(event: Event) {
   await settings.update({ launchAtLogin: checkbox.checked });
   if (current.value) {
     checkbox.checked = current.value.launchAtLogin;
+  }
+}
+
+async function updatePricingCatalog(): Promise<void> {
+  if (pricingRefreshPending.value) return;
+  pricingRefreshPending.value = true;
+  pricingRefreshState.value = "idle";
+  try {
+    const result = await refreshPricingCatalog();
+    pricingRefreshState.value = PRICING_REFRESH_STATE[result];
+  } catch {
+    pricingRefreshState.value = "failure";
+  } finally {
+    pricingRefreshPending.value = false;
   }
 }
 
@@ -114,6 +136,43 @@ function returnToQuota(): void {
             />
             <span>{{ t("settings.launchAtLogin") }}</span>
           </label>
+        </section>
+
+        <section class="settings__group">
+          <h2>{{ t("settings.usageAndPricing") }}</h2>
+
+          <div class="settings__row settings__row--action">
+            <span class="settings__action-copy">
+              <span>{{ t("settings.pricingCatalog") }}</span>
+              <span class="supporting">{{ t("settings.pricingCatalogDescription") }}</span>
+            </span>
+            <button
+              type="button"
+              class="button button--flat"
+              :disabled="pricingRefreshPending"
+              @click="updatePricingCatalog"
+            >
+              {{
+                pricingRefreshPending
+                  ? t("settings.pricingCatalogUpdating")
+                  : t("settings.pricingCatalogUpdate")
+              }}
+            </button>
+          </div>
+          <p
+            v-if="pricingRefreshState !== 'idle'"
+            class="settings__action-status supporting"
+            :class="{ 'settings__action-status--error': pricingRefreshState === 'failure' }"
+            aria-live="polite"
+          >
+            {{
+              pricingRefreshState === "success"
+                ? t("settings.pricingCatalogUpdated")
+                : pricingRefreshState === "partial"
+                  ? t("settings.pricingCatalogPartiallyUpdated")
+                  : t("settings.pricingCatalogUpdateFailed")
+            }}
+          </p>
         </section>
 
         <section class="settings__group">
@@ -218,6 +277,31 @@ h2 {
   gap: var(--space-3);
 }
 
+.settings__row--action {
+  align-items: start;
+}
+
+.settings__action-copy {
+  display: grid;
+  gap: var(--space-1);
+  min-inline-size: 0;
+}
+
+.settings__action-copy .supporting,
+.settings__action-status {
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.settings__action-status {
+  margin: calc(var(--space-2) * -1) 0 0;
+}
+
+.settings__action-status--error {
+  color: var(--status-error);
+}
+
 select {
   min-block-size: 2.5rem;
   padding: 0 var(--space-2);
@@ -267,6 +351,15 @@ input[type="checkbox"] {
   }
 
   select {
+    inline-size: 100%;
+  }
+
+  .settings__row--action {
+    grid-template-columns: 1fr;
+    gap: var(--space-3);
+  }
+
+  .settings__row--action .button {
     inline-size: 100%;
   }
 }

@@ -72,6 +72,8 @@ pub struct UsageEntry {
     pub day_local: String,
     pub tokens: TokenFacts,
     pub api_equivalent_cost_nanos: Option<i64>,
+    pub billing_equivalent_tokens_nanos: Option<i64>,
+    pub fast_multiplier_nanos: Option<i64>,
     pub pricing_fingerprint: Option<String>,
 }
 

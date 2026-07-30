@@ -14,6 +14,14 @@ const EMPTY_TOKENS = {
   totalTokens: 0,
 };
 
+const EMPTY_FAST = {
+  rawTokens: 0,
+  billingEquivalentTokens: "0",
+  minimumMultiplier: null,
+  maximumMultiplier: null,
+  hasUnpricedEquivalent: false,
+};
+
 function summary(
   source: "codex" | "claude",
   options: { nanos: number; priced: number; unpriced: number },
@@ -31,11 +39,13 @@ function summary(
         key: source,
         entryCount: options.priced + options.unpriced,
         tokens: EMPTY_TOKENS,
+        fast: EMPTY_FAST,
         cost,
       },
     ],
     entryCount: options.priced + options.unpriced,
     tokens: EMPTY_TOKENS,
+    fast: EMPTY_FAST,
     cost,
   };
 }
@@ -46,6 +56,7 @@ describe("buildProviderCosts", () => {
       rows: [],
       entryCount: 0,
       tokens: EMPTY_TOKENS,
+      fast: EMPTY_FAST,
       cost: {
         apiEquivalentCostNanos: 0,
         pricedEntries: 0,

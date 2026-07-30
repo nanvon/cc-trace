@@ -39,6 +39,13 @@ const emptySummary: UsageSummary = {
     inputTokens: 0,
     totalTokens: 0,
   },
+  fast: {
+    rawTokens: 0,
+    billingEquivalentTokens: "0",
+    minimumMultiplier: null,
+    maximumMultiplier: null,
+    hasUnpricedEquivalent: false,
+  },
   cost: {
     apiEquivalentCostNanos: 0,
     pricedEntries: 0,

@@ -6,8 +6,9 @@
 pub(crate) mod model;
 mod parser;
 pub mod pricing;
+mod pricing_remote;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -20,15 +21,17 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::contracts::{
-    ProviderId, QuotaSnapshot, UsageConversation, UsageConversationPage, UsageConversationQuery,
-    UsageFilter, UsageRepriceResult, UsageScanState, UsageScanStatus, UsageSource, UsageSummary,
-    UsageSummaryQuery,
+    PricingCatalogRefreshStatus, ProviderId, QuotaSnapshot, UsageConversation,
+    UsageConversationPage, UsageConversationQuery, UsageFilter, UsageRepriceResult, UsageScanState,
+    UsageScanStatus, UsageSource, UsageSummary, UsageSummaryQuery,
 };
 use crate::storage::{UsageDb, UsageDbError};
 
 use model::{ClaudeCursor, CodexCursor, ParsedLine, ScanBatch};
 use parser::{parse_claude_line, parse_codex_line};
-use pricing::{PricingCatalog, PricingCatalogStore};
+use pricing::{
+    PricingCatalog, PricingCatalogStore, PricingRefreshMode, PricingRefreshOutcome, PricingUsageKey,
+};
 
 const MAX_LINE_BYTES: usize = 16 * 1024 * 1024;
 const BATCH_LINES: u64 = 2_000;
@@ -55,6 +58,9 @@ pub struct UsageService {
     db: UsageDb,
     pricing: PricingCatalogStore,
     status: Mutex<UsageScanStatus>,
+    /// 串行化“开始扫描”与“提交价格 + 数据库重计价”，保证两者不会越过安全边界。
+    lifecycle: Mutex<()>,
+    reprice_pending: AtomicBool,
     cancel: AtomicBool,
 }
 
@@ -64,6 +70,8 @@ impl UsageService {
             db: UsageDb::new(config_dir.clone()),
             pricing: PricingCatalogStore::new(config_dir),
             status: Mutex::new(UsageScanStatus::default()),
+            lifecycle: Mutex::new(()),
+            reprice_pending: AtomicBool::new(false),
             cancel: AtomicBool::new(false),
         })
     }
@@ -74,11 +82,13 @@ impl UsageService {
     }
 
     fn start_scan(self: &Arc<Self>, roots: ScanRoots) -> Result<UsageScanStatus, UsageError> {
+        let _lifecycle = self.lifecycle.lock().expect("usage lifecycle");
+        if self.scan_status().state != UsageScanState::Idle {
+            return Err(UsageError::ScanBusy);
+        }
+        self.apply_pending_pricing_locked()?;
         let status = {
             let mut status = self.status.lock().expect("usage scan status");
-            if status.state != UsageScanState::Idle {
-                return Err(UsageError::ScanBusy);
-            }
             *status = UsageScanStatus {
                 state: UsageScanState::Running,
                 started_at: Some(now()),
@@ -90,6 +100,7 @@ impl UsageService {
 
         let service = Arc::clone(self);
         std::thread::spawn(move || service.run_scan(roots));
+        self.refresh_pricing_if_needed();
         Ok(status)
     }
 
@@ -143,8 +154,38 @@ impl UsageService {
     }
 
     pub fn reprice(&self) -> Result<UsageRepriceResult, UsageError> {
-        let catalog = self.pricing.load().map_err(|_| UsageError::Unavailable)?;
+        let _lifecycle = self.lifecycle.lock().expect("usage lifecycle");
+        if self.scan_status().state != UsageScanState::Idle {
+            return Err(UsageError::ScanBusy);
+        }
+        let known_usage = self.db.known_usage_keys()?;
+        let catalog = self
+            .pricing
+            .load_for_known_usage(&known_usage)
+            .map_err(|_| UsageError::Unavailable)?;
         self.db.reprice(&catalog).map_err(Into::into)
+    }
+
+    /// 设置页手动更新价格目录：绕过 24 小时与失败退避，等待当前扫描结束后提交并重计价。
+    pub async fn refresh_pricing_catalog(&self) -> Result<PricingCatalogRefreshStatus, UsageError> {
+        let outcome = self.pricing.refresh(PricingRefreshMode::Manual).await;
+        if outcome.did_update() {
+            loop {
+                if self.scan_status().state == UsageScanState::Idle {
+                    if self.apply_pending_pricing_if_idle()?
+                        || self.scan_status().state == UsageScanState::Idle
+                    {
+                        break;
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+        }
+        Ok(match outcome {
+            PricingRefreshOutcome::Complete => PricingCatalogRefreshStatus::Complete,
+            PricingRefreshOutcome::Partial => PricingCatalogRefreshStatus::Partial,
+            PricingRefreshOutcome::Failed => PricingCatalogRefreshStatus::Failed,
+        })
     }
 
     pub fn record_quota_snapshot(
@@ -161,22 +202,30 @@ impl UsageService {
             .record_quota_snapshot(provider, identity_key, snapshot);
     }
 
-    fn run_scan(&self, roots: ScanRoots) {
+    fn run_scan(self: Arc<Self>, roots: ScanRoots) {
         let result = self.run_scan_inner(roots);
-        let mut status = self.status.lock().expect("usage scan status");
-        if result.is_err() {
-            status.partial_failure = true;
-            status.failed_files = status.failed_files.saturating_add(1);
+        {
+            let mut status = self.status.lock().expect("usage scan status");
+            if result.is_err() {
+                status.partial_failure = true;
+                status.failed_files = status.failed_files.saturating_add(1);
+            }
+            status.cancelled = self.cancel.load(Ordering::SeqCst);
+            status.state = UsageScanState::Idle;
+            status.current_source = None;
+            status.finished_at = Some(now());
         }
-        status.cancelled = self.cancel.load(Ordering::SeqCst);
-        status.state = UsageScanState::Idle;
-        status.current_source = None;
-        status.finished_at = Some(now());
+        let _ = self.apply_pending_pricing_if_idle();
+        self.refresh_missing_pricing_if_needed();
     }
 
     fn run_scan_inner(&self, roots: ScanRoots) -> Result<(), UsageError> {
         self.db.initialize()?;
-        let catalog = self.pricing.load().map_err(|_| UsageError::Unavailable)?;
+        let known_usage = self.db.known_usage_keys()?;
+        let catalog = self
+            .pricing
+            .load_for_known_usage(&known_usage)
+            .map_err(|_| UsageError::Unavailable)?;
         let discovery = discover_files(&roots);
         let previous_states = self.db.scan_file_states()?;
         {
@@ -209,6 +258,83 @@ impl UsageService {
                 .completed_files += 1;
         }
         Ok(())
+    }
+
+    fn refresh_pricing_if_needed(self: &Arc<Self>) {
+        if !self.pricing.is_refresh_due() {
+            return;
+        }
+        let service = Arc::clone(self);
+        tauri::async_runtime::spawn(async move {
+            if service
+                .pricing
+                .refresh(PricingRefreshMode::Scheduled)
+                .await
+                .did_update()
+            {
+                let _ = service.apply_pending_pricing_if_idle();
+            }
+        });
+    }
+
+    fn refresh_missing_pricing_if_needed(self: &Arc<Self>) {
+        let Ok(catalog) = self.pricing.load() else {
+            return;
+        };
+        let Ok(candidates) = self.db.unpriced_usage_keys() else {
+            return;
+        };
+        let missing: HashSet<PricingUsageKey> = candidates
+            .into_iter()
+            .filter(|key| catalog.needs_remote_refresh(key.source, &key.model, key.speed))
+            .collect();
+        if missing.is_empty()
+            || !self
+                .pricing
+                .mark_missing_refresh_attempts(&missing)
+                .unwrap_or(false)
+        {
+            return;
+        }
+
+        let service = Arc::clone(self);
+        tauri::async_runtime::spawn(async move {
+            if service
+                .pricing
+                .refresh(PricingRefreshMode::MissingPrice)
+                .await
+                .did_update()
+            {
+                let _ = service.apply_pending_pricing_if_idle();
+            }
+        });
+    }
+
+    fn apply_pending_pricing_if_idle(&self) -> Result<bool, UsageError> {
+        let _lifecycle = self.lifecycle.lock().expect("usage lifecycle");
+        if self.scan_status().state != UsageScanState::Idle {
+            return Ok(false);
+        }
+        self.apply_pending_pricing_locked()
+    }
+
+    fn apply_pending_pricing_locked(&self) -> Result<bool, UsageError> {
+        self.pricing.commit_pending();
+        self.db.initialize()?;
+        let known_usage = self.db.known_usage_keys()?;
+        let catalog = self
+            .pricing
+            .load_for_known_usage(&known_usage)
+            .map_err(|_| UsageError::Unavailable)?;
+        if self.db.pricing_fingerprint()?.as_deref() != Some(catalog.fingerprint()) {
+            self.reprice_pending.store(true, Ordering::Release);
+        }
+        if !self.reprice_pending.load(Ordering::Acquire) {
+            return Ok(false);
+        }
+        self.db.reprice(&catalog)?;
+        self.reprice_pending.store(false, Ordering::Release);
+        Ok(true)
     }
 
     fn scan_file(
@@ -866,6 +992,9 @@ mod tests {
         assert_eq!(summary.tokens.cache_write_1h_input_tokens, 4);
         assert_eq!(summary.tokens.output_tokens, 60);
         assert_eq!(summary.tokens.total_tokens, 301);
+        assert_eq!(summary.fast.raw_tokens, 100);
+        assert_eq!(summary.fast.billing_equivalent_tokens, "250");
+        assert_eq!(summary.fast.minimum_multiplier.as_deref(), Some("2.5"));
         assert_eq!(summary.cost.priced_entries, 3);
         let bytes_after_initial_scan = service.scan_status().bytes_read;
 

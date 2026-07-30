@@ -122,18 +122,20 @@
 33. rollup 与 scan state 必须共享 generationID 和 pricing fingerprint。
 34. 任一 rollup 写入失败会 invalidate watermark，下一次安全重建。
 35. pricing fingerprint 变化会触发重新计算，而非沿用旧 cost。
+36. models.dev Fast 与 LiteLLM OpenAI Priority 分开解码，Standard 不得回填 Fast。
+37. 缺价刷新 30 分钟冷却持久化；手动更新绕过 24 小时。
+38. 无关模型远端价格变化不触发全量重算，相关 Fast 价格变化才失效。
 
 ### UI / platform
 
-36. loading、empty、stale、offline、error、cached-success 都有明确展示。
-37. 日期范围只影响 Overview/list 查询，不改变 Conversation detail 的全生命周期定义。
-38. 隐私模式只隐藏展示字段，不会误删原始数据或安全存储。
-39. 菜单栏/托盘入口能在无 snapshot 时展示稳定占位，不闪退或消失。
-40. 主窗口、紧凑入口、设置和 HUD 的刷新按钮共享一致的去重语义。
-41. macOS/Windows 的安全存储、托盘、开机启动、窗口行为通过平台适配层测试。
-42. 新版首次启动不会读取旧 cc-bar 的设置、缓存、Keychain namespace 或 HUD frame。
+39. loading、empty、stale、offline、error、cached-success 都有明确展示。
+40. 日期范围只影响 Overview/list 查询，不改变 Conversation detail 的全生命周期定义。
+41. 隐私模式只隐藏展示字段，不会误删原始数据或安全存储。
+42. 菜单栏/托盘入口能在无 snapshot 时展示稳定占位，不闪退或消失。
+43. 主窗口、紧凑入口、设置和 HUD 的刷新按钮共享一致的去重语义。
+44. macOS/Windows 的安全存储、托盘、开机启动、窗口行为通过平台适配层测试。
+45. 新版首次启动不会读取旧 cc-bar 的设置、缓存、Keychain namespace 或 HUD frame。
 
 ## 测试缺口的结论
 
 当前单元测试对“协议解析 + 增量扫描 + Pricing”有较好的窄覆盖，但不能证明真实 Provider、Keychain、AppKit 生命周期、登录项、HUD、多屏、网络、CI 打包或双平台行为。**代码已确认、待确认**。新版应先把上面的行为基线拆成 Rust domain tests、provider fixture tests、storage corruption tests、Vue component tests 和 macOS/Windows adapter tests，而不是只复制这 25 个 XCTest 名字。
-

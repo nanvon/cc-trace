@@ -19,8 +19,10 @@ pub use settings::{
     AppearancePreference, LanguagePreference, OnboardingState, RefreshInterval,
     SETTINGS_SCHEMA_VERSION, Settings, SettingsUpdate,
 };
+pub(crate) use usage::decimal_nanos_string;
 pub use usage::{
-    UsageConversation, UsageConversationPage, UsageConversationQuery, UsageCostTotals, UsageFilter,
-    UsageGroupBy, UsageRepriceResult, UsageScanState, UsageScanStatus, UsageSource, UsageSpeed,
-    UsageSummary, UsageSummaryQuery, UsageSummaryRow, UsageTokenTotals,
+    PricingCatalogRefreshStatus, UsageConversation, UsageConversationPage, UsageConversationQuery,
+    UsageCostTotals, UsageFastTotals, UsageFilter, UsageGroupBy, UsageRepriceResult,
+    UsageScanState, UsageScanStatus, UsageSource, UsageSpeed, UsageSummary, UsageSummaryQuery,
+    UsageSummaryRow, UsageTokenTotals,
 };

@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum UsageSource {
     Codex,
@@ -23,7 +23,7 @@ impl UsageSource {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum UsageSpeed {
     Standard,
@@ -106,10 +106,55 @@ pub struct UsageCostTotals {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct UsageFastTotals {
+    /// Fast 档位的原始 Token，不包含任何倍率。
+    pub raw_tokens: i64,
+    /// 十进制定点字符串，避免跨 Rust / JavaScript 边界丢失精度。
+    pub billing_equivalent_tokens: String,
+    /// 混合模型时分别返回最小倍率与最大倍率；未知倍率不猜测。
+    pub minimum_multiplier: Option<String>,
+    pub maximum_multiplier: Option<String>,
+    pub has_unpriced_equivalent: bool,
+}
+
+impl Default for UsageFastTotals {
+    fn default() -> Self {
+        Self {
+            raw_tokens: 0,
+            billing_equivalent_tokens: "0".to_owned(),
+            minimum_multiplier: None,
+            maximum_multiplier: None,
+            has_unpriced_equivalent: false,
+        }
+    }
+}
+
+impl UsageFastTotals {
+    pub(crate) fn add_assign(&mut self, other: &Self) {
+        self.raw_tokens += other.raw_tokens;
+        self.billing_equivalent_tokens = decimal_nanos_string(
+            parse_decimal_nanos(&self.billing_equivalent_tokens)
+                .saturating_add(parse_decimal_nanos(&other.billing_equivalent_tokens)),
+        );
+        self.minimum_multiplier = decimal_option_min(
+            self.minimum_multiplier.as_deref(),
+            other.minimum_multiplier.as_deref(),
+        );
+        self.maximum_multiplier = decimal_option_max(
+            self.maximum_multiplier.as_deref(),
+            other.maximum_multiplier.as_deref(),
+        );
+        self.has_unpriced_equivalent |= other.has_unpriced_equivalent;
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UsageSummaryRow {
     pub key: String,
     pub entry_count: i64,
     pub tokens: UsageTokenTotals,
+    pub fast: UsageFastTotals,
     pub cost: UsageCostTotals,
 }
 
@@ -119,6 +164,7 @@ pub struct UsageSummary {
     pub rows: Vec<UsageSummaryRow>,
     pub entry_count: i64,
     pub tokens: UsageTokenTotals,
+    pub fast: UsageFastTotals,
     pub cost: UsageCostTotals,
 }
 
@@ -144,7 +190,49 @@ pub struct UsageConversation {
     pub last_at: String,
     pub entry_count: i64,
     pub tokens: UsageTokenTotals,
+    pub fast: UsageFastTotals,
     pub cost: UsageCostTotals,
+}
+
+pub(crate) fn decimal_nanos_string(value: i64) -> String {
+    let whole = value / 1_000_000_000;
+    let fraction = value % 1_000_000_000;
+    if fraction == 0 {
+        return whole.to_string();
+    }
+    format!("{whole}.{fraction:09}")
+        .trim_end_matches('0')
+        .to_owned()
+}
+
+fn parse_decimal_nanos(value: &str) -> i64 {
+    let (whole, fraction) = value.split_once('.').unwrap_or((value, ""));
+    let whole = whole.parse::<i64>().unwrap_or(0);
+    let mut fraction = fraction.chars().take(9).collect::<String>();
+    fraction.extend(std::iter::repeat_n('0', 9 - fraction.len()));
+    whole
+        .saturating_mul(1_000_000_000)
+        .saturating_add(fraction.parse::<i64>().unwrap_or(0))
+}
+
+fn decimal_option_min(left: Option<&str>, right: Option<&str>) -> Option<String> {
+    match (left, right) {
+        (Some(left), Some(right)) => Some(decimal_nanos_string(
+            parse_decimal_nanos(left).min(parse_decimal_nanos(right)),
+        )),
+        (Some(value), None) | (None, Some(value)) => Some(value.to_owned()),
+        (None, None) => None,
+    }
+}
+
+fn decimal_option_max(left: Option<&str>, right: Option<&str>) -> Option<String> {
+    match (left, right) {
+        (Some(left), Some(right)) => Some(decimal_nanos_string(
+            parse_decimal_nanos(left).max(parse_decimal_nanos(right)),
+        )),
+        (Some(value), None) | (None, Some(value)) => Some(value.to_owned()),
+        (None, None) => None,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -209,6 +297,14 @@ pub struct UsageRepriceResult {
     pub priced_entries: u64,
     pub unpriced_entries: u64,
     pub pricing_fingerprint: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PricingCatalogRefreshStatus {
+    Complete,
+    Partial,
+    Failed,
 }
 
 #[cfg(test)]

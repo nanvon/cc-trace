@@ -14,14 +14,15 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 
 use crate::contracts::{
     ProviderId, QuotaSnapshot, QuotaWindowKind, UsageConversation, UsageConversationPage,
-    UsageConversationQuery, UsageCostTotals, UsageGroupBy, UsageRepriceResult, UsageSource,
-    UsageSpeed, UsageSummary, UsageSummaryQuery, UsageSummaryRow, UsageTokenTotals,
+    UsageConversationQuery, UsageCostTotals, UsageFastTotals, UsageGroupBy, UsageRepriceResult,
+    UsageSource, UsageSpeed, UsageSummary, UsageSummaryQuery, UsageSummaryRow, UsageTokenTotals,
+    decimal_nanos_string,
 };
 use crate::usage::model::{InferenceGeo, RepriceRow, ScanBatch, ScanFileState, TokenFacts};
-use crate::usage::pricing::PricingCatalog;
+use crate::usage::pricing::{PricingCatalog, PricingUsageKey};
 
 const DATABASE_FILE: &str = "usage.db";
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 #[derive(Debug)]
 pub enum UsageDbError {
@@ -174,9 +175,11 @@ impl UsageDb {
                    occurred_at, day_local, uncached_input_tokens, output_tokens,
                    reasoning_output_tokens, cache_read_input_tokens,
                    cache_write_5m_input_tokens, cache_write_1h_input_tokens,
-                   api_equivalent_cost_nanos, pricing_fingerprint
+                   api_equivalent_cost_nanos, billing_equivalent_tokens_nanos,
+                   fast_multiplier_nanos, pricing_fingerprint
                  ) VALUES (
-                   ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17
+                   ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
+                   ?16, ?17, ?18, ?19
                  )
                  ON CONFLICT(source, dedup_key) DO UPDATE SET
                    file_key = excluded.file_key,
@@ -193,6 +196,8 @@ impl UsageDb {
                    cache_write_5m_input_tokens = excluded.cache_write_5m_input_tokens,
                    cache_write_1h_input_tokens = excluded.cache_write_1h_input_tokens,
                    api_equivalent_cost_nanos = excluded.api_equivalent_cost_nanos,
+                   billing_equivalent_tokens_nanos = excluded.billing_equivalent_tokens_nanos,
+                   fast_multiplier_nanos = excluded.fast_multiplier_nanos,
                    pricing_fingerprint = excluded.pricing_fingerprint
                  WHERE (
                    excluded.uncached_input_tokens
@@ -226,6 +231,8 @@ impl UsageDb {
                     entry.tokens.cache_write_5m_input_tokens,
                     entry.tokens.cache_write_1h_input_tokens,
                     entry.api_equivalent_cost_nanos,
+                    entry.billing_equivalent_tokens_nanos,
+                    entry.fast_multiplier_nanos,
                     entry.pricing_fingerprint,
                 ])?)
                 .unwrap_or(0);
@@ -304,6 +311,16 @@ impl UsageDb {
                     COALESCE(SUM(cache_read_input_tokens), 0),
                     COALESCE(SUM(cache_write_5m_input_tokens), 0),
                     COALESCE(SUM(cache_write_1h_input_tokens), 0),
+                    COALESCE(SUM(CASE WHEN speed = 'fast' THEN
+                        uncached_input_tokens + output_tokens + cache_read_input_tokens
+                        + cache_write_5m_input_tokens + cache_write_1h_input_tokens
+                    ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN speed = 'fast'
+                        THEN billing_equivalent_tokens_nanos ELSE 0 END), 0),
+                    MIN(CASE WHEN speed = 'fast' THEN fast_multiplier_nanos END),
+                    MAX(CASE WHEN speed = 'fast' THEN fast_multiplier_nanos END),
+                    SUM(CASE WHEN speed = 'fast'
+                             AND billing_equivalent_tokens_nanos IS NULL THEN 1 ELSE 0 END),
                     COALESCE(SUM(api_equivalent_cost_nanos), 0),
                     SUM(CASE WHEN api_equivalent_cost_nanos IS NOT NULL THEN 1 ELSE 0 END),
                     SUM(CASE WHEN api_equivalent_cost_nanos IS NULL THEN 1 ELSE 0 END),
@@ -337,6 +354,7 @@ impl UsageDb {
         }
 
         let mut total_tokens = UsageTokenTotals::default();
+        let mut total_fast = UsageFastTotals::default();
         let mut total_cost = UsageCostTotals::default();
         let mut entry_count = 0_i64;
         let mut fingerprints = HashSet::new();
@@ -344,6 +362,7 @@ impl UsageDb {
         for row in &output {
             entry_count += row.entry_count;
             total_tokens.add_assign(&row.tokens);
+            total_fast.add_assign(&row.fast);
             total_cost.api_equivalent_cost_nanos += row.cost.api_equivalent_cost_nanos;
             total_cost.priced_entries += row.cost.priced_entries;
             total_cost.unpriced_entries += row.cost.unpriced_entries;
@@ -364,6 +383,7 @@ impl UsageDb {
             rows: output,
             entry_count,
             tokens: total_tokens,
+            fast: total_fast,
             cost: total_cost,
         })
     }
@@ -413,6 +433,16 @@ impl UsageDb {
                     COALESCE(SUM(e.cache_read_input_tokens), 0),
                     COALESCE(SUM(e.cache_write_5m_input_tokens), 0),
                     COALESCE(SUM(e.cache_write_1h_input_tokens), 0),
+                    COALESCE(SUM(CASE WHEN e.speed = 'fast' THEN
+                        e.uncached_input_tokens + e.output_tokens + e.cache_read_input_tokens
+                        + e.cache_write_5m_input_tokens + e.cache_write_1h_input_tokens
+                    ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN e.speed = 'fast'
+                        THEN e.billing_equivalent_tokens_nanos ELSE 0 END), 0),
+                    MIN(CASE WHEN e.speed = 'fast' THEN e.fast_multiplier_nanos END),
+                    MAX(CASE WHEN e.speed = 'fast' THEN e.fast_multiplier_nanos END),
+                    SUM(CASE WHEN e.speed = 'fast'
+                             AND e.billing_equivalent_tokens_nanos IS NULL THEN 1 ELSE 0 END),
                     COALESCE(SUM(e.api_equivalent_cost_nanos), 0),
                     SUM(CASE WHEN e.api_equivalent_cost_nanos IS NOT NULL THEN 1 ELSE 0 END),
                     SUM(CASE WHEN e.api_equivalent_cost_nanos IS NULL THEN 1 ELSE 0 END),
@@ -472,6 +502,16 @@ impl UsageDb {
                         COALESCE(SUM(e.cache_read_input_tokens), 0),
                         COALESCE(SUM(e.cache_write_5m_input_tokens), 0),
                         COALESCE(SUM(e.cache_write_1h_input_tokens), 0),
+                        COALESCE(SUM(CASE WHEN e.speed = 'fast' THEN
+                            e.uncached_input_tokens + e.output_tokens + e.cache_read_input_tokens
+                            + e.cache_write_5m_input_tokens + e.cache_write_1h_input_tokens
+                        ELSE 0 END), 0),
+                        COALESCE(SUM(CASE WHEN e.speed = 'fast'
+                            THEN e.billing_equivalent_tokens_nanos ELSE 0 END), 0),
+                        MIN(CASE WHEN e.speed = 'fast' THEN e.fast_multiplier_nanos END),
+                        MAX(CASE WHEN e.speed = 'fast' THEN e.fast_multiplier_nanos END),
+                        SUM(CASE WHEN e.speed = 'fast'
+                                 AND e.billing_equivalent_tokens_nanos IS NULL THEN 1 ELSE 0 END),
                         COALESCE(SUM(e.api_equivalent_cost_nanos), 0),
                         SUM(CASE WHEN e.api_equivalent_cost_nanos IS NOT NULL THEN 1 ELSE 0 END),
                         SUM(CASE WHEN e.api_equivalent_cost_nanos IS NULL THEN 1 ELSE 0 END),
@@ -513,13 +553,23 @@ impl UsageDb {
             let mut statement = transaction.prepare_cached(
                 "UPDATE usage_entries
                     SET api_equivalent_cost_nanos = ?1,
-                        pricing_fingerprint = ?2
-                  WHERE id = ?3
+                        billing_equivalent_tokens_nanos = ?2,
+                        fast_multiplier_nanos = ?3,
+                        pricing_fingerprint = ?4
+                  WHERE id = ?5
                     AND (api_equivalent_cost_nanos IS NOT ?1
-                         OR pricing_fingerprint IS NOT ?2)",
+                         OR billing_equivalent_tokens_nanos IS NOT ?2
+                         OR fast_multiplier_nanos IS NOT ?3
+                         OR pricing_fingerprint IS NOT ?4)",
             )?;
             for entry in &entries {
                 let estimate = catalog.estimate_row(entry);
+                let (billing_equivalent, multiplier) = catalog.fast_billing_equivalent(
+                    entry.source,
+                    entry.model.as_deref(),
+                    entry.speed,
+                    entry.tokens.total_tokens(),
+                );
                 let fingerprint = estimate
                     .cost_nanos
                     .map(|_| catalog.fingerprint().to_owned());
@@ -530,12 +580,20 @@ impl UsageDb {
                 }
                 updated += u64::try_from(statement.execute(params![
                     estimate.cost_nanos,
+                    billing_equivalent,
+                    multiplier,
                     fingerprint,
                     entry.id
                 ])?)
                 .unwrap_or(0);
             }
         }
+        transaction.execute(
+            "INSERT INTO pricing_state (id, fingerprint)
+             VALUES (1, ?1)
+             ON CONFLICT(id) DO UPDATE SET fingerprint = excluded.fingerprint",
+            [catalog.fingerprint()],
+        )?;
         transaction.commit()?;
 
         Ok(UsageRepriceResult {
@@ -544,6 +602,65 @@ impl UsageDb {
             unpriced_entries: unpriced,
             pricing_fingerprint: catalog.fingerprint().to_owned(),
         })
+    }
+
+    pub(crate) fn pricing_fingerprint(&self) -> Result<Option<String>, UsageDbError> {
+        let connection = self.open_read()?;
+        connection
+            .query_row(
+                "SELECT fingerprint FROM pricing_state WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    /// 只返回可能由远端目录补齐的价格身份；Unknown 与模型缺失在 SQL 层排除，
+    /// 长上下文不支持等政策性未定价由 `PricingCatalog::needs_remote_refresh` 再过滤。
+    pub(crate) fn unpriced_usage_keys(&self) -> Result<Vec<PricingUsageKey>, UsageDbError> {
+        let connection = self.open_read()?;
+        let mut statement = connection.prepare(
+            "SELECT DISTINCT source, model, speed
+               FROM usage_entries
+              WHERE api_equivalent_cost_nanos IS NULL
+                AND model IS NOT NULL
+                AND TRIM(model) <> ''
+                AND speed <> 'unknown'",
+        )?;
+        let rows = statement.query_map([], |row| {
+            let source: String = row.get(0)?;
+            let model: String = row.get(1)?;
+            let speed: String = row.get(2)?;
+            Ok(PricingUsageKey::new(
+                source_from_db(&source)?,
+                &model,
+                speed_from_db(&speed)?,
+            ))
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub(crate) fn known_usage_keys(&self) -> Result<HashSet<PricingUsageKey>, UsageDbError> {
+        let connection = self.open_read()?;
+        let mut statement = connection.prepare(
+            "SELECT DISTINCT source, model, speed
+               FROM usage_entries
+              WHERE model IS NOT NULL
+                AND TRIM(model) <> ''
+                AND speed <> 'unknown'",
+        )?;
+        let rows = statement.query_map([], |row| {
+            let source: String = row.get(0)?;
+            let model: String = row.get(1)?;
+            let speed: String = row.get(2)?;
+            Ok(PricingUsageKey::new(
+                source_from_db(&source)?,
+                &model,
+                speed_from_db(&speed)?,
+            ))
+        })?;
+        rows.collect::<Result<HashSet<_>, _>>().map_err(Into::into)
     }
 
     pub fn record_quota_snapshot(
@@ -682,12 +799,13 @@ impl UsageDb {
 }
 
 fn migrate(connection: &mut Connection, from: i64) -> Result<(), UsageDbError> {
-    if from != 0 {
+    if !matches!(from, 0 | 1) {
         return Err(UsageDbError::UnsupportedSchema);
     }
     let transaction = connection.transaction()?;
-    transaction.execute_batch(
-        "CREATE TABLE scan_files (
+    if from == 0 {
+        transaction.execute_batch(
+            "CREATE TABLE scan_files (
            file_key TEXT PRIMARY KEY,
            source TEXT NOT NULL CHECK(source IN ('codex', 'claude')),
            mtime_ms INTEGER NOT NULL,
@@ -715,6 +833,8 @@ fn migrate(connection: &mut Connection, from: i64) -> Result<(), UsageDbError> {
            cache_write_5m_input_tokens INTEGER NOT NULL CHECK(cache_write_5m_input_tokens >= 0),
            cache_write_1h_input_tokens INTEGER NOT NULL CHECK(cache_write_1h_input_tokens >= 0),
            api_equivalent_cost_nanos INTEGER,
+           billing_equivalent_tokens_nanos INTEGER,
+           fast_multiplier_nanos INTEGER,
            pricing_fingerprint TEXT,
            CHECK(reasoning_output_tokens <= output_tokens)
          );
@@ -730,6 +850,10 @@ fn migrate(connection: &mut Connection, from: i64) -> Result<(), UsageDbError> {
            ON usage_entries(conversation_key, occurred_at);
          CREATE INDEX ix_entries_repricing
            ON usage_entries(pricing_fingerprint);
+         CREATE TABLE pricing_state (
+           id INTEGER PRIMARY KEY CHECK(id = 1),
+           fingerprint TEXT NOT NULL
+         );
          CREATE TABLE conversations (
            conversation_key TEXT PRIMARY KEY,
            source TEXT NOT NULL CHECK(source IN ('codex', 'claude')),
@@ -754,8 +878,21 @@ fn migrate(connection: &mut Connection, from: i64) -> Result<(), UsageDbError> {
          );
          CREATE INDEX ix_quota_series
            ON quota_events(provider, identity_key, window_kind, window_id, observed_at);
-         PRAGMA user_version = 1;",
-    )?;
+         PRAGMA user_version = 2;",
+        )?;
+    } else {
+        transaction.execute_batch(
+            "ALTER TABLE usage_entries
+               ADD COLUMN billing_equivalent_tokens_nanos INTEGER;
+             ALTER TABLE usage_entries
+               ADD COLUMN fast_multiplier_nanos INTEGER;
+             CREATE TABLE pricing_state (
+               id INTEGER PRIMARY KEY CHECK(id = 1),
+               fingerprint TEXT NOT NULL
+             );
+             PRAGMA user_version = 2;",
+        )?;
+    }
     transaction.commit()?;
     Ok(())
 }
@@ -766,12 +903,13 @@ fn summary_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<UsageSummaryRow> {
         key: row.get(0)?,
         entry_count: row.get(1)?,
         tokens,
+        fast: fast_totals(row, 8)?,
         cost: UsageCostTotals {
-            api_equivalent_cost_nanos: row.get(8)?,
-            priced_entries: row.get(9)?,
-            unpriced_entries: row.get(10)?,
-            assumed_geo_entries: row.get(11)?,
-            pricing_fingerprint: row.get(12)?,
+            api_equivalent_cost_nanos: row.get(13)?,
+            priced_entries: row.get(14)?,
+            unpriced_entries: row.get(15)?,
+            assumed_geo_entries: row.get(16)?,
+            pricing_fingerprint: row.get(17)?,
         },
     })
 }
@@ -796,6 +934,19 @@ fn token_totals(row: &rusqlite::Row<'_>, start: usize) -> rusqlite::Result<Usage
     })
 }
 
+fn fast_totals(row: &rusqlite::Row<'_>, start: usize) -> rusqlite::Result<UsageFastTotals> {
+    let equivalent_nanos: i64 = row.get(start + 1)?;
+    let minimum_nanos: Option<i64> = row.get(start + 2)?;
+    let maximum_nanos: Option<i64> = row.get(start + 3)?;
+    Ok(UsageFastTotals {
+        raw_tokens: row.get(start)?,
+        billing_equivalent_tokens: decimal_nanos_string(equivalent_nanos),
+        minimum_multiplier: minimum_nanos.map(decimal_nanos_string),
+        maximum_multiplier: maximum_nanos.map(decimal_nanos_string),
+        has_unpriced_equivalent: row.get::<_, i64>(start + 4)? > 0,
+    })
+}
+
 fn conversation_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<UsageConversation> {
     let source_value: String = row.get(1)?;
     let source = source_from_db(&source_value)?;
@@ -809,12 +960,13 @@ fn conversation_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<UsageConversati
         last_at: row.get(6)?,
         entry_count: row.get(7)?,
         tokens: token_totals(row, 8)?,
+        fast: fast_totals(row, 14)?,
         cost: UsageCostTotals {
-            api_equivalent_cost_nanos: row.get(14)?,
-            priced_entries: row.get(15)?,
-            unpriced_entries: row.get(16)?,
-            assumed_geo_entries: row.get(17)?,
-            pricing_fingerprint: row.get(18)?,
+            api_equivalent_cost_nanos: row.get(19)?,
+            priced_entries: row.get(20)?,
+            unpriced_entries: row.get(21)?,
+            assumed_geo_entries: row.get(22)?,
+            pricing_fingerprint: row.get(23)?,
         },
     })
 }
@@ -977,6 +1129,8 @@ mod tests {
                 ..TokenFacts::default()
             },
             api_equivalent_cost_nanos: Some(200),
+            billing_equivalent_tokens_nanos: None,
+            fast_multiplier_nanos: None,
             pricing_fingerprint: Some("price".to_owned()),
         };
         ScanBatch {
@@ -1019,6 +1173,73 @@ mod tests {
                 .offset_bytes,
             80
         );
+    }
+
+    #[test]
+    fn schema_v1_migrates_fast_pricing_columns_transactionally() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join(DATABASE_FILE);
+        let connection = Connection::open(&path).expect("open legacy");
+        connection
+            .execute_batch(
+                "CREATE TABLE usage_entries (id INTEGER PRIMARY KEY);
+                 PRAGMA user_version = 1;",
+            )
+            .expect("seed v1");
+        drop(connection);
+
+        let database = UsageDb::new(dir.path().to_path_buf());
+        database.initialize().expect("migrate");
+        let connection = Connection::open(&path).expect("open migrated");
+        let version: i64 = connection
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .expect("version");
+        let mut statement = connection
+            .prepare("PRAGMA table_info(usage_entries)")
+            .expect("columns");
+        let columns = statement
+            .query_map([], |row| row.get::<_, String>(1))
+            .expect("query columns")
+            .collect::<Result<HashSet<_>, _>>()
+            .expect("collect columns");
+
+        assert_eq!(version, 2);
+        assert!(columns.contains("billing_equivalent_tokens_nanos"));
+        assert!(columns.contains("fast_multiplier_nanos"));
+    }
+
+    #[test]
+    fn summary_keeps_raw_and_billing_equivalent_fast_tokens_separate() {
+        let (_dir, database) = database();
+        let mut batch = sample_batch("fast");
+        batch.entries[0].speed = UsageSpeed::Fast;
+        batch.entries[0].billing_equivalent_tokens_nanos = Some(37_500_000_000);
+        batch.entries[0].fast_multiplier_nanos = Some(2_500_000_000);
+        database
+            .commit_scan_batch(
+                "file",
+                UsageSource::Codex,
+                1,
+                100,
+                80,
+                "prefix",
+                None,
+                false,
+                &batch,
+            )
+            .expect("commit fast");
+
+        let summary = database
+            .summary(&UsageSummaryQuery {
+                filter: UsageFilter::default(),
+                group_by: UsageGroupBy::Source,
+            })
+            .expect("summary");
+
+        assert_eq!(summary.fast.raw_tokens, 15);
+        assert_eq!(summary.fast.billing_equivalent_tokens, "37.5");
+        assert_eq!(summary.fast.minimum_multiplier.as_deref(), Some("2.5"));
+        assert!(!summary.fast.has_unpriced_equivalent);
     }
 
     #[test]
@@ -1162,9 +1383,12 @@ mod tests {
                     "cache_write_5m_input_tokens",
                     "cache_write_1h_input_tokens",
                     "api_equivalent_cost_nanos",
+                    "billing_equivalent_tokens_nanos",
+                    "fast_multiplier_nanos",
                     "pricing_fingerprint",
                 ][..],
             ),
+            ("pricing_state", &["id", "fingerprint"][..]),
             (
                 "conversations",
                 &[

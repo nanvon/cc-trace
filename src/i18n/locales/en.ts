@@ -112,6 +112,15 @@ export default {
     appearanceAndLanguage: "Appearance & language",
     language: "Language",
     appearance: "Appearance",
+    usageAndPricing: "Usage & pricing",
+    pricingCatalog: "Pricing catalog",
+    pricingCatalogDescription:
+      "Check LiteLLM and models.dev now. Existing prices stay available if the update fails.",
+    pricingCatalogUpdate: "Update",
+    pricingCatalogUpdating: "Updating…",
+    pricingCatalogUpdated: "Pricing catalog is up to date.",
+    pricingCatalogPartiallyUpdated: "Some prices were updated; the previous catalog remains in use for the rest.",
+    pricingCatalogUpdateFailed: "Could not update prices. The previous catalog is still in use.",
     about: "About",
     version: "Version {version}",
     privacy:

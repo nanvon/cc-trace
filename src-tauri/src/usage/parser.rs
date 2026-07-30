@@ -127,6 +127,8 @@ pub fn parse_codex_line(
                 day_local,
                 tokens,
                 api_equivalent_cost_nanos: None,
+                billing_equivalent_tokens_nanos: None,
+                fast_multiplier_nanos: None,
                 pricing_fingerprint: None,
             };
             apply_price(&mut entry, catalog);
@@ -216,6 +218,8 @@ pub fn parse_claude_line(
         day_local,
         tokens,
         api_equivalent_cost_nanos: None,
+        billing_equivalent_tokens_nanos: None,
+        fast_multiplier_nanos: None,
         pricing_fingerprint: None,
     };
     apply_price(&mut entry, catalog);
@@ -245,7 +249,7 @@ fn codex_tokens(value: &Value) -> Option<TokenFacts> {
     let input = integer(value, "input_tokens")?;
     let output = integer(value, "output_tokens")?;
     let cached = integer_or_zero(value, "cached_input_tokens")?;
-    let cache_write = integer_or_zero(value, "cache_write_input_tokens")?;
+    let cache_write = codex_cache_write_tokens(value)?;
     let reasoning = integer_or_zero(value, "reasoning_output_tokens")?;
     let total = integer(value, "total_tokens")?;
 
@@ -277,7 +281,7 @@ fn codex_total_is_valid(value: &Value) -> bool {
     let Some(cached) = integer_or_zero(value, "cached_input_tokens") else {
         return false;
     };
-    let Some(cache_write) = integer_or_zero(value, "cache_write_input_tokens") else {
+    let Some(cache_write) = codex_cache_write_tokens(value) else {
         return false;
     };
     let Some(reasoning) = integer_or_zero(value, "reasoning_output_tokens") else {
@@ -293,14 +297,22 @@ fn claude_tokens(value: &Value) -> Option<TokenFacts> {
     let input = integer_or_zero(value, "input_tokens")?;
     let output = integer_or_zero(value, "output_tokens")?;
     let cache_read = integer_or_zero(value, "cache_read_input_tokens")?;
-    let legacy_write = integer_or_zero(value, "cache_creation_input_tokens")?;
     let nested = value.get("cache_creation");
-    let write_5m = nested
-        .and_then(|item| integer_or_zero(item, "ephemeral_5m_input_tokens"))
-        .unwrap_or(legacy_write);
-    let write_1h = nested
-        .and_then(|item| integer_or_zero(item, "ephemeral_1h_input_tokens"))
-        .unwrap_or(0);
+    let aggregate = optional_integer(value, "cache_creation_input_tokens")?;
+    let detail_5m = match nested {
+        Some(item) => optional_integer(item, "ephemeral_5m_input_tokens")?,
+        None => None,
+    };
+    let detail_1h = match nested {
+        Some(item) => optional_integer(item, "ephemeral_1h_input_tokens")?,
+        None => None,
+    };
+    let (write_5m, write_1h) = if let Some(total) = aggregate {
+        let write_1h = detail_1h.unwrap_or(0).min(total);
+        (total - write_1h, write_1h)
+    } else {
+        (detail_5m.unwrap_or(0), detail_1h.unwrap_or(0))
+    };
 
     let facts = TokenFacts {
         uncached_input_tokens: input,
@@ -318,7 +330,7 @@ fn token_signature(value: &Value) -> Option<String> {
         integer(value, "input_tokens")?,
         integer(value, "output_tokens")?,
         integer_or_zero(value, "cached_input_tokens")?,
-        integer_or_zero(value, "cache_write_input_tokens")?,
+        codex_cache_write_tokens(value)?,
         integer_or_zero(value, "reasoning_output_tokens")?,
         integer(value, "total_tokens")?,
     ];
@@ -346,6 +358,30 @@ fn integer_or_zero(value: &Value, key: &str) -> Option<i64> {
     })
 }
 
+fn optional_integer(value: &Value, key: &str) -> Option<Option<i64>> {
+    value.get(key).map_or(Some(None), |value| {
+        value
+            .as_u64()
+            .and_then(|value| i64::try_from(value).ok())
+            .map(Some)
+    })
+}
+
+fn codex_cache_write_tokens(value: &Value) -> Option<i64> {
+    for path in [
+        "/cache_write_input_tokens",
+        "/cache_write_tokens",
+        "/input_tokens_details/cache_write_tokens",
+        "/prompt_tokens_details/cache_write_tokens",
+        "/token_details/cache_write_tokens",
+    ] {
+        if let Some(item) = value.pointer(path) {
+            return item.as_u64().and_then(|value| i64::try_from(value).ok());
+        }
+    }
+    Some(0)
+}
+
 fn normalized_time(value: Option<&str>) -> Option<(String, String)> {
     let value = value?;
     let parsed = DateTime::parse_from_rfc3339(value).ok()?;
@@ -364,7 +400,7 @@ fn normalized_optional(value: &str) -> Option<String> {
 
 fn normalize_speed(value: Option<&str>) -> UsageSpeed {
     match value.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
-        None | Some("") | Some("default") | Some("standard") => UsageSpeed::Standard,
+        Some("default") | Some("standard") => UsageSpeed::Standard,
         Some("fast") | Some("priority") => UsageSpeed::Fast,
         _ => UsageSpeed::Unknown,
     }
@@ -394,7 +430,15 @@ fn hash_parts(parts: &[&str]) -> String {
 
 fn apply_price(entry: &mut UsageEntry, catalog: &PricingCatalog) {
     let estimate = catalog.estimate_entry(entry);
+    let (billing_equivalent, multiplier) = catalog.fast_billing_equivalent(
+        entry.source,
+        entry.model.as_deref(),
+        entry.speed,
+        entry.tokens.total_tokens(),
+    );
     entry.api_equivalent_cost_nanos = estimate.cost_nanos;
+    entry.billing_equivalent_tokens_nanos = billing_equivalent;
+    entry.fast_multiplier_nanos = multiplier;
     entry.pricing_fingerprint = estimate
         .cost_nanos
         .map(|_| catalog.fingerprint().to_owned());
@@ -466,6 +510,150 @@ mod tests {
         assert_eq!(entry.tokens.cache_write_5m_input_tokens, 7);
         assert_eq!(entry.tokens.cache_write_1h_input_tokens, 4);
         assert_eq!(conversation.project_hint.as_deref(), Some("project-alpha"));
+    }
+
+    #[test]
+    fn claude_aggregate_cache_write_is_authoritative() {
+        let facts = claude_tokens(&serde_json::json!({
+            "input_tokens": 1,
+            "output_tokens": 1,
+            "cache_creation_input_tokens": 10,
+            "cache_creation": {
+                "ephemeral_5m_input_tokens": 9,
+                "ephemeral_1h_input_tokens": 4
+            }
+        }))
+        .expect("valid facts");
+
+        assert_eq!(facts.cache_write_5m_input_tokens, 6);
+        assert_eq!(facts.cache_write_1h_input_tokens, 4);
+    }
+
+    #[test]
+    fn claude_without_aggregate_sums_cache_write_details() {
+        let facts = claude_tokens(&serde_json::json!({
+            "input_tokens": 1,
+            "output_tokens": 1,
+            "cache_creation": {
+                "ephemeral_5m_input_tokens": 7,
+                "ephemeral_1h_input_tokens": 4
+            }
+        }))
+        .expect("valid facts");
+
+        assert_eq!(facts.cache_write_5m_input_tokens, 7);
+        assert_eq!(facts.cache_write_1h_input_tokens, 4);
+    }
+
+    #[test]
+    fn codex_accepts_all_supported_cache_write_paths() {
+        for value in [
+            serde_json::json!({
+                "input_tokens": 100,
+                "output_tokens": 20,
+                "cached_input_tokens": 30,
+                "cache_write_input_tokens": 10,
+                "total_tokens": 120
+            }),
+            serde_json::json!({
+                "input_tokens": 100,
+                "output_tokens": 20,
+                "cached_input_tokens": 30,
+                "cache_write_tokens": 10,
+                "total_tokens": 120
+            }),
+            serde_json::json!({
+                "input_tokens": 100,
+                "output_tokens": 20,
+                "cached_input_tokens": 30,
+                "input_tokens_details": { "cache_write_tokens": 10 },
+                "total_tokens": 120
+            }),
+            serde_json::json!({
+                "input_tokens": 100,
+                "output_tokens": 20,
+                "cached_input_tokens": 30,
+                "prompt_tokens_details": { "cache_write_tokens": 10 },
+                "total_tokens": 120
+            }),
+            serde_json::json!({
+                "input_tokens": 100,
+                "output_tokens": 20,
+                "cached_input_tokens": 30,
+                "token_details": { "cache_write_tokens": 10 },
+                "total_tokens": 120
+            }),
+        ] {
+            let facts = codex_tokens(&value).expect("valid facts");
+
+            assert_eq!(facts.uncached_input_tokens, 60);
+            assert_eq!(facts.cache_read_input_tokens, 30);
+            assert_eq!(facts.cache_write_5m_input_tokens, 10);
+        }
+    }
+
+    #[test]
+    fn codex_speed_state_switches_between_fast_and_standard_entries() {
+        let catalog = PricingCatalog::bundled();
+        let mut cursor = CodexCursor::default();
+        assert!(matches!(
+            parse_codex_line(
+                br#"{"type":"session_meta","payload":{"id":"session","model":"gpt-5.6-sol"}}"#,
+                &mut cursor,
+                &catalog
+            ),
+            ParsedLine::Ignored
+        ));
+        assert!(matches!(
+            parse_codex_line(
+                br#"{"type":"turn_context","payload":{"service_tier":"priority"}}"#,
+                &mut cursor,
+                &catalog
+            ),
+            ParsedLine::Ignored
+        ));
+        let ParsedLine::Fact { entry: fast, .. } = parse_codex_line(
+            br#"{"timestamp":"2026-07-30T01:02:03Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2},"total_token_usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}}"#,
+            &mut cursor,
+            &catalog,
+        ) else {
+            panic!("expected fast fact");
+        };
+        assert_eq!(fast.speed, UsageSpeed::Fast);
+
+        assert!(matches!(
+            parse_codex_line(
+                br#"{"type":"event_msg","payload":{"type":"thread_settings_applied","thread_settings":{"service_tier":"standard"}}}"#,
+                &mut cursor,
+                &catalog
+            ),
+            ParsedLine::Ignored
+        ));
+        let ParsedLine::Fact {
+            entry: standard, ..
+        } = parse_codex_line(
+            br#"{"timestamp":"2026-07-30T01:03:03Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":2,"output_tokens":2,"total_tokens":4},"total_token_usage":{"input_tokens":2,"output_tokens":2,"total_tokens":4}}}}"#,
+            &mut cursor,
+            &catalog,
+        ) else {
+            panic!("expected standard fact");
+        };
+        assert_eq!(standard.speed, UsageSpeed::Standard);
+    }
+
+    #[test]
+    fn claude_missing_speed_is_unknown_and_unpriced() {
+        let line = br#"{"type":"assistant","sessionId":"session","timestamp":"2026-07-30T01:02:03Z","message":{"id":"message","model":"claude-opus-5","stop_reason":"end_turn","usage":{"input_tokens":20,"output_tokens":10}}}"#;
+        let ParsedLine::Fact { entry, .. } = parse_claude_line(
+            line,
+            &mut ClaudeCursor::default(),
+            &PricingCatalog::bundled(),
+        ) else {
+            panic!("expected fact");
+        };
+
+        assert_eq!(entry.speed, UsageSpeed::Unknown);
+        assert_eq!(entry.api_equivalent_cost_nanos, None);
     }
 
     #[test]
