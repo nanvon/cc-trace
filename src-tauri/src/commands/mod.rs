@@ -7,6 +7,7 @@
 pub mod quota;
 pub mod settings;
 pub mod status;
+pub mod usage;
 pub mod window;
 
 #[cfg(debug_assertions)]
@@ -30,5 +31,17 @@ impl CommandError {
     /// 设置写入失败，界面必须保留原值并明确提示。
     pub const SETTINGS_WRITE_FAILED: Self = Self {
         code: "settingsWriteFailed",
+    };
+
+    pub const INVALID_USAGE_QUERY: Self = Self {
+        code: "invalidUsageQuery",
+    };
+
+    pub const USAGE_UNAVAILABLE: Self = Self {
+        code: "usageUnavailable",
+    };
+
+    pub const USAGE_SCAN_BUSY: Self = Self {
+        code: "usageScanBusy",
     };
 }

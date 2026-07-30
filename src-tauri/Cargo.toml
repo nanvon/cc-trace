@@ -43,6 +43,9 @@ reqwest = { version = "0.12", default-features = false, features = [
 # 身份变化判断用的单向摘要。account id 与邮箱本身永远不落盘，缓存里只存摘要，
 # 见 docs/额度领域模型.md 第 4.1 节。
 sha2 = "0.10"
+# GB 级本地 JSONL 的派生索引留在 Rust 层；bundled 固定 SQLite 能力并避免目标机
+# 系统库差异。前端不获得 SQL 权限，见 ADR-0018。
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Claude Code 的凭据可能只存在于系统钥匙串，见 ADR-0013。使用系统 API 读写，

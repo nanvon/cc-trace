@@ -9,6 +9,7 @@ pub mod platform;
 pub mod providers;
 pub mod scheduler;
 pub mod storage;
+pub mod usage;
 
 use std::sync::Arc;
 
@@ -104,6 +105,13 @@ pub fn run() {
         commands::settings::settings_read,
         commands::settings::settings_update,
         commands::settings::onboarding_complete,
+        commands::usage::usage_scan_start,
+        commands::usage::usage_scan_cancel,
+        commands::usage::usage_scan_status,
+        commands::usage::usage_get_summary,
+        commands::usage::usage_list_conversations,
+        commands::usage::usage_get_conversation,
+        commands::usage::usage_reprice,
         commands::window::window_open_main,
         commands::window::window_open_settings,
         commands::window::window_open_onboarding,
@@ -122,6 +130,13 @@ pub fn run() {
         commands::settings::settings_read,
         commands::settings::settings_update,
         commands::settings::onboarding_complete,
+        commands::usage::usage_scan_start,
+        commands::usage::usage_scan_cancel,
+        commands::usage::usage_scan_status,
+        commands::usage::usage_get_summary,
+        commands::usage::usage_list_conversations,
+        commands::usage::usage_get_conversation,
+        commands::usage::usage_reprice,
         commands::window::window_open_main,
         commands::window::window_open_settings,
         commands::window::window_open_onboarding,

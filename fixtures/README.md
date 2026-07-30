@@ -2,7 +2,7 @@
 
 本目录用于保存 CC Trace 自己的脱敏测试输入。
 
-- 只收录首版 Provider 额度解析和错误恢复所需样本。
+- 只收录首版 Provider 额度解析、错误恢复与本地用量索引所需样本。
 - 不复制真实 access token、refresh token、Cookie、账号标识或本机路径。
 - 从 cc-bar 提取样本时，只引用业务事实和预期结果，不复制旧缓存格式作为新应用输入。
 - 每个 Fixture 必须说明来源类型、脱敏方式、覆盖的行为和预期结果。
@@ -14,3 +14,5 @@
 - `providers/claude/`：按已确认的 legacy／dynamic 字段语义和旧版只读测试预期人工
   构造的 Claude Code OAuth Usage 样本；不是真实账号响应，详细来源与预期见目录内
   `README.md`。
+- `usage/`：按本机只读 JSONL 字段形态人工构造的 Codex／Claude Code 用量样本，覆盖
+  Token 标准化、tier／speed、重复事件与缓存 TTL；不含消息正文、真实路径或身份。

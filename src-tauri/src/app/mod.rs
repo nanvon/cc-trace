@@ -25,6 +25,7 @@ use crate::providers::synthetic::{Scenario, ScenarioHandle, SyntheticProvider};
 use crate::scheduler::params::jittered_seconds;
 use crate::scheduler::{ProviderRuntime, RefreshDecision, RefreshTrigger};
 use crate::storage::{CachedProvider, LoadIssue, QuotaCache, QuotaCacheStore, SettingsStore};
+use crate::usage::UsageService;
 
 /// 额度数据发生变化。载荷是完整的 [`QuotaState`]，前端不需要自己合并增量。
 pub const EVENT_QUOTA_UPDATED: &str = "quota://updated";
@@ -54,6 +55,7 @@ pub struct SettingsOutcome {
 pub struct AppCore {
     store: SettingsStore,
     cache_store: QuotaCacheStore,
+    usage: Arc<UsageService>,
     settings: Mutex<Settings>,
     runtimes: Mutex<BTreeMap<ProviderId, ProviderRuntime>>,
     /// 真实额度来源。release 构建里这是唯一的来源。
@@ -71,7 +73,8 @@ impl AppCore {
     pub fn new(config_dir: PathBuf) -> (Arc<Self>, Option<LoadIssue>) {
         let store = SettingsStore::new(config_dir.clone());
         let (settings, issue) = store.load();
-        let cache_store = QuotaCacheStore::new(config_dir);
+        let cache_store = QuotaCacheStore::new(config_dir.clone());
+        let usage = UsageService::new(config_dir);
 
         let mut providers: BTreeMap<ProviderId, Arc<dyn QuotaProvider>> = BTreeMap::new();
         providers.insert(ProviderId::Codex, CodexProvider::new());
@@ -98,6 +101,7 @@ impl AppCore {
         let core = Arc::new(Self {
             store,
             cache_store,
+            usage,
             settings: Mutex::new(settings),
             runtimes: Mutex::new(runtimes),
             providers,
@@ -191,6 +195,10 @@ impl AppCore {
     }
 
     // --- 额度状态 ---
+
+    pub fn usage(&self) -> Arc<UsageService> {
+        Arc::clone(&self.usage)
+    }
 
     /// 当前展示状态。读取时顺带检查快照是否已经老到该降级为 `stale`。
     pub fn quota_state(&self) -> QuotaState {
@@ -295,6 +303,18 @@ impl AppCore {
 
         tauri::async_runtime::spawn(async move {
             let outcome = source.fetch().await;
+            let quota_event = if core.uses_live_data() {
+                match &outcome {
+                    crate::providers::ProviderFetchOutcome::Success {
+                        identity_key: Some(identity_key),
+                        snapshot,
+                        ..
+                    } => Some((identity_key.clone(), snapshot.clone())),
+                    _ => None,
+                }
+            } else {
+                None
+            };
 
             {
                 let mut runtimes = core.runtimes.lock().expect("runtimes lock");
@@ -303,6 +323,10 @@ impl AppCore {
                 }
             }
 
+            if let Some((identity_key, snapshot)) = quota_event {
+                core.usage
+                    .record_quota_snapshot(provider, &identity_key, &snapshot);
+            }
             core.persist_cache();
             core.emit_refresh_state(&app, provider, RefreshState::Idle);
             core.emit_quota_state(&app);

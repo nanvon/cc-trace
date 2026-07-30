@@ -7,6 +7,7 @@ mod app_status;
 mod error;
 mod quota;
 mod settings;
+mod usage;
 
 pub use app_status::AppStatus;
 pub use error::{AppError, ErrorKind};
@@ -17,4 +18,9 @@ pub use quota::{
 pub use settings::{
     AppearancePreference, LanguagePreference, OnboardingState, RefreshInterval,
     SETTINGS_SCHEMA_VERSION, Settings, SettingsUpdate,
+};
+pub use usage::{
+    UsageConversation, UsageConversationPage, UsageConversationQuery, UsageCostTotals, UsageFilter,
+    UsageGroupBy, UsageRepriceResult, UsageScanState, UsageScanStatus, UsageSource, UsageSpeed,
+    UsageSummary, UsageSummaryQuery, UsageSummaryRow, UsageTokenTotals,
 };
