@@ -171,12 +171,11 @@ impl UsageService {
         let outcome = self.pricing.refresh(PricingRefreshMode::Manual).await;
         if outcome.did_update() {
             loop {
-                if self.scan_status().state == UsageScanState::Idle {
-                    if self.apply_pending_pricing_if_idle()?
-                        || self.scan_status().state == UsageScanState::Idle
-                    {
-                        break;
-                    }
+                if self.scan_status().state == UsageScanState::Idle
+                    && (self.apply_pending_pricing_if_idle()?
+                        || self.scan_status().state == UsageScanState::Idle)
+                {
+                    break;
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             }

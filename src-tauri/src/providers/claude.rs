@@ -573,11 +573,9 @@ impl ClaudeProvider {
             // refresh，见 ADR-0007。
             Err(RefreshFailure::Revoked) => {
                 tokio::time::sleep(SOFT_RECOVERY_DELAY).await;
-                return recovered_credentials(refresh_token).ok_or(
-                    ProviderFetchOutcome::Failed {
-                        kind: ErrorKind::Credentials,
-                    },
-                );
+                return recovered_credentials(refresh_token).ok_or(ProviderFetchOutcome::Failed {
+                    kind: ErrorKind::Credentials,
+                });
             }
             Err(RefreshFailure::Outcome(outcome)) => return Err(outcome),
         };

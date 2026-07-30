@@ -203,7 +203,10 @@ pub fn write_back_to(
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
 
     let object = root.as_object_mut().ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidData, "codex auth root is not an object")
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "codex auth root is not an object",
+        )
     })?;
     let token_object = object
         .get_mut("tokens")
@@ -408,7 +411,9 @@ mod tests {
         );
 
         assert_eq!(
-            result.expect_err("corrupt external credentials must fail closed").kind(),
+            result
+                .expect_err("corrupt external credentials must fail closed")
+                .kind(),
             io::ErrorKind::InvalidData
         );
         assert_eq!(
@@ -435,7 +440,9 @@ mod tests {
         );
 
         assert_eq!(
-            result.expect_err("a missing source must stay missing").kind(),
+            result
+                .expect_err("a missing source must stay missing")
+                .kind(),
             io::ErrorKind::NotFound
         );
         assert!(!path.exists());

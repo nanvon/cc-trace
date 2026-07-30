@@ -259,7 +259,7 @@ impl PricingCatalog {
             .collect::<Vec<_>>();
         let mut multiplier_body = String::new();
         let mut keys = known_usage.iter().collect::<Vec<_>>();
-        keys.sort_by(|left, right| left.persisted_key().cmp(&right.persisted_key()));
+        keys.sort_by_key(|key| key.persisted_key());
         for key in keys {
             use std::fmt::Write as _;
             let (_, multiplier) =
@@ -779,10 +779,7 @@ fn remote_entry(
         })
         .map_or(10_000, |entry| entry.us_inference_multiplier_bps);
     let cache_write_1h = if source == UsageSource::Claude {
-        price
-            .uncached_input_nanos_per_m_tok
-            .checked_mul(2)
-            .unwrap_or(u64::MAX)
+        price.uncached_input_nanos_per_m_tok.saturating_mul(2)
     } else {
         price.cache_write_nanos_per_m_tok
     };

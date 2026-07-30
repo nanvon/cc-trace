@@ -212,19 +212,11 @@ pub fn write_back(expected: &ClaudeCredentials, tokens: &RefreshedTokens) -> io:
                     ));
                 }
             };
-            let updated = merged_payload(
-                existing.expose(),
-                expected,
-                tokens,
-                ClaudeSource::Keychain,
-            )?;
+            let updated =
+                merged_payload(existing.expose(), expected, tokens, ClaudeSource::Keychain)?;
             let serialized = serde_json::to_string(&updated)
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-            keychain::write_claude_credentials(
-                account,
-                &existing,
-                &Secret::new(serialized),
-            )
+            keychain::write_claude_credentials(account, &existing, &Secret::new(serialized))
         }
     }
 }
@@ -491,8 +483,7 @@ mod tests {
     fn write_back_preserves_snake_case_token_field_names() {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join(".credentials.json");
-        let fixture =
-            r#"{"claudeAiOauth":{"access_token":"old-a","refresh_token":"old-r"}}"#;
+        let fixture = r#"{"claudeAiOauth":{"access_token":"old-a","refresh_token":"old-r"}}"#;
         fs::write(&path, fixture).expect("seed credentials");
 
         write_back_to_file(
@@ -544,8 +535,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join(".credentials.json");
         let expected = expected_credentials(file_fixture());
-        let changed =
-            r#"{"claudeAiOauth":{"accessToken":"newer-a","refreshToken":"newer-r"}}"#;
+        let changed = r#"{"claudeAiOauth":{"accessToken":"newer-a","refreshToken":"newer-r"}}"#;
         fs::write(&path, changed).expect("seed changed credentials");
 
         let result = write_back_to_file(

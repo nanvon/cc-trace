@@ -115,14 +115,14 @@ enum SourceRefreshOutcome {
 }
 
 impl PricingSource {
-    fn state<'a>(self, payload: &'a PricingCachePayload) -> &'a PricingSourceState {
+    fn state(self, payload: &PricingCachePayload) -> &PricingSourceState {
         match self {
             Self::LiteLlm => &payload.lite_llm,
             Self::ModelsDev => &payload.models_dev,
         }
     }
 
-    fn state_mut<'a>(self, payload: &'a mut PricingCachePayload) -> &'a mut PricingSourceState {
+    fn state_mut(self, payload: &mut PricingCachePayload) -> &mut PricingSourceState {
         match self {
             Self::LiteLlm => &mut payload.lite_llm,
             Self::ModelsDev => &mut payload.models_dev,
@@ -646,7 +646,7 @@ fn scaled_decimal_nanos(value: &Value, scale_power: i32) -> Option<u64> {
         let divisor = 10_u128.checked_pow(decimal_power.unsigned_abs())?;
         let quotient = coefficient / divisor;
         let remainder = coefficient % divisor;
-        quotient.checked_add(u128::from(remainder >= (divisor + 1) / 2))?
+        quotient.checked_add(u128::from(remainder >= divisor.div_ceil(2)))?
     };
     u64::try_from(scaled).ok()
 }

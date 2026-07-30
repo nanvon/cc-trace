@@ -340,11 +340,9 @@ impl CodexProvider {
             // 出现一份不同且仍有效的新 token 时采用；否则维持凭据类错误。
             Err(RefreshFailure::Revoked) => {
                 tokio::time::sleep(SOFT_RECOVERY_DELAY).await;
-                return recovered_credentials(refresh_token).ok_or(
-                    ProviderFetchOutcome::Failed {
-                        kind: ErrorKind::Credentials,
-                    },
-                );
+                return recovered_credentials(refresh_token).ok_or(ProviderFetchOutcome::Failed {
+                    kind: ErrorKind::Credentials,
+                });
             }
             Err(RefreshFailure::Outcome(outcome)) => return Err(outcome),
         };

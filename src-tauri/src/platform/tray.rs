@@ -259,10 +259,7 @@ mod tests {
 
     #[test]
     fn offline_and_error_hide_even_a_stale_snapshot_from_the_system_area() {
-        for availability in [
-            ProviderAvailability::Offline,
-            ProviderAvailability::Error,
-        ] {
+        for availability in [ProviderAvailability::Offline, ProviderAvailability::Error] {
             let mut provider = with_windows(
                 ProviderId::Codex,
                 vec![window(QuotaWindowKind::FiveHour, 62.0)],
