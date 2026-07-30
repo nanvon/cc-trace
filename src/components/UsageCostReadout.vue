@@ -43,10 +43,9 @@ function periodPresentation(
       key,
       label,
       visible: "—",
-      description: t(
-        allUnpriced ? "compact.usage.amountUnpriced" : "compact.usage.amountPending",
-        { period: label },
-      ),
+      description: t(allUnpriced ? "compact.usage.amountUnpriced" : "compact.usage.amountPending", {
+        period: label,
+      }),
     };
   }
 

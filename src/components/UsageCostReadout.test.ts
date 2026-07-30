@@ -27,11 +27,7 @@ function costs(overrides: Partial<UsageProviderCosts> = {}): UsageProviderCosts 
   };
 }
 
-function render(
-  props: UsageProviderCosts,
-  locale: "zh-CN" | "en" = "zh-CN",
-  scanning = false,
-) {
+function render(props: UsageProviderCosts, locale: "zh-CN" | "en" = "zh-CN", scanning = false) {
   const i18n = createI18n({
     legacy: false,
     locale,
