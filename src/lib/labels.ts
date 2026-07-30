@@ -19,3 +19,25 @@ export function windowLabel(t: ComposerTranslation, window: QuotaWindow): string
   }
   return t(`quota.window.${window.kind}`);
 }
+
+/**
+ * 读数位上的窗口短码：`5HOUR`、`WEEKLY`、`ALL`、`OPUS`。
+ *
+ * 刻意语言中立，两种界面语言下都是大写拉丁短码（ADR-0019）。它是定宽读数行的一部分，
+ * 中文长句「Opus 每周窗口」在 380px 面板里放不下。完整窗口名仍由 `windowLabel`
+ * 提供给 `title` 与无障碍名称，因此短码不是这个信息的唯一载体。
+ *
+ * Claude Code 的周窗口是全模型合计，读作 `ALL`；Codex 的周窗口就是周窗口。
+ */
+export function windowCode(provider: ProviderId, window: QuotaWindow): string {
+  switch (window.kind) {
+    case "fiveHour":
+      return "5HOUR";
+    case "weekly":
+      return provider === "claude" ? "ALL" : "WEEKLY";
+    case "modelWeekly":
+      return window.displayName?.toUpperCase() ?? "MODEL";
+    default:
+      return window.displayName?.toUpperCase() ?? "CURRENT";
+  }
+}

@@ -1,8 +1,19 @@
 import { describe, expect, it } from "vitest";
 
-import { formatCountdown, formatPast, formatPercent } from "./format";
+import {
+  compactAge,
+  compactDuration,
+  compactReset,
+  formatCountdown,
+  formatPast,
+  formatPercent,
+  splitPercent,
+} from "./format";
 
 const NOW = new Date("2026-07-25T12:00:00Z");
+const MINUTE = 60_000;
+const HOUR = 60 * MINUTE;
+const DAY = 24 * HOUR;
 
 describe("formatPercent", () => {
   it("rounds to whole numbers", () => {
@@ -16,6 +27,82 @@ describe("formatPercent", () => {
 
   it("shows a real zero as zero", () => {
     expect(formatPercent("en", 0)).toBe("0%");
+  });
+});
+
+describe("splitPercent", () => {
+  it("separates the number from the percent sign", () => {
+    expect(splitPercent("en", 84)).toEqual({ value: "84", unit: "%" });
+    expect(splitPercent("zh-CN", 84)).toEqual({ value: "84", unit: "%" });
+  });
+
+  it("keeps the small-remainder marker on the number side", () => {
+    expect(splitPercent("en", 0.4)).toEqual({ value: "<1", unit: "%" });
+  });
+
+  it("stays consistent with the joined form", () => {
+    const parts = splitPercent("en", 26);
+    expect(`${parts.value}${parts.unit}`).toBe(formatPercent("en", 26));
+  });
+});
+
+describe("compactDuration", () => {
+  it("never shows seconds", () => {
+    expect(compactDuration(30_000)).toBe("<1m");
+    expect(compactDuration(0)).toBe("<1m");
+  });
+
+  it("uses minutes inside the first hour", () => {
+    expect(compactDuration(43 * MINUTE)).toBe("43m");
+  });
+
+  it("keeps at most the two highest units", () => {
+    expect(compactDuration(HOUR + 42 * MINUTE)).toBe("1h42m");
+    expect(compactDuration(6 * DAY + 2 * HOUR + 59 * MINUTE)).toBe("6d2h");
+  });
+
+  it("drops an empty lower unit instead of writing a zero", () => {
+    expect(compactDuration(4 * HOUR)).toBe("4h");
+    expect(compactDuration(3 * DAY)).toBe("3d");
+  });
+
+  // 定宽是这个格式存在的理由，上界必须被守住：`23h59m` 是最长的分支
+  it("stays within six characters across every branch", () => {
+    const samples = [
+      30_000,
+      MINUTE,
+      59 * MINUTE,
+      HOUR + 42 * MINUTE,
+      23 * HOUR + 59 * MINUTE,
+      3 * DAY + 22 * HOUR,
+      400 * DAY,
+    ];
+    for (const ms of samples) {
+      expect(compactDuration(ms).length).toBeLessThanOrEqual(6);
+    }
+  });
+
+  it("treats an elapsed deadline as under a minute, not a negative", () => {
+    expect(compactDuration(-5 * HOUR)).toBe("<1m");
+  });
+});
+
+describe("compactReset", () => {
+  it("counts down to the reset moment", () => {
+    const iso = new Date(NOW.getTime() + 3 * DAY + 22 * HOUR).toISOString();
+    expect(compactReset(iso, NOW)).toBe("3d22h");
+  });
+});
+
+describe("compactAge", () => {
+  it("hands the last minute back to i18n instead of counting seconds", () => {
+    const iso = new Date(NOW.getTime() - 30_000).toISOString();
+    expect(compactAge(iso, NOW).kind).toBe("justNow");
+  });
+
+  it("reports elapsed time in the compact form", () => {
+    const iso = new Date(NOW.getTime() - MINUTE).toISOString();
+    expect(compactAge(iso, NOW)).toEqual({ kind: "compact", text: "1m" });
   });
 });
 

@@ -3,8 +3,12 @@
  * Quota Progress —— CC Trace 的签名元素。
  *
  * 两种排布，见 `docs/设计方向与状态规范.md` 第 7.2 节：
- * - `primary`：读数行（大百分比 + 窗口名 + 重置时间）在上，全宽进度条在下。
- * - `secondary`：单行（窗口名 + 细进度条 + 百分比 + 重置时间）。
+ * - `primary`：左列是大百分比与窗口短码，右列是全宽进度条、重置倒计时与「重置」标签。
+ * - `secondary`：单行（短码 + 细进度条 + 百分比 + 倒计时），进度条吸收剩余宽度。
+ *
+ * 读数一律定宽（ADR-0019）：短码是语言中立的大写拉丁短码，重置时间是紧凑倒计时
+ * （`6d2h`）。会随日期变宽的绝对时钟放不进 380px 面板，完整窗口名与绝对时刻改由
+ * `title` 与无障碍名称承担，因此短码不是这两个信息的唯一载体。
  *
  * 颜色由**余量基调**驱动（`lib/quotaTone.ts`），不是状态基调：状态基调负责提示条与
  * 状态词，余量基调负责这里的读数与填充，见 ADR-0017。快照不新鲜时自动降级为中性。
@@ -12,14 +16,17 @@
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 
-import { formatAbsolute, formatPercent, formatResetClock } from "../lib/format";
+import { formatAbsolute, formatPercent, splitPercent } from "../lib/format";
 import { displayQuotaTone } from "../lib/quotaTone";
 import type { RailTreatment } from "../lib/status";
+import { useTimeText } from "../lib/useTimeText";
 
 const props = withDefaults(
   defineProps<{
-    /** 已本地化的窗口名。`primary` 排布里它出现在读数右侧。 */
+    /** 已本地化的完整窗口名。只进 `title` 与无障碍名称，不出现在读数行。 */
     label: string;
+    /** 读数行上显示的窗口短码，如 `5HOUR`、`ALL`。 */
+    code: string;
     remainingPercent: number | null;
     /** ISO 8601 UTC。 */
     resetsAt: string | null;
@@ -37,15 +44,23 @@ const props = withDefaults(
 );
 
 const { t, locale } = useI18n();
+const { reset } = useTimeText();
 
 const hasValue = computed(() => props.remainingPercent !== null && props.treatment !== "loading");
 
 const tone = computed(() => displayQuotaTone(props.remainingPercent, props.treatment));
 
+/** 单行读数用合成形态；大读数用拆开的形态给数字和 `%` 分设字号。 */
 const valueText = computed(() =>
   hasValue.value && props.remainingPercent !== null
     ? formatPercent(locale.value, props.remainingPercent)
     : t("quota.noValue"),
+);
+
+const valueParts = computed(() =>
+  hasValue.value && props.remainingPercent !== null
+    ? splitPercent(locale.value, props.remainingPercent)
+    : { value: t("quota.noValue"), unit: "" },
 );
 
 /** 进度条填充比例。没有数值时为 0，且不渲染填充块。 */
@@ -55,16 +70,17 @@ const fillPercent = computed(() =>
     : 0,
 );
 
-const resetText = computed(() => {
-  if (!props.resetsAt) {
-    return hasValue.value ? t("quota.resetsUnknown") : "";
-  }
-  return t("quota.resetsAt", { time: formatResetClock(locale.value, props.resetsAt) });
-});
+/** 定宽倒计时。缺失时给占位符，旁边的「重置」标签仍在，语义不丢。 */
+const resetText = computed(() => reset(props.resetsAt));
 
-/** 相对时间必须同时提供绝对值，这里通过 title 暴露完整本地时刻。 */
-const resetTitle = computed(() =>
-  props.resetsAt ? formatAbsolute(locale.value, props.resetsAt) : undefined,
+/**
+ * 紧凑倒计时对屏幕阅读器没有意义，也不满足「相对时间必须同时提供绝对值」。
+ * 两者都由这条完整说法承担：`title` 给鼠标，`aria-label` 给辅助技术。
+ */
+const resetDescription = computed(() =>
+  props.resetsAt
+    ? t("quota.resetsAt", { time: formatAbsolute(locale.value, props.resetsAt) })
+    : t("quota.resetsUnknown"),
 );
 
 const valueTextForA11y = computed(() =>
@@ -84,30 +100,45 @@ const valueTextForA11y = computed(() =>
       `progress--tone-${tone}`,
     ]"
   >
-    <!-- primary：读数在上、全宽轨道在下。窗口名与重置时间同一行，不遮蔽彼此 -->
+    <!-- primary：左列读数与短码，右列进度条与倒计时 -->
     <template v-if="emphasis === 'primary'">
-      <div class="progress__reading">
-        <span class="progress__value numeric">{{ valueText }}</span>
-        <span v-if="label" class="progress__window">{{ label }}</span>
-        <span class="progress__reset numeric" :title="resetTitle">{{ resetText }}</span>
-      </div>
+      <p class="progress__headline">
+        <span class="progress__value numeric">
+          <span class="progress__number">{{ valueParts.value }}</span>
+          <span v-if="valueParts.unit" class="progress__unit">{{ valueParts.unit }}</span>
+        </span>
+        <!-- 短码是完整窗口名的冗余视觉形态：辅助技术从进度条名称拿到完整名 -->
+        <span v-if="code" class="progress__code" :title="label" aria-hidden="true">{{ code }}</span>
+      </p>
 
-      <div
-        class="progress__track"
-        role="progressbar"
-        :aria-label="a11yLabel"
-        aria-valuemin="0"
-        aria-valuemax="100"
-        :aria-valuenow="hasValue ? fillPercent : undefined"
-        :aria-valuetext="valueTextForA11y"
-      >
-        <span v-if="hasValue" class="progress__fill" :style="{ inlineSize: `${fillPercent}%` }" />
+      <div class="progress__meter">
+        <div
+          class="progress__track"
+          role="progressbar"
+          :aria-label="a11yLabel"
+          aria-valuemin="0"
+          aria-valuemax="100"
+          :aria-valuenow="hasValue ? fillPercent : undefined"
+          :aria-valuetext="valueTextForA11y"
+        >
+          <span v-if="hasValue" class="progress__fill" :style="{ inlineSize: `${fillPercent}%` }" />
+        </div>
+
+        <p class="progress__readout">
+          <span
+            class="progress__reset numeric"
+            :title="resetDescription"
+            :aria-label="resetDescription"
+            >{{ resetText }}</span
+          >
+          <span class="progress__reset-label" aria-hidden="true">{{ t("quota.resetLabel") }}</span>
+        </p>
       </div>
     </template>
 
-    <!-- secondary：单行，轨道在中间吸收剩余宽度 -->
+    <!-- secondary：单行，短码占固定列让多行左边缘对齐，轨道吸收剩余宽度 -->
     <div v-else class="progress__row">
-      <span class="progress__window">{{ label }}</span>
+      <span class="progress__code" :title="label" aria-hidden="true">{{ code }}</span>
 
       <div
         class="progress__track"
@@ -122,17 +153,136 @@ const valueTextForA11y = computed(() =>
       </div>
 
       <span class="progress__value numeric">{{ valueText }}</span>
-      <span class="progress__reset numeric" :title="resetTitle">{{ resetText }}</span>
+      <span
+        class="progress__reset numeric"
+        :title="resetDescription"
+        :aria-label="resetDescription"
+        >{{ resetText }}</span
+      >
     </div>
   </div>
 </template>
 
 <style scoped>
-.progress__reading {
+/* 读数列按内容取宽，进度条列吃掉剩下的；minmax 里的 0 是让它真的可以收缩 */
+.progress--primary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--space-4);
+  align-items: center;
+}
+
+.progress__headline {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-1);
+  margin: 0;
+}
+
+/* 数字与 % 按基线对齐：% 更小，顶对齐会让它浮在半空 */
+.progress__value {
   display: flex;
   align-items: baseline;
+  font-weight: 650;
+}
+
+.progress--primary .progress__number {
+  font-size: 2rem;
+  line-height: 1;
+  letter-spacing: -0.035em;
+}
+
+.progress--primary.progress--full .progress__number {
+  font-size: 2.5rem;
+  letter-spacing: -0.04em;
+}
+
+/* % 是单位不是读数，压到一半字号并让它退后半档 */
+.progress--primary .progress__unit {
+  font-size: 1rem;
+  opacity: 0.75;
+}
+
+.progress--primary.progress--full .progress__unit {
+  font-size: 1.25rem;
+}
+
+.progress--secondary .progress__value {
+  flex: 0 0 auto;
+  font-size: 0.75rem;
+}
+
+.progress--secondary.progress--full .progress__value {
+  font-size: 0.8125rem;
+}
+
+/*
+ * 窗口短码。字距是给大写拉丁字母补的，短码永远是拉丁大写，因此不随界面语言归零
+ * ——这一点与 `.utility-label` 的 `:lang(zh)` 例外不同。
+ */
+.progress__code {
+  color: var(--text-secondary);
+  font-size: 0.625rem;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.progress--full .progress__code {
+  font-size: 0.6875rem;
+}
+
+/* 固定列让多条次级额度的短码、轨道起点、读数全部竖向对齐 */
+.progress--secondary .progress__code {
+  flex: 0 0 3.5rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.progress__meter {
+  display: grid;
   gap: var(--space-2);
-  margin-block-end: var(--space-3);
+}
+
+/* 倒计时与「重置」几乎贴在一起：它们是同一个读数的两行 */
+.progress__readout {
+  display: grid;
+  justify-items: start;
+  gap: 1px;
+  margin: 0;
+}
+
+.progress__reset {
+  color: var(--text-primary);
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.progress--full .progress__reset {
+  font-size: 0.8125rem;
+}
+
+/* 行尾读数右对齐并留出最长倒计时的宽度，`43m` 与 `4h37m` 之间不推动轨道 */
+.progress--secondary .progress__reset {
+  flex: 0 0 auto;
+  min-inline-size: 2.75rem;
+  color: var(--text-secondary);
+  font-size: 0.6875rem;
+  font-weight: 400;
+  text-align: end;
+}
+
+.progress__reset-label {
+  color: var(--text-secondary);
+  font-size: 0.625rem;
+  line-height: 1.2;
+}
+
+.progress--full .progress__reset-label {
+  font-size: 0.6875rem;
 }
 
 .progress__row {
@@ -141,69 +291,10 @@ const valueTextForA11y = computed(() =>
   gap: var(--space-2);
 }
 
-.progress__value {
-  font-weight: 700;
-}
-
-.progress--primary .progress__value {
-  font-size: 1.4375rem;
-  line-height: 1;
-  letter-spacing: -0.03em;
-}
-
-.progress--primary.progress--full .progress__value {
-  font-size: 1.9375rem;
-  letter-spacing: -0.035em;
-}
-
-.progress--secondary .progress__value {
-  flex: 0 0 auto;
-  font-size: 0.71875rem;
-  font-weight: 650;
-}
-
-.progress--secondary.progress--full .progress__value {
-  font-size: 0.8125rem;
-}
-
-.progress__window {
-  color: var(--text-secondary);
-  font-size: 0.75rem;
-}
-
-.progress--full .progress__window {
-  font-size: 0.8125rem;
-}
-
-.progress--secondary .progress__window {
-  /* 窗口名不参与压缩：先让轨道让位，长模型名再省略 */
-  flex: 0 1 auto;
-  font-size: 0.71875rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* 重置时间推到行尾，与读数保持在同一基线上 */
-.progress__reading .progress__reset {
-  margin-inline-start: auto;
-}
-
-.progress__reset {
-  color: var(--text-secondary);
-  font-size: 0.75rem;
-  white-space: nowrap;
-}
-
-.progress--secondary .progress__reset {
-  flex: 0 0 auto;
-  font-size: 0.6875rem;
-}
-
 /* 圆角进度条：层级靠体量表达，不是直轨道 */
 .progress__track {
   position: relative;
-  block-size: 0.5rem;
+  block-size: 0.4375rem;
   background: var(--track-background);
   border-radius: 999px;
   overflow: hidden;
@@ -212,7 +303,7 @@ const valueTextForA11y = computed(() =>
 .progress--secondary .progress__track {
   flex: 1 1 auto;
   min-inline-size: 1.75rem;
-  block-size: 0.25rem;
+  block-size: 0.15625rem;
 }
 
 .progress__fill {

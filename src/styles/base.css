@@ -168,9 +168,14 @@ button {
   color: var(--text-secondary);
 }
 
-/* 所有会变化的数字：宽度不随刷新跳动 */
+/*
+ * 所有会变化的数字：宽度不随刷新跳动。
+ *
+ * 刻意只切数字变体、不换字体族（ADR-0019）：系统字体的 tabular-nums 已经保证等宽，
+ * 而等宽字体族会让读数比比例字体宽约一成——在 380px 面板里这点余量正好是溢出与否
+ * 的差别；中英文混排（「1m 前已刷新」）还会因为 CJK 回退而字形错位。
+ */
 .numeric {
-  font-family: var(--font-data);
   font-variant-numeric: tabular-nums;
 }
 

@@ -16,7 +16,7 @@ import {
   secondaryWindows,
   type ProviderSnapshot,
 } from "../features/quota/contracts";
-import { providerLabel, windowLabel } from "../lib/labels";
+import { providerLabel, windowCode, windowLabel } from "../lib/labels";
 import { hasQuotaValues, presentProvider } from "../lib/status";
 import QuotaProgress from "./QuotaProgress.vue";
 import StatusExplanation from "./StatusExplanation.vue";
@@ -31,7 +31,12 @@ const { t } = useI18n();
 const presentation = computed(() => presentProvider(props.provider));
 const name = computed(() => providerLabel(t, props.provider.provider));
 
-/** 套餐名单独成 chip；账号是次要信息，长了就省略。 */
+/**
+ * 身份是一段并置的次要信息：账号在前、套餐在后。
+ *
+ * 宽度不足时收缩的是账号，不是套餐——套餐决定额度上限，属于要读的信息；
+ * 账号只用来确认「是不是我这个号」，截断后仍然认得出来。
+ */
 const plan = computed(() => props.provider.identity?.plan ?? null);
 const account = computed(() => props.provider.identity?.accountHint ?? null);
 
@@ -54,13 +59,17 @@ const showsExplanation = computed(() =>
   <article class="lane" :class="[`lane--${variant}`, `lane--${presentation.tone}`]">
     <header class="lane__header">
       <h3 class="lane__name" translate="no">{{ name }}</h3>
-      <span v-if="plan" class="chip" translate="no">{{ plan }}</span>
-      <span v-if="account" class="lane__account" :title="account">{{ account }}</span>
+
+      <p v-if="account || plan" class="lane__identity">
+        <span v-if="account" class="lane__account" :title="account">{{ account }}</span>
+        <span v-if="plan" class="lane__plan" translate="no">{{ plan }}</span>
+      </p>
     </header>
 
     <template v-if="showsRails">
       <QuotaProgress
         :label="primary ? windowLabel(t, primary) : ''"
+        :code="primary ? windowCode(provider.provider, primary) : ''"
         :remaining-percent="primary?.remainingPercent ?? null"
         :resets-at="primary?.resetsAt ?? null"
         :treatment="presentation.rail"
@@ -77,6 +86,7 @@ const showsExplanation = computed(() =>
           :key="window.id"
           class="lane__secondary"
           :label="windowLabel(t, window)"
+          :code="windowCode(provider.provider, window)"
           :remaining-percent="window.remainingPercent"
           :resets-at="window.resetsAt"
           :treatment="presentation.rail"
@@ -127,6 +137,7 @@ const showsExplanation = computed(() =>
 }
 
 .lane__name {
+  flex: 0 0 auto;
   margin: 0;
   font-size: 0.875rem;
   font-weight: 650;
@@ -139,20 +150,41 @@ const showsExplanation = computed(() =>
   letter-spacing: -0.014em;
 }
 
-/* 账号靠右，长账号名省略而不换行，也不挤压 Provider 名 */
-.lane__account {
-  margin-inline-start: auto;
-  max-inline-size: 42%;
+/*
+ * 身份紧跟在 Provider 名之后，吃掉整行剩余宽度——不设百分比上限：380px 下的 42%
+ * 只有约 140px，常见邮箱刚好卡在临界，会无理由地省略。
+ */
+.lane__identity {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  min-inline-size: 0;
+  margin: 0;
   color: var(--text-secondary);
   font-size: 0.6875rem;
+}
+
+.lane--full .lane__identity {
+  font-size: 0.8125rem;
+}
+
+/* 只有账号会被压缩，套餐永远完整 */
+.lane__account {
+  min-inline-size: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.lane--full .lane__account {
-  max-inline-size: 45%;
-  font-size: 0.8125rem;
+.lane__plan {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+/* 分隔符由样式提供：`·` 语言中立，不需要为它拼接文案 */
+.lane__account + .lane__plan::before {
+  content: "·";
+  margin-inline-end: var(--space-1);
 }
 
 /* 专项额度与主额度之间用虚线分隔：同一 Provider 内部的次级信息，不是新的分区 */
@@ -166,17 +198,18 @@ const showsExplanation = computed(() =>
   border-block-start: 1px dashed var(--border-subtle);
 }
 
+/* 与大读数同体量：无额度时骨架不塌陷，位置也不跳 */
 .lane__blank {
   margin: 0;
   color: var(--text-secondary);
-  font-size: 1.4375rem;
-  font-weight: 700;
+  font-size: 2rem;
+  font-weight: 650;
   line-height: 1;
-  letter-spacing: -0.03em;
+  letter-spacing: -0.035em;
 }
 
 .lane__blank--full {
-  font-size: 1.9375rem;
-  letter-spacing: -0.035em;
+  font-size: 2.5rem;
+  letter-spacing: -0.04em;
 }
 </style>

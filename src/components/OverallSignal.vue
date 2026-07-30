@@ -25,7 +25,7 @@ const props = defineProps<{
 }>();
 
 const { t } = useI18n();
-const { past } = useTimeText();
+const { refreshed } = useTimeText();
 
 const leader = computed(() => presentOverall(props.providers));
 
@@ -78,8 +78,7 @@ const lastSuccess = computed(() => {
     .map((provider) => provider.lastSuccessAt)
     .filter((value): value is string => value !== null)
     .sort();
-  const latest = timestamps.at(-1) ?? null;
-  return latest ? t("quota.lastSuccess", { time: past(latest) }) : t("quota.neverRefreshed");
+  return refreshed(timestamps.at(-1) ?? null);
 });
 </script>
 
@@ -151,9 +150,16 @@ const lastSuccess = computed(() => {
   letter-spacing: -0.03em;
 }
 
+/*
+ * 单行且省略：头部右侧的图标按钮组不收缩，副标题一换行就会把面板顶高
+ * ——而这一行只是新鲜度，不值得为它多占一行。
+ */
 .signal__meta {
   margin: 1px 0 0;
+  overflow: hidden;
   font-size: 0.75rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .signal--full .signal__meta {
