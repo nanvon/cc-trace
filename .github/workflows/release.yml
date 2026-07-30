@@ -4,7 +4,7 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
 
 concurrency:
   group: release-${{ github.ref }}
@@ -41,20 +41,20 @@ jobs:
             platform: macos-15
             target: aarch64-apple-darwin
             bundles: dmg
-            apple_signing_identity: '-'
-            asset_name_pattern: 'CC-Trace_[version]_macOS-Apple-Silicon[ext]'
+            apple_signing_identity: "-"
+            asset_name_pattern: "CC-Trace_[version]_macOS-Apple-Silicon[ext]"
           - name: macOS Intel
             platform: macos-15-intel
             target: x86_64-apple-darwin
             bundles: dmg
-            apple_signing_identity: '-'
-            asset_name_pattern: 'CC-Trace_[version]_macOS-Intel[ext]'
+            apple_signing_identity: "-"
+            asset_name_pattern: "CC-Trace_[version]_macOS-Intel[ext]"
           - name: Windows x64
             platform: windows-latest
             target: x86_64-pc-windows-msvc
             bundles: nsis
-            apple_signing_identity: ''
-            asset_name_pattern: 'CC-Trace_[version]_Windows-x64-Setup[ext]'
+            apple_signing_identity: ""
+            asset_name_pattern: "CC-Trace_[version]_Windows-x64-Setup[ext]"
 
     steps:
       - uses: actions/checkout@v4
@@ -63,7 +63,7 @@ jobs:
         if: runner.os == 'macOS'
         uses: maxim-lobanov/setup-xcode@v1
         with:
-          xcode-version: '26'
+          xcode-version: "26"
 
       - name: Verify macOS 26 SDK
         if: runner.os == 'macOS'
@@ -110,7 +110,7 @@ jobs:
           APPLE_SIGNING_IDENTITY: ${{ matrix.apple_signing_identity }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: 'CC Trace ${{ github.ref_name }}'
+          releaseName: "CC Trace ${{ github.ref_name }}"
           releaseBody: |
             自动构建产物：
 
@@ -124,7 +124,7 @@ jobs:
           releaseDraft: true
           prerelease: false
           generateReleaseNotes: true
-          args: '--target ${{ matrix.target }} --bundles ${{ matrix.bundles }}'
+          args: "--target ${{ matrix.target }} --bundles ${{ matrix.bundles }}"
           releaseAssetNamePattern: ${{ matrix.asset_name_pattern }}
 
   checksums:

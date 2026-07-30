@@ -1,11 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  primaryWindow,
-  secondaryWindows,
-  type QuotaSnapshot,
-  type QuotaWindow,
-} from "./contracts";
+import { primaryWindow, secondaryWindows, type QuotaSnapshot, type QuotaWindow } from "./contracts";
 
 function window(id: string, isPrimary: boolean): QuotaWindow {
   return {
