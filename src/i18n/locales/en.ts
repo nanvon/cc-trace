@@ -84,6 +84,19 @@ export default {
       attention: "Something needs attention",
       idle: "Not connected yet",
     },
+    usage: {
+      today: "today",
+      thisWeek: "this week",
+      costLabel: "Cost",
+      amountExact:
+        "{period} API-equivalent cost is {amount}. This is not the amount paid for a subscription.",
+      amountPending: "The {period} cost has not been indexed yet.",
+      amountUnpriced: "No public price matches the {period} usage.",
+      scanScanning: "Scanning local Token usage",
+      scanComplete: "Local Token usage updated",
+      scanPartial: "Local Token usage updated, but some data could not be read",
+      scanUnavailable: "Local Token usage is temporarily unavailable",
+    },
   },
 
   main: {
@@ -155,6 +168,7 @@ export default {
     remaining: "{percent} remaining",
     closePanel: "Close panel",
     statusRegion: "Quota status",
+    apiEquivalentCosts: "{provider} API-equivalent cost for today and this week",
   },
 
   preview: {

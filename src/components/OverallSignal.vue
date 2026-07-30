@@ -126,7 +126,7 @@ const lastSuccess = computed(() => {
 
 .signal__title {
   margin: 0;
-  font-weight: 700;
+  font-weight: 600;
   letter-spacing: -0.01em;
 }
 
@@ -140,13 +140,14 @@ const lastSuccess = computed(() => {
 }
 
 .signal--compact .signal__title {
-  font-size: 0.875rem;
+  font-size: 0.8125rem;
   white-space: nowrap;
 }
 
 /* 窗口标题保持系统体量，不做营销型超大标题 */
 .signal--full .signal__title {
   font-size: 1.4375rem;
+  font-weight: 700;
   letter-spacing: -0.03em;
 }
 
@@ -157,7 +158,7 @@ const lastSuccess = computed(() => {
 .signal__meta {
   margin: 1px 0 0;
   overflow: hidden;
-  font-size: 0.75rem;
+  font-size: 0.6875rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

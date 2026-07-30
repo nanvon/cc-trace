@@ -79,8 +79,11 @@ Appearance is driven by `data-appearance` on the root element: absent or `system
 - **Quota value:** strong but not theatrical; tabular numerals prevent refresh-time movement.
 - **Body:** plain-language explanations with comfortable leading and short line lengths.
 - **Utility label:** small, slightly tracked metadata for window names, refresh times and state vocabulary.
+- **Compact cost:** follow ccbar’s restrained inline hierarchy: 10px period label, 11px medium
+  amount, 4px internal gap and 10px between periods. A 9.5px muted `花费 / Cost` label sits below;
+  scanning adds only a 10px muted loading indicator after the week amount.
 
-**The Numeric Stability Rule.** Every changing percentage, countdown and reset time uses tabular numerals and a width that does not shift nearby controls.
+**The Numeric Stability Rule.** Every changing percentage, countdown, reset time and compact cost uses tabular numerals and a width that does not shift nearby controls.
 
 **The Platform Voice Rule.** Use the platform system face for UI; do not force macOS typography onto Windows or add a web font dependency only for personality.
 
@@ -113,6 +116,7 @@ Quota progress uses a pill-shaped track, not a straight rail. It does not become
 | Element | Component | Notes |
 |---|---|---|
 | Quota progress | `src/components/QuotaProgress.vue` | Rounded pill track. Primary windows stack a large reading above a full-width bar; secondary windows are a single row. Fill and reading are coloured by remaining quota, not by availability |
+| Usage cost readout | `src/components/UsageCostReadout.vue` | Compact-only today / this-week API-equivalent cost beside the primary reset reading, with a muted `花费 / Cost` label below. Scanning uses a small muted loading indicator after the amounts. A priced subtotal is shown without a lower-bound suffix or unpriced notice; never-indexed, wholly unpriced and unavailable values use `—`, never a false `$0` |
 | Provider lane | `src/components/ProviderLane.vue` | Shadow-driven card, no left status spine. Header is name + plan chip + masked account; secondary windows sit under a dashed divider |
 | Overall signal | `src/components/OverallSignal.vue` | Raises the weight of the highest-risk provider without reordering anything. Both surfaces use a stable surface name as the title — never a status sentence; a status dot with an accessible name carries the overall state |
 | Status explanation | `src/components/StatusExplanation.vue` | Tint-background alert with the icon in a same-tint circle, in both the compact panel (one line) and the main window (title / impact / next step) |
@@ -123,7 +127,7 @@ Spacing follows a four-point rhythm (`--space-1` … `--space-8` = 4/8/12/16/20/
 
 Each tone dimension has exactly one implementation and components never re-derive either: the three status dimensions map to copy keys, availability tone and progress treatment in `src/lib/status.ts`; remaining percentage maps to a quota band in `src/lib/quotaTone.ts`.
 
-Desktop controls keep a 40 × 40 minimum target, with one exception: the four icon buttons in the compact panel header are 32 × 32, which still meets WCAG 2.5.8 AA. At 380px wide the panel cannot hold four 40px buttons.
+Desktop controls keep a 40 × 40 minimum target, with one exception: the four icon buttons in the compact panel header are 32 × 32, which still meets WCAG 2.5.8 AA. At 380px wide the panel cannot hold four 40px buttons. The usage loading indicator is status, not a control.
 
 ## Do's and Don'ts
 

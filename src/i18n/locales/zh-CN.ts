@@ -85,6 +85,18 @@ export default {
       attention: "有需要处理的问题",
       idle: "尚未连接",
     },
+    usage: {
+      today: "今日",
+      thisWeek: "本周",
+      costLabel: "花费",
+      amountExact: "{period} API 等值费用为 {amount}，不代表订阅实付金额。",
+      amountPending: "{period}费用尚未完成本地索引。",
+      amountUnpriced: "{period}用量暂无可匹配的公开价格。",
+      scanScanning: "正在扫描本地 Token 用量",
+      scanComplete: "本地 Token 用量已更新",
+      scanPartial: "本地 Token 用量已更新，但部分数据未能读取",
+      scanUnavailable: "暂时无法读取本地 Token 用量",
+    },
   },
 
   main: {
@@ -154,6 +166,7 @@ export default {
     remaining: "剩余 {percent}",
     closePanel: "关闭面板",
     statusRegion: "额度状态",
+    apiEquivalentCosts: "{provider} 今日与本周 API 等值费用",
   },
 
   preview: {

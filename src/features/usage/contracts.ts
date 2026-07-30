@@ -1,0 +1,88 @@
+/**
+ * 本地用量展示契约。与 `src-tauri/src/contracts/usage.rs` 中本切片使用的字段一一对应。
+ *
+ * Popover 只消费按 Provider 聚合的 Token 费用与扫描状态；Conversations、分页和详情
+ * 属于后续主窗口切片，不在这里提前镜像。
+ */
+
+import type { ProviderId } from "../quota/contracts";
+
+export type UsageSource = ProviderId;
+export type UsageScanState = "idle" | "running" | "cancelling";
+
+export interface UsageFilter {
+  from: string | null;
+  to: string | null;
+  source: UsageSource | null;
+  model: string | null;
+  speed: "standard" | "fast" | "unknown" | null;
+}
+
+export interface UsageSummaryQuery {
+  filter: UsageFilter;
+  groupBy: "source";
+}
+
+export interface UsageTokenTotals {
+  uncachedInputTokens: number;
+  outputTokens: number;
+  reasoningOutputTokens: number;
+  cacheReadInputTokens: number;
+  cacheWrite5mInputTokens: number;
+  cacheWrite1hInputTokens: number;
+  inputTokens: number;
+  totalTokens: number;
+}
+
+export interface UsageCostTotals {
+  /** 整数 USD nanos；1 USD = 1_000_000_000 nanos。 */
+  apiEquivalentCostNanos: number;
+  pricedEntries: number;
+  unpricedEntries: number;
+  assumedGeoEntries: number;
+  pricingFingerprint: string | null;
+}
+
+export interface UsageSummaryRow {
+  key: UsageSource;
+  entryCount: number;
+  tokens: UsageTokenTotals;
+  cost: UsageCostTotals;
+}
+
+export interface UsageSummary {
+  rows: UsageSummaryRow[];
+  entryCount: number;
+  tokens: UsageTokenTotals;
+  cost: UsageCostTotals;
+}
+
+export interface UsageScanStatus {
+  state: UsageScanState;
+  currentSource: UsageSource | null;
+  discoveredFiles: number;
+  completedFiles: number;
+  bytesRead: number;
+  insertedEntries: number;
+  duplicateEntries: number;
+  invalidLines: number;
+  failedFiles: number;
+  partialFailure: boolean;
+  cancelled: boolean;
+  startedAt: string | null;
+  finishedAt: string | null;
+}
+
+/** 单个时间范围、单个 Provider 在 popover 中实际需要的费用事实。 */
+export interface UsagePeriodCost {
+  entryCount: number;
+  apiEquivalentCostNanos: number;
+  pricedEntries: number;
+  unpricedEntries: number;
+  assumedGeoEntries: number;
+}
+
+export interface UsageProviderCosts {
+  today: UsagePeriodCost | null;
+  week: UsagePeriodCost | null;
+}

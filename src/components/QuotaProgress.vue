@@ -3,7 +3,7 @@
  * Quota Progress —— CC Trace 的签名元素。
  *
  * 两种排布，见 `docs/设计方向与状态规范.md` 第 7.2 节：
- * - `primary`：左列是大百分比与窗口短码，右列是全宽进度条、重置倒计时与「重置」标签。
+ * - `primary`：左列是大百分比与窗口短码，右列是全宽进度条、重置倒计时与辅助读数。
  * - `secondary`：单行（短码 + 细进度条 + 百分比 + 倒计时），进度条吸收剩余宽度。
  *
  * 读数一律定宽（ADR-0019）：短码是语言中立的大写拉丁短码，重置时间是紧凑倒计时
@@ -124,15 +124,22 @@ const valueTextForA11y = computed(() =>
           <span v-if="hasValue" class="progress__fill" :style="{ inlineSize: `${fillPercent}%` }" />
         </div>
 
-        <p class="progress__readout">
-          <span
-            class="progress__reset numeric"
-            :title="resetDescription"
-            :aria-label="resetDescription"
-            >{{ resetText }}</span
-          >
-          <span class="progress__reset-label" aria-hidden="true">{{ t("quota.resetLabel") }}</span>
-        </p>
+        <div class="progress__readout">
+          <p class="progress__reset-group">
+            <span
+              class="progress__reset numeric"
+              :title="resetDescription"
+              :aria-label="resetDescription"
+              >{{ resetText }}</span
+            >
+            <span class="progress__reset-label" aria-hidden="true">{{
+              t("quota.resetLabel")
+            }}</span>
+          </p>
+
+          <!-- Popover 在这里并列今日／本周费用；主窗口不传 slot，现有布局保持不变。 -->
+          <slot name="aside" />
+        </div>
       </div>
     </template>
 
@@ -183,17 +190,18 @@ const valueTextForA11y = computed(() =>
 .progress__value {
   display: flex;
   align-items: baseline;
-  font-weight: 650;
 }
 
 .progress--primary .progress__number {
   font-size: 2rem;
+  font-weight: 600;
   line-height: 1;
   letter-spacing: -0.035em;
 }
 
 .progress--primary.progress--full .progress__number {
   font-size: 2.5rem;
+  font-weight: 650;
   letter-spacing: -0.04em;
 }
 
@@ -209,11 +217,13 @@ const valueTextForA11y = computed(() =>
 
 .progress--secondary .progress__value {
   flex: 0 0 auto;
-  font-size: 0.75rem;
+  font-size: 0.65625rem;
+  font-weight: 500;
 }
 
 .progress--secondary.progress--full .progress__value {
   font-size: 0.8125rem;
+  font-weight: 650;
 }
 
 /*
@@ -222,15 +232,18 @@ const valueTextForA11y = computed(() =>
  */
 .progress__code {
   color: var(--text-secondary);
-  font-size: 0.625rem;
-  font-weight: 650;
+  font-size: 0.5625rem;
+  font-weight: 600;
   letter-spacing: 0.06em;
   line-height: 1;
+  opacity: 0.7;
   white-space: nowrap;
 }
 
 .progress--full .progress__code {
   font-size: 0.6875rem;
+  font-weight: 650;
+  opacity: 1;
 }
 
 /* 固定列让多条次级额度的短码、轨道起点、读数全部竖向对齐 */
@@ -245,9 +258,18 @@ const valueTextForA11y = computed(() =>
   gap: var(--space-2);
 }
 
-/* 倒计时与「重置」几乎贴在一起：它们是同一个读数的两行 */
+/* 重置读数在左，Popover 的今日／本周费用可在右侧并列；没有 slot 时仍保持原位置 */
 .progress__readout {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.progress__reset-group {
   display: grid;
+  flex: 0 0 auto;
   justify-items: start;
   gap: 1px;
   margin: 0;
@@ -255,14 +277,15 @@ const valueTextForA11y = computed(() =>
 
 .progress__reset {
   color: var(--text-primary);
-  font-size: 0.75rem;
+  font-size: 0.6875rem;
   font-weight: 500;
-  line-height: 1.1;
+  line-height: 1;
   white-space: nowrap;
 }
 
 .progress--full .progress__reset {
   font-size: 0.8125rem;
+  line-height: 1.1;
 }
 
 /* 行尾读数右对齐并留出最长倒计时的宽度，`43m` 与 `4h37m` 之间不推动轨道 */
@@ -270,19 +293,28 @@ const valueTextForA11y = computed(() =>
   flex: 0 0 auto;
   min-inline-size: 2.75rem;
   color: var(--text-secondary);
-  font-size: 0.6875rem;
+  font-size: 0.65625rem;
   font-weight: 400;
+  opacity: 0.7;
   text-align: end;
+}
+
+.progress--secondary.progress--full .progress__reset {
+  font-size: 0.6875rem;
+  opacity: 1;
 }
 
 .progress__reset-label {
   color: var(--text-secondary);
-  font-size: 0.625rem;
-  line-height: 1.2;
+  font-size: 0.59375rem;
+  line-height: 1;
+  opacity: 0.7;
 }
 
 .progress--full .progress__reset-label {
   font-size: 0.6875rem;
+  line-height: 1.2;
+  opacity: 1;
 }
 
 .progress__row {

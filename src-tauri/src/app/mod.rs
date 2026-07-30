@@ -496,6 +496,27 @@ pub fn start_auto_refresh(core: &Arc<AppCore>, app: &AppHandle) {
     }
 }
 
+/// 每 5 分钟发起一次本地 Token 用量增量扫描。
+///
+/// 启动调度后立即执行首次扫描，之后每隔一个完整间隔执行；扫描已经运行时
+/// `start_default_scan` 返回 busy，本轮直接跳过，不排队制造紧接着的第二次扫描。
+pub fn start_auto_usage_scan(core: &Arc<AppCore>) {
+    // 先同步把状态切到 running，再启动周期任务。扫描本身仍在独立阻塞线程执行；
+    // 这里只消除 WebView 首次读取状态时仍看到 idle 的启动竞态。
+    let _ = core.usage.start_default_scan();
+
+    let core = Arc::clone(core);
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(StdDuration::from_secs(
+                crate::scheduler::params::USAGE_SCAN_INTERVAL_SECS,
+            ))
+            .await;
+            let _ = core.usage.start_default_scan();
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;

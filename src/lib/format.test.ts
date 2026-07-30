@@ -4,9 +4,11 @@ import {
   compactAge,
   compactDuration,
   compactReset,
+  formatCompactUsdNanos,
   formatCountdown,
   formatPast,
   formatPercent,
+  formatUsdNanos,
   splitPercent,
 } from "./format";
 
@@ -43,6 +45,19 @@ describe("splitPercent", () => {
   it("stays consistent with the joined form", () => {
     const parts = splitPercent("en", 26);
     expect(`${parts.value}${parts.unit}`).toBe(formatPercent("en", 26));
+  });
+});
+
+describe("USD nanos", () => {
+  it("keeps the compact popover reading stable", () => {
+    expect(formatCompactUsdNanos("en", 0)).toBe("$0");
+    expect(formatCompactUsdNanos("en", 420_000_000)).toBe("<$1");
+    expect(formatCompactUsdNanos("en", 1_600_000_000)).toBe("$2");
+    expect(formatCompactUsdNanos("en", 12_345_000_000_000)).toBe("$12,345");
+  });
+
+  it("keeps cents in the accessible full amount", () => {
+    expect(formatUsdNanos("en", 1_234_000_000)).toBe("$1.23");
   });
 });
 

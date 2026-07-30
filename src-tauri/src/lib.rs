@@ -70,6 +70,7 @@ pub fn run() {
             if settings.onboarding.completed {
                 core.refresh_all(&handle, RefreshTrigger::Startup);
                 app::start_auto_refresh(&core, &handle);
+                app::start_auto_usage_scan(&core);
             }
 
             // 首次启动未完成时优先进入引导，不直接弹出紧凑面板。

@@ -3,7 +3,7 @@
 //! 路径只用于打开 CC Trace 自己的数据库，从不进入错误、日志或 command 载荷。
 //! 外部 JSONL 路径只以 SHA-256 `file_key` 出现在表中。
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -108,6 +108,33 @@ impl UsageDb {
             )
             .optional()
             .map_err(Into::into)
+    }
+
+    /// 一次读取全部文件水位，避免扫描上千个文件时为每个文件反复打开 SQLite 连接。
+    pub fn scan_file_states(&self) -> Result<HashMap<String, ScanFileState>, UsageDbError> {
+        let connection = self.open_read()?;
+        let mut statement = connection.prepare(
+            "SELECT file_key, mtime_ms, size_bytes, offset_bytes, prefix_fingerprint, cursor_json
+               FROM scan_files",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                ScanFileState {
+                    mtime_ms: row.get(1)?,
+                    size_bytes: u64::try_from(row.get::<_, i64>(2)?).unwrap_or(0),
+                    offset_bytes: u64::try_from(row.get::<_, i64>(3)?).unwrap_or(0),
+                    prefix_fingerprint: row.get(4)?,
+                    cursor_json: row.get(5)?,
+                },
+            ))
+        })?;
+        let mut output = HashMap::new();
+        for row in rows {
+            let (file_key, state) = row?;
+            output.insert(file_key, state);
+        }
+        Ok(output)
     }
 
     #[allow(clippy::too_many_arguments)]

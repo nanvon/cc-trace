@@ -178,6 +178,7 @@ impl UsageService {
         self.db.initialize()?;
         let catalog = self.pricing.load().map_err(|_| UsageError::Unavailable)?;
         let discovery = discover_files(&roots);
+        let previous_states = self.db.scan_file_states()?;
         {
             let mut status = self.status.lock().expect("usage scan status");
             status.discovered_files = discovery.files.len() as u64;
@@ -196,7 +197,8 @@ impl UsageService {
                     .current_source = Some(file.source);
             }
 
-            if self.scan_file(&file, &catalog).is_err() {
+            let previous = previous_states.get(&file.file_key).cloned();
+            if self.scan_file(&file, &catalog, previous).is_err() {
                 let mut status = self.status.lock().expect("usage scan status");
                 status.failed_files = status.failed_files.saturating_add(1);
                 status.partial_failure = true;
@@ -209,25 +211,18 @@ impl UsageService {
         Ok(())
     }
 
-    fn scan_file(&self, file: &SourceFile, catalog: &PricingCatalog) -> Result<(), UsageError> {
+    fn scan_file(
+        &self,
+        file: &SourceFile,
+        catalog: &PricingCatalog,
+        previous: Option<model::ScanFileState>,
+    ) -> Result<(), UsageError> {
         let metadata = fs::metadata(&file.path).map_err(|_| UsageError::Unavailable)?;
         if !metadata.is_file() {
             return Ok(());
         }
         let size = metadata.len();
         let mtime_ms = modified_ms(&metadata);
-        let previous = self.db.scan_file_state(&file.file_key)?;
-        let prefix = prefix_fingerprint(&file.path, size.min(PREFIX_BYTES))
-            .map_err(|_| UsageError::Unavailable)?;
-        let previous_prefix_matches = match &previous {
-            Some(state) => {
-                prefix_fingerprint(&file.path, state.size_bytes.min(PREFIX_BYTES).min(size))
-                    .map(|value| value == state.prefix_fingerprint)
-                    .unwrap_or(false)
-            }
-            None => true,
-        };
-
         let cursor_valid = previous.as_ref().is_none_or(|state| match file.source {
             UsageSource::Codex => {
                 decode_cursor::<CodexCursor>(state.cursor_json.as_deref()).is_some()
@@ -236,6 +231,29 @@ impl UsageService {
                 decode_cursor::<ClaudeCursor>(state.cursor_json.as_deref()).is_some()
             }
         });
+
+        let previous_prefix = match &previous {
+            Some(state) => Some(
+                prefix_fingerprint(&file.path, state.size_bytes.min(PREFIX_BYTES).min(size))
+                    .map_err(|_| UsageError::Unavailable)?,
+            ),
+            None => None,
+        };
+        let previous_prefix_matches = previous
+            .as_ref()
+            .zip(previous_prefix.as_ref())
+            .is_none_or(|(state, value)| value == &state.prefix_fingerprint);
+        let prefix_length = size.min(PREFIX_BYTES);
+        let prefix = match (&previous, &previous_prefix) {
+            (Some(state), Some(value))
+                if state.size_bytes.min(PREFIX_BYTES).min(size) == prefix_length =>
+            {
+                value.clone()
+            }
+            _ => prefix_fingerprint(&file.path, prefix_length)
+                .map_err(|_| UsageError::Unavailable)?,
+        };
+
         let must_reset = previous.as_ref().is_some_and(|state| {
             state.offset_bytes > size
                 || !previous_prefix_matches
@@ -398,6 +416,8 @@ impl UsageService {
             status.invalid_lines = status.invalid_lines.saturating_add(invalid);
         }
         batch.clear();
+        // 大文件每批提交后主动让出时间片，降低后台扫描连续占用 CPU 的概率。
+        std::thread::yield_now();
         Ok(())
     }
 }
@@ -847,6 +867,7 @@ mod tests {
         assert_eq!(summary.tokens.output_tokens, 60);
         assert_eq!(summary.tokens.total_tokens, 301);
         assert_eq!(summary.cost.priced_entries, 3);
+        let bytes_after_initial_scan = service.scan_status().bytes_read;
 
         let page = service
             .conversations(UsageConversationQuery {
@@ -889,6 +910,11 @@ mod tests {
         service
             .run_scan_inner(fixture_roots(sources.path()))
             .expect("unchanged rescan");
+        assert_eq!(
+            service.scan_status().bytes_read,
+            bytes_after_initial_scan,
+            "unchanged files must not reparse content"
+        );
         assert_eq!(
             service
                 .summary(UsageSummaryQuery {

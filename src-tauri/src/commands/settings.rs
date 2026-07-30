@@ -54,6 +54,7 @@ pub fn onboarding_complete(
 
     if !was_completed {
         app::start_auto_refresh(core, &app);
+        app::start_auto_usage_scan(core);
     }
     core.emit_settings(&app, &settings);
     Ok(settings)

@@ -16,14 +16,18 @@ import {
   secondaryWindows,
   type ProviderSnapshot,
 } from "../features/quota/contracts";
+import type { UsageProviderCosts } from "../features/usage/contracts";
 import { providerLabel, windowCode, windowLabel } from "../lib/labels";
 import { hasQuotaValues, presentProvider } from "../lib/status";
 import QuotaProgress from "./QuotaProgress.vue";
 import StatusExplanation from "./StatusExplanation.vue";
+import UsageCostReadout from "./UsageCostReadout.vue";
 
 const props = defineProps<{
   provider: ProviderSnapshot;
   variant: "compact" | "full";
+  usageCosts?: UsageProviderCosts;
+  usageScanning?: boolean;
 }>();
 
 const { t } = useI18n();
@@ -78,7 +82,16 @@ const showsExplanation = computed(() =>
         "
         emphasis="primary"
         :size="variant"
-      />
+      >
+        <template #aside>
+          <UsageCostReadout
+            v-if="variant === 'compact' && usageCosts"
+            :provider-name="name"
+            :costs="usageCosts"
+            :scanning="usageScanning"
+          />
+        </template>
+      </QuotaProgress>
 
       <div v-if="secondaries.length > 0" class="lane__secondaries">
         <QuotaProgress
@@ -97,9 +110,17 @@ const showsExplanation = computed(() =>
     </template>
 
     <!-- 没有额度可显示时保持同一骨架：读数位置留占位符，不伪造 0% -->
-    <p v-else class="lane__blank numeric" :class="`lane__blank--${variant}`">
-      {{ t("quota.noValue") }}
-    </p>
+    <div v-else class="lane__blank-row">
+      <p class="lane__blank numeric" :class="`lane__blank--${variant}`">
+        {{ t("quota.noValue") }}
+      </p>
+      <UsageCostReadout
+        v-if="variant === 'compact' && usageCosts"
+        :provider-name="name"
+        :costs="usageCosts"
+        :scanning="usageScanning"
+      />
+    </div>
 
     <StatusExplanation
       v-if="showsExplanation"
@@ -139,14 +160,15 @@ const showsExplanation = computed(() =>
 .lane__name {
   flex: 0 0 auto;
   margin: 0;
-  font-size: 0.875rem;
-  font-weight: 650;
+  font-size: 0.8125rem;
+  font-weight: 600;
   letter-spacing: -0.008em;
   white-space: nowrap;
 }
 
 .lane--full .lane__name {
   font-size: 1.0625rem;
+  font-weight: 650;
   letter-spacing: -0.014em;
 }
 
@@ -162,6 +184,10 @@ const showsExplanation = computed(() =>
   margin: 0;
   color: var(--text-secondary);
   font-size: 0.6875rem;
+}
+
+.lane--compact .lane__identity {
+  opacity: 0.75;
 }
 
 .lane--full .lane__identity {
@@ -206,6 +232,14 @@ const showsExplanation = computed(() =>
   font-weight: 650;
   line-height: 1;
   letter-spacing: -0.035em;
+}
+
+.lane__blank-row {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: var(--space-4);
+  min-inline-size: 0;
 }
 
 .lane__blank--full {

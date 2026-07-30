@@ -1,15 +1,17 @@
 <script setup lang="ts">
 /**
- * 紧凑额度面板：回答「现在额度紧不紧」。
+ * 紧凑额度面板：回答「现在额度紧不紧、今日／本周 API 等值费用是多少」。
  *
- * 只承载总体状态、两个 Provider 概览、刷新、主窗口入口、设置与退出。
- * 完整错误诊断、历史与设置表单都不在这里，见 `docs/信息架构与核心流程.md` 第 5 节。
+ * 只承载总体状态、两个 Provider 额度与近期费用概览、刷新、主窗口入口、设置与退出。
+ * Token 明细、完整错误诊断、历史、筛选与设置表单都不在这里，
+ * 见 `docs/信息架构与核心流程.md` 第 5 节。
  *
  * 四个操作在头部以图标按钮呈现（ADR-0017）：380px 宽度容不下四个文字按钮。
  * 每个按钮都有 Tooltip 与可访问名称，不依赖图标猜测。
  */
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { useAppShell } from "../app/shell";
 import OverallSignal from "../components/OverallSignal.vue";
@@ -21,9 +23,11 @@ import {
   quitApp,
   setCompactHeight,
 } from "../features/app/windows";
+import { useUsageStore } from "../features/usage/store";
 import { presentOverall } from "../lib/status";
 
 const { t } = useI18n();
+const usage = useUsageStore();
 const { quota, settings } = useAppShell("compact");
 
 const COMPACT_TITLE_ID = "compact-title";
@@ -39,6 +43,23 @@ const origin = computed(() => (settings.status?.platform === "macos" ? "top" : "
 const liveMessage = computed(() => {
   const leader = presentOverall(quota.ordered);
   return leader ? t(leader.presentation.titleKey) : "";
+});
+
+/** 用量扫描是独立状态；不能借额度状态点或转圈颜色让辅助技术猜测。 */
+const usageLiveMessage = computed(() => {
+  if (usage.unavailable) {
+    return t("compact.usage.scanUnavailable");
+  }
+  if (usage.scanning) {
+    return t("compact.usage.scanScanning");
+  }
+  if (usage.partial) {
+    return t("compact.usage.scanPartial");
+  }
+  if (usage.status?.finishedAt) {
+    return t("compact.usage.scanComplete");
+  }
+  return "";
 });
 
 /**
@@ -75,24 +96,73 @@ function syncWindowHeight(): void {
 }
 
 let contentObserver: ResizeObserver | null = null;
+let usagePollTimer: number | null = null;
+let panelFocused = false;
+
+function clearUsagePoll(): void {
+  if (usagePollTimer !== null) {
+    window.clearTimeout(usagePollTimer);
+    usagePollTimer = null;
+  }
+}
+
+function scheduleUsagePoll(): void {
+  if (usagePollTimer !== null || !panelFocused) {
+    return;
+  }
+  usagePollTimer = window.setTimeout(async () => {
+    usagePollTimer = null;
+    await usage.poll();
+    syncWindowHeight();
+    scheduleUsagePoll();
+  }, 1_000);
+}
 
 /**
  * 窗口是复用的：隐藏后再次显示不会重新挂载组件，因此入场动效与初始焦点
  * 都绑定在窗口的 focus 上。
  */
 function handleWindowFocus(): void {
+  panelFocused = true;
   entered.value = false;
   requestAnimationFrame(() => {
     entered.value = true;
   });
   document.getElementById(COMPACT_TITLE_ID)?.focus({ preventScroll: true });
   syncWindowHeight();
+  void usage.load().then(syncWindowHeight);
+  scheduleUsagePoll();
+}
+
+function handleWindowBlur(): void {
+  panelFocused = false;
+  clearUsagePoll();
 }
 
 onMounted(() => {
   document.body.dataset.surface = "compact";
   window.addEventListener("focus", handleWindowFocus);
-  handleWindowFocus();
+  window.addEventListener("blur", handleWindowBlur);
+
+  // 初次挂载可能发生在隐藏窗口，不把应用启动误当成用户打开；这里只准备视觉与焦点。
+  entered.value = true;
+  syncWindowHeight();
+
+  void usage.load().then(() => {
+    syncWindowHeight();
+  });
+
+  // 若 webview 是在已可见、已聚焦时才挂载，focus 事件可能早于监听器。
+  void getCurrentWindow()
+    .isFocused()
+    .then((focused) => {
+      if (focused) {
+        handleWindowFocus();
+      }
+    })
+    .catch(() => {
+      // 浏览器预览没有 Tauri 窗口桥；已有空态仍可用于静态检查。
+    });
 
   // 隐藏期间 webview 没有销毁，额度变化照样会触发量测，因此下次显示出来的
   // 就已经是正确的高度，不会看到「先按旧高度出现再跳一下」。
@@ -107,6 +177,8 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   window.removeEventListener("focus", handleWindowFocus);
+  window.removeEventListener("blur", handleWindowBlur);
+  clearUsagePoll();
   contentObserver?.disconnect();
   contentObserver = null;
 });
@@ -115,6 +187,7 @@ onBeforeUnmount(() => {
 <template>
   <main class="panel" :class="{ 'panel--entered': entered }" :data-origin="origin">
     <p class="visually-hidden" aria-live="polite">{{ liveMessage }}</p>
+    <p class="visually-hidden" aria-live="polite">{{ usageLiveMessage }}</p>
 
     <header ref="headerRef" class="panel__header">
       <OverallSignal
@@ -164,20 +237,21 @@ onBeforeUnmount(() => {
             @click="openSettingsWindow"
           >
             <svg
-              viewBox="0 0 16 16"
+              viewBox="0 0 24 24"
               width="16"
               height="16"
               fill="none"
               stroke="currentColor"
-              stroke-width="1.4"
+              stroke-width="2"
               stroke-linecap="round"
+              stroke-linejoin="round"
               aria-hidden="true"
               focusable="false"
             >
-              <circle cx="8" cy="8" r="2.2" />
               <path
-                d="M8 1.6v1.9M8 12.5v1.9M14.4 8h-1.9M3.5 8H1.6M12.5 3.5l-1.3 1.3M4.8 11.2l-1.3 1.3M12.5 12.5l-1.3-1.3M4.8 4.8L3.5 3.5"
+                d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.09a2 2 0 0 1 1 1.74v.5a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"
               />
+              <circle cx="12" cy="12" r="3" />
             </svg>
           </button>
 
@@ -215,6 +289,8 @@ onBeforeUnmount(() => {
           :key="provider.provider"
           :provider="provider"
           variant="compact"
+          :usage-costs="usage.costs[provider.provider]"
+          :usage-scanning="usage.loading"
         />
       </div>
     </section>

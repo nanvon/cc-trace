@@ -136,6 +136,11 @@ const needsAttention = computed(() => props.presentation.tone !== "neutral");
   line-height: 1.55;
 }
 
+.alert--compact .alert__detail {
+  font-size: 0.6875rem;
+  line-height: 1.4;
+}
+
 /* 下一步是这块里唯一需要读完的句子，用正文色把它从解释里提出来 */
 .alert__detail--action {
   color: var(--text-primary);

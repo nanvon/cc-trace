@@ -15,6 +15,7 @@
 const MINUTE_MS = 60_000;
 const HOUR_MS = 60 * MINUTE_MS;
 const DAY_MS = 24 * HOUR_MS;
+const USD_NANOS = 1_000_000_000;
 
 /** 相对时间的展示分支。`justNow` 与 `underOneMinute` 的词语由 i18n 提供。 */
 export type RelativeTime =
@@ -69,6 +70,38 @@ export function splitPercent(locale: string, value: number): { value: string; un
       .map((part) => part.value)
       .join(""),
   };
+}
+
+/**
+ * Popover 的定宽美元读数，与 cc-bar 相同：小于一美元显示 `<$1`，其余取整。
+ * `$0` 只表示调用方已经确认的真实零值；未扫描、失败与全部未定价由调用方显示 `—`。
+ */
+export function formatCompactUsdNanos(locale: string, nanos: number): string {
+  if (nanos <= 0) {
+    return "$0";
+  }
+  if (nanos < USD_NANOS) {
+    return "<$1";
+  }
+
+  return new Intl.NumberFormat(locale, {
+    style: "currency",
+    currency: "USD",
+    currencyDisplay: "narrowSymbol",
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  }).format(nanos / USD_NANOS);
+}
+
+/** 完整金额只用于 Tooltip 与无障碍说明，不受 popover 定宽取整限制。 */
+export function formatUsdNanos(locale: string, nanos: number): string {
+  return new Intl.NumberFormat(locale, {
+    style: "currency",
+    currency: "USD",
+    currencyDisplay: "narrowSymbol",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(Math.max(0, nanos) / USD_NANOS);
 }
 
 /**

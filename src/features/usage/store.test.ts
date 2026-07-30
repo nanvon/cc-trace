@@ -1,0 +1,80 @@
+import { createPinia, setActivePinia } from "pinia";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import { getUsageScanStatus, getUsageSummary } from "./api";
+import type { UsageScanStatus, UsageSummary } from "./contracts";
+import { useUsageStore } from "./store";
+
+vi.mock("./api", () => ({
+  getUsageScanStatus: vi.fn(),
+  getUsageSummary: vi.fn(),
+}));
+
+const idleStatus = (finishedAt: string | null): UsageScanStatus => ({
+  state: "idle",
+  currentSource: null,
+  discoveredFiles: 0,
+  completedFiles: 0,
+  bytesRead: 0,
+  insertedEntries: 0,
+  duplicateEntries: 0,
+  invalidLines: 0,
+  failedFiles: 0,
+  partialFailure: false,
+  cancelled: false,
+  startedAt: null,
+  finishedAt,
+});
+
+const emptySummary: UsageSummary = {
+  rows: [],
+  entryCount: 0,
+  tokens: {
+    uncachedInputTokens: 0,
+    outputTokens: 0,
+    reasoningOutputTokens: 0,
+    cacheReadInputTokens: 0,
+    cacheWrite5mInputTokens: 0,
+    cacheWrite1hInputTokens: 0,
+    inputTokens: 0,
+    totalTokens: 0,
+  },
+  cost: {
+    apiEquivalentCostNanos: 0,
+    pricedEntries: 0,
+    unpricedEntries: 0,
+    assumedGeoEntries: 0,
+    pricingFingerprint: null,
+  },
+};
+
+describe("usage store", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    vi.mocked(getUsageScanStatus).mockReset();
+    vi.mocked(getUsageSummary).mockReset();
+    vi.mocked(getUsageSummary).mockResolvedValue(emptySummary);
+  });
+
+  it("shows loading before the first status and summary read finishes", async () => {
+    vi.mocked(getUsageScanStatus).mockResolvedValue(idleStatus(null));
+    const store = useUsageStore();
+
+    expect(store.loading).toBe(true);
+    await store.load();
+    expect(store.loading).toBe(false);
+  });
+
+  it("reloads summaries when a scan starts and finishes between polls", async () => {
+    vi.mocked(getUsageScanStatus)
+      .mockResolvedValueOnce(idleStatus(null))
+      .mockResolvedValueOnce(idleStatus("2026-07-30T10:00:00Z"));
+    const store = useUsageStore();
+
+    await store.load();
+    expect(getUsageSummary).toHaveBeenCalledTimes(2);
+
+    await store.poll();
+    expect(getUsageSummary).toHaveBeenCalledTimes(4);
+  });
+});
