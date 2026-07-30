@@ -1,6 +1,6 @@
 name: Release
 
-# 发布打包与日常 CI 分离：只有推送与应用版本一致的 v* tag 才创建 Draft Release。
+# 发布打包与日常 CI 分离：只有推送与应用版本一致的 v* tag 才创建公开 Release。
 on:
   push:
     tags:
@@ -121,7 +121,6 @@ jobs:
             macOS 产物使用 ad-hoc 签名且未经过 Apple 公证，首次打开需要在系统设置中手动放行。安装新版本后，首次读取 Claude Code 钥匙串凭据时可能再次出现授权弹窗。
 
             Windows 产物未做代码签名，首次安装可能触发 SmartScreen 提示。
-          releaseDraft: true
           prerelease: false
           generateReleaseNotes: true
           args: "--target ${{ matrix.target }} --bundles ${{ matrix.bundles }}"
