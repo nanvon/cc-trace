@@ -1182,13 +1182,13 @@ mod tests {
 
         assert_eq!(
             catalog.estimate_entry(&standard).cost_nanos,
-            Some(3_750_000_000)
+            Some(3_000_000_000)
         );
 
         standard.model = Some("gpt-5.6-luna".to_owned());
         assert_eq!(
             catalog.estimate_entry(&standard).cost_nanos,
-            Some(1_500_000_000)
+            Some(300_000_000)
         );
     }
 
