@@ -12,7 +12,7 @@ import type { RouteLocationRaw, Router } from "vue-router";
 export const EVENT_MAIN_NAVIGATION = "navigation://main";
 
 export type MainNavigationTarget = "quota" | "settings";
-export type MainFocusTarget = "quota-title" | "settings-title" | "settings-trigger";
+export type MainFocusTarget = "usage-title" | "settings-title" | "settings-trigger";
 
 export function isMainNavigationTarget(value: unknown): value is MainNavigationTarget {
   return value === "quota" || value === "settings";

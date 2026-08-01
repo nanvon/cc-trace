@@ -8,7 +8,7 @@ import SettingsView from "../views/SettingsView.vue";
 
 /**
  * 紧凑面板与首次启动仍各自通过 hash 载入独立表面。
- * 额度总览与设置则是 `main` WebviewWindow 内的两个子路由。
+ * 本地用量页与设置则是 `main` WebviewWindow 内的两个子路由。
  */
 export const router = createRouter({
   history: createWebHashHistory(),

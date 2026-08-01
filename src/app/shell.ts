@@ -1,8 +1,8 @@
 /**
- * 每个窗口共用的启动流程：读取状态、订阅事件、绑定键盘。
+ * 每个窗口共用的启动流程：读取必要状态、订阅事件、绑定键盘。
  *
- * 三个窗口各自是独立的 webview，因此每个窗口都要自己订阅一次。主窗口的额度与设置
- * 子路由共用一份订阅；所有窗口消费的是同一份 Rust 状态，不存在第二个状态源。
+ * 三个窗口各自是独立的 webview，因此每个窗口都要自己订阅一次。紧凑面板与首次启动
+ * 需要额度状态；主窗口的本地用量页不读取额度，避免把两种领域状态混在同一页面。
  */
 
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -57,8 +57,10 @@ export function useAppShell(surface: Surface) {
 
     switch (event.key.toLowerCase()) {
       case "r":
-        event.preventDefault();
-        void quota.refresh();
+        if (surface !== "main") {
+          event.preventDefault();
+          void quota.refresh();
+        }
         break;
       case ",":
         event.preventDefault();
@@ -80,14 +82,20 @@ export function useAppShell(surface: Surface) {
   onMounted(async () => {
     window.addEventListener("keydown", handleKeydown);
 
-    await Promise.allSettled([settings.load(), quota.load()]);
+    const startupLoads = [settings.load()];
+    if (surface !== "main") {
+      startupLoads.push(quota.load());
+    }
+    await Promise.allSettled(startupLoads);
 
     try {
-      subscriptions.push(
-        await onQuotaUpdated(quota.adopt),
-        await onRefreshState(quota.adoptRefreshState),
-        await onSettingsUpdated(settings.adopt),
-      );
+      subscriptions.push(await onSettingsUpdated(settings.adopt));
+      if (surface !== "main") {
+        subscriptions.push(
+          await onQuotaUpdated(quota.adopt),
+          await onRefreshState(quota.adoptRefreshState),
+        );
+      }
     } catch {
       // 纯浏览器预览没有 Tauri 事件桥；界面仍可用已加载的状态渲染。
     }

@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { getUsageScanStatus, getUsageSummary } from "./api";
 import type { UsageScanStatus, UsageSummary } from "./contracts";
+import { usageDashboardRanges } from "./ranges";
 import { useUsageStore } from "./store";
 
 vi.mock("./api", () => ({
@@ -83,5 +84,23 @@ describe("usage store", () => {
 
     await store.poll();
     expect(getUsageSummary).toHaveBeenCalledTimes(4);
+  });
+
+  it("loads source, daily, and model summaries for the main usage page", async () => {
+    vi.mocked(getUsageScanStatus).mockResolvedValue(idleStatus("2026-07-30T10:00:00Z"));
+    const store = useUsageStore();
+
+    await store.loadDashboard(usageDashboardRanges(new Date(2026, 6, 30)).thisMonth);
+
+    expect(vi.mocked(getUsageSummary).mock.calls.map(([query]) => query.groupBy)).toEqual([
+      "source",
+      "day",
+      "day",
+      "model",
+      "model",
+    ]);
+    expect(store.dashboardLoaded).toBe(true);
+    expect(store.dashboardLoading).toBe(false);
+    expect(store.dashboardUnavailable).toBe(false);
   });
 });

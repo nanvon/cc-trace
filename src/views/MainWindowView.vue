@@ -2,7 +2,7 @@
 /**
  * 主窗口的持久外壳。
  *
- * 额度总览与设置共用这一份状态订阅、键盘处理和原生窗口；子路由只替换内容区。
+ * 本地用量页与设置共用这一份状态订阅、键盘处理和原生窗口；子路由只替换内容区。
  */
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { onBeforeUnmount, onMounted } from "vue";
@@ -21,7 +21,7 @@ const router = useRouter();
 let unlistenNavigation: UnlistenFn | undefined;
 
 function handleNavigation(target: MainNavigationTarget): void {
-  const focusTarget = target === "settings" ? "settings-title" : "quota-title";
+  const focusTarget = target === "settings" ? "settings-title" : "usage-title";
   void navigateMain(router, target, focusTarget);
 }
 

@@ -1,4 +1,12 @@
-import type { UsagePeriodCost, UsageProviderCosts, UsageSource, UsageSummary } from "./contracts";
+import { formatUsdNanos } from "../../lib/format";
+import type {
+  UsageCostTotals,
+  UsagePeriodCost,
+  UsageProviderCosts,
+  UsageSource,
+  UsageSummary,
+  UsageTokenTotals,
+} from "./contracts";
 
 function zeroCost(): UsagePeriodCost {
   return {
@@ -54,4 +62,69 @@ export function buildProviderCosts(
     today: periodCost(today, source, authoritativeEmpty),
     week: periodCost(week, source, authoritativeEmpty),
   };
+}
+
+export interface UsageTokenDisplay {
+  value: string;
+  unit: string;
+  full: string;
+}
+
+function compactNumber(locale: string, value: number, unit: string, scale: number): UsageTokenDisplay {
+  const scaled = Math.max(0, value) / scale;
+  return {
+    value: new Intl.NumberFormat(locale, {
+      maximumFractionDigits: 0,
+      minimumFractionDigits: 0,
+    }).format(scaled),
+    unit,
+    full: new Intl.NumberFormat(locale).format(Math.max(0, value)),
+  };
+}
+
+/** 主窗口用量页的 Token 读数：中文使用万／亿，英文使用 K／M／B，紧凑值不显示小数。 */
+export function presentUsageTokens(locale: string, value: number): UsageTokenDisplay {
+  if (locale.toLowerCase().startsWith("zh")) {
+    if (value >= 100_000_000) return compactNumber(locale, value, "亿", 100_000_000);
+    if (value >= 10_000) return compactNumber(locale, value, "万", 10_000);
+    return compactNumber(locale, value, "", 1);
+  }
+
+  if (value >= 1_000_000_000) return compactNumber(locale, value, "B", 1_000_000_000);
+  if (value >= 1_000_000) return compactNumber(locale, value, "M", 1_000_000);
+  if (value >= 1_000) return compactNumber(locale, value, "K", 1_000);
+  return compactNumber(locale, value, "", 1);
+}
+
+/** 缓存写入是输入的一部分，保持与现有草图的 84.0% / 86.2% 口径一致。 */
+export function usageCacheHitRate(tokens: UsageTokenTotals): number | null {
+  if (tokens.inputTokens <= 0) return null;
+  return Math.min(100, (tokens.cacheReadInputTokens / tokens.inputTokens) * 100);
+}
+
+export function formatUsagePercent(locale: string, value: number | null): string {
+  if (value === null) return "—";
+  return new Intl.NumberFormat(locale, {
+    maximumFractionDigits: 1,
+    minimumFractionDigits: 1,
+    style: "percent",
+  }).format(value / 100);
+}
+
+export function usageCacheWriteTokens(tokens: UsageTokenTotals): number {
+  return tokens.cacheWrite5mInputTokens + tokens.cacheWrite1hInputTokens;
+}
+
+export function formatUsageCost(
+  locale: string,
+  cost: UsageCostTotals | null,
+  entryCount: number,
+  lessThanCent: string,
+): string | null {
+  if (!cost || entryCount === 0) return null;
+  if (entryCount > 0 && cost.pricedEntries === 0) return null;
+  if (cost.apiEquivalentCostNanos > 0 && cost.apiEquivalentCostNanos < 10_000_000) {
+    return lessThanCent;
+  }
+  return formatUsdNanos(locale, cost.apiEquivalentCostNanos);
 }

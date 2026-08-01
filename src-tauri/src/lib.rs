@@ -44,10 +44,10 @@ pub fn run() {
             None,
         ))
         .setup(|app| {
-            // 菜单栏应用不占 Dock。快捷键由前端统一处理 metaKey / ctrlKey，
-            // 因此不需要为了应用菜单切换到 Regular 策略。
+            // 保留 Menu Bar / Tray 入口，同时作为正常 macOS 应用显示在 Dock。
+            // 快捷键仍由前端统一处理 metaKey / ctrlKey。
             #[cfg(target_os = "macos")]
-            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            app.set_activation_policy(tauri::ActivationPolicy::Regular);
 
             let config_dir = app.path().app_config_dir()?;
             let (core, _load_issue) = AppCore::new(config_dir);

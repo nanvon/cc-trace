@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import type { UsageSummary } from "./contracts";
-import { buildProviderCosts, presentUsageCost } from "./presentation";
+import {
+  buildProviderCosts,
+  formatUsageCost,
+  formatUsagePercent,
+  presentUsageCost,
+  presentUsageTokens,
+  usageCacheHitRate,
+} from "./presentation";
 
 const EMPTY_TOKENS = {
   uncachedInputTokens: 0,
@@ -99,5 +106,40 @@ describe("presentUsageCost", () => {
     const costs = buildProviderCosts("codex", indexed, indexed, true);
 
     expect(presentUsageCost(costs.today)).toEqual({ amountNanos: 900_000_000 });
+  });
+});
+
+describe("main usage presentation", () => {
+  it("keeps compact token units as integers and the cache-hit denominator", () => {
+    const tokens = {
+      ...EMPTY_TOKENS,
+      inputTokens: 1_000,
+      cacheReadInputTokens: 840,
+      totalTokens: 1_200,
+    };
+
+    expect(presentUsageTokens("zh-CN", 595_000_000)).toMatchObject({
+      value: "6",
+      unit: "亿",
+    });
+    expect(presentUsageTokens("en", 1_200_000)).toMatchObject({
+      value: "1",
+      unit: "M",
+    });
+    expect(usageCacheHitRate(tokens)).toBe(84);
+    expect(formatUsagePercent("en", usageCacheHitRate(tokens))).toBe("84.0%");
+  });
+
+  it("does not turn an empty or tiny priced range into a false zero", () => {
+    const cost = {
+      apiEquivalentCostNanos: 1_000_000,
+      pricedEntries: 1,
+      unpricedEntries: 0,
+      assumedGeoEntries: 0,
+      pricingFingerprint: "fixture",
+    };
+
+    expect(formatUsageCost("en", cost, 0, "<$0.01")).toBeNull();
+    expect(formatUsageCost("en", cost, 1, "<$0.01")).toBe("<$0.01");
   });
 });

@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { usageCostRanges } from "./ranges";
+import {
+  customUsageRange,
+  usageCostRanges,
+  usageDashboardRanges,
+  usageDatePickerRange,
+  usageRangePresets,
+} from "./ranges";
 
 describe("usageCostRanges", () => {
   it("uses local day boundaries and a Monday week start", () => {
@@ -31,5 +37,44 @@ describe("usageCostRanges", () => {
 
     expect(week.getDay()).toBe(1);
     expect(week.getDate()).toBe(27);
+  });
+});
+
+describe("usageDashboardRanges", () => {
+  it("exposes the eight agreed presets and an all-time null boundary", () => {
+    expect(usageRangePresets()).toEqual([
+      "today",
+      "yesterday",
+      "thisWeek",
+      "thisMonth",
+      "thisYear",
+      "last7Days",
+      "last30Days",
+      "all",
+    ]);
+    expect(usageDashboardRanges(new Date(2026, 6, 29)).all).toEqual({
+      preset: "all",
+      from: null,
+      to: null,
+    });
+  });
+
+  it("uses an exclusive local midnight for a custom end date", () => {
+    const range = customUsageRange(new Date(2026, 6, 1, 16), new Date(2026, 6, 30, 9));
+    const from = new Date(range.from ?? "");
+    const to = new Date(range.to ?? "");
+
+    expect([from.getDate(), from.getHours()]).toEqual([1, 0]);
+    expect([to.getDate(), to.getHours()]).toEqual([31, 0]);
+  });
+
+  it("maps a preset back to the same date-only range shown by the picker", () => {
+    const range = usageDashboardRanges(new Date(2026, 6, 29)).today;
+    const dates = usageDatePickerRange(range);
+
+    expect(dates?.map((date) => [date.getDate(), date.getHours()])).toEqual([
+      [29, 0],
+      [29, 0],
+    ]);
   });
 });

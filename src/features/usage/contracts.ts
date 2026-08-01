@@ -9,6 +9,7 @@ import type { ProviderId } from "../quota/contracts";
 
 export type UsageSource = ProviderId;
 export type UsageScanState = "idle" | "running" | "cancelling";
+export type UsageGroupBy = "day" | "source" | "model" | "speed";
 
 export interface UsageFilter {
   from: string | null;
@@ -20,7 +21,7 @@ export interface UsageFilter {
 
 export interface UsageSummaryQuery {
   filter: UsageFilter;
-  groupBy: "source";
+  groupBy: UsageGroupBy;
 }
 
 export interface UsageTokenTotals {
@@ -54,7 +55,8 @@ export interface UsageFastTotals {
 }
 
 export interface UsageSummaryRow {
-  key: UsageSource;
+  /** Provider、YYYY-MM-DD 或模型名，取决于 `groupBy`。 */
+  key: string;
   entryCount: number;
   tokens: UsageTokenTotals;
   fast: UsageFastTotals;
@@ -99,4 +101,25 @@ export interface UsagePeriodCost {
 export interface UsageProviderCosts {
   today: UsagePeriodCost | null;
   week: UsagePeriodCost | null;
+}
+
+export interface UsageDashboardRange {
+  preset:
+    | "today"
+    | "yesterday"
+    | "thisWeek"
+    | "thisMonth"
+    | "thisYear"
+    | "last7Days"
+    | "last30Days"
+    | "all"
+    | "custom";
+  from: string | null;
+  to: string | null;
+}
+
+export interface UsageDashboardData {
+  source: UsageSummary | null;
+  day: Record<UsageSource, UsageSummary | null>;
+  model: Record<UsageSource, UsageSummary | null>;
 }

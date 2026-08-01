@@ -87,8 +87,8 @@ async function updatePricingCatalog(): Promise<void> {
   }
 }
 
-function returnToQuota(): void {
-  const focusTarget = route.query.origin === "quota" ? "settings-trigger" : "quota-title";
+function returnToUsage(): void {
+  const focusTarget = route.query.origin === "quota" ? "settings-trigger" : "usage-title";
   void navigateMain(router, "quota", focusTarget);
 }
 </script>
@@ -97,9 +97,9 @@ function returnToQuota(): void {
   <main class="settings">
     <div class="settings__inner">
       <header class="settings__header">
-        <button type="button" class="button button--quiet settings__back" @click="returnToQuota">
+        <button type="button" class="button button--quiet settings__back" @click="returnToUsage">
           <span aria-hidden="true">←</span>
-          {{ t("settings.backToQuota") }}
+          {{ t("settings.backToUsage") }}
         </button>
         <h1 id="main-settings-title" tabindex="-1">{{ t("settings.title") }}</h1>
       </header>

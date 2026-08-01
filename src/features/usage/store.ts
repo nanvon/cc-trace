@@ -4,24 +4,40 @@ import { computed, ref } from "vue";
 import type { ProviderId } from "../quota/contracts";
 import { getUsageScanStatus, getUsageSummary } from "./api";
 import type {
+  UsageDashboardData,
+  UsageDashboardRange,
+  UsageGroupBy,
   UsageProviderCosts,
   UsageScanStatus,
+  UsageSource,
   UsageSummary,
   UsageSummaryQuery,
 } from "./contracts";
 import { buildProviderCosts } from "./presentation";
-import { usageCostRanges } from "./ranges";
+import { usageCostRanges, usageDashboardRanges } from "./ranges";
 
-function summaryQuery(from: string, to: string): UsageSummaryQuery {
+function summaryQuery(
+  range: Pick<UsageDashboardRange, "from" | "to">,
+  groupBy: UsageGroupBy,
+  source: UsageSource | null = null,
+): UsageSummaryQuery {
   return {
     filter: {
-      from,
-      to,
-      source: null,
+      from: range.from,
+      to: range.to,
+      source,
       model: null,
       speed: null,
     },
-    groupBy: "source",
+    groupBy,
+  };
+}
+
+function emptyDashboard(): UsageDashboardData {
+  return {
+    source: null,
+    day: { codex: null, claude: null },
+    model: { codex: null, claude: null },
   };
 }
 
@@ -33,6 +49,12 @@ export const useUsageStore = defineStore("usage", () => {
   const statusUnavailable = ref(false);
   const summaryUnavailable = ref(false);
   const completedInSession = ref(false);
+  const dashboard = ref<UsageDashboardData>(emptyDashboard());
+  const dashboardRange = ref<UsageDashboardRange>(usageDashboardRanges().thisMonth);
+  const dashboardLoaded = ref(false);
+  const dashboardLoading = ref(false);
+  const dashboardUnavailable = ref(false);
+  let dashboardRequest = 0;
 
   const scanning = computed(
     () => status.value?.state === "running" || status.value?.state === "cancelling",
@@ -45,8 +67,8 @@ export const useUsageStore = defineStore("usage", () => {
   async function readSummaries(now: Date = new Date()): Promise<void> {
     const ranges = usageCostRanges(now);
     const [todayResult, weekResult] = await Promise.allSettled([
-      getUsageSummary(summaryQuery(ranges.today.from, ranges.today.to)),
-      getUsageSummary(summaryQuery(ranges.week.from, ranges.week.to)),
+      getUsageSummary(summaryQuery(ranges.today, "source")),
+      getUsageSummary(summaryQuery(ranges.week, "source")),
     ]);
 
     let failed = false;
@@ -85,6 +107,47 @@ export const useUsageStore = defineStore("usage", () => {
     loaded.value = true;
   }
 
+  /**
+   * 主窗口的单次范围查询。Rust 已支持 day/source/model 三种聚合，按 Provider 拆开 day 与
+   * model 查询即可保持现有 command 契约，同时让图表和分组表都能闭合对账。
+   */
+  async function loadDashboard(range: UsageDashboardRange): Promise<void> {
+    const request = ++dashboardRequest;
+    dashboardRange.value = range;
+    dashboardLoading.value = true;
+    dashboardUnavailable.value = false;
+    dashboard.value = emptyDashboard();
+
+    await readStatus();
+
+    const results = await Promise.allSettled([
+      getUsageSummary(summaryQuery(range, "source")),
+      getUsageSummary(summaryQuery(range, "day", "codex")),
+      getUsageSummary(summaryQuery(range, "day", "claude")),
+      getUsageSummary(summaryQuery(range, "model", "codex")),
+      getUsageSummary(summaryQuery(range, "model", "claude")),
+    ]);
+
+    if (request !== dashboardRequest) {
+      return;
+    }
+
+    const value = (index: number): UsageSummary | null => {
+      const result = results[index];
+      if (!result || result.status !== "fulfilled") return null;
+      return result.value;
+    };
+
+    dashboard.value = {
+      source: value(0),
+      day: { codex: value(1), claude: value(2) },
+      model: { codex: value(3), claude: value(4) },
+    };
+    dashboardUnavailable.value = results.some((result) => result.status === "rejected");
+    dashboardLoaded.value = true;
+    dashboardLoading.value = false;
+  }
+
   /** 扫描没有 event；可见期间只轮询状态，结束后再一次性采纳新的完整汇总。 */
   async function poll(now: Date = new Date()): Promise<boolean> {
     const previousFinishedAt = status.value?.finishedAt ?? null;
@@ -111,7 +174,13 @@ export const useUsageStore = defineStore("usage", () => {
     partial,
     unavailable,
     costs,
+    dashboard,
+    dashboardRange,
+    dashboardLoaded,
+    dashboardLoading,
+    dashboardUnavailable,
     load,
+    loadDashboard,
     poll,
   };
 });

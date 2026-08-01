@@ -34,6 +34,12 @@
   --status-low: #f3730e;
   --status-error: #f31260;
 
+  /* Provider 品牌识别是分类维度；Codex 与 cc-bar 对齐为石墨灰，不表达可用性、风险或交互状态。 */
+  --cat-codex: #6c6c70;
+  --cat-claude: #d97757;
+  --cat-codex-dim: rgb(108 108 112 / 14%);
+  --cat-claude-dim: rgb(217 119 87 / 12%);
+
   /* 紧凑面板是悬浮层，阴影比主窗口里的卡片更明显 */
   --shadow-panel: 0 14px 32px -12px rgb(17 17 17 / 20%), 0 3px 8px rgb(17 17 17 / 8%);
   --ring-panel: rgb(17 17 17 / 8%);
@@ -85,6 +91,11 @@
     --status-low: #ff8a3d;
     --status-error: #f5455c;
 
+    --cat-codex: #98989d;
+    --cat-claude: #f0a080;
+    --cat-codex-dim: rgb(152 152 157 / 14%);
+    --cat-claude-dim: rgb(240 160 128 / 14%);
+
     --shadow-panel: 0 18px 40px -14px rgb(0 0 0 / 60%), 0 4px 10px rgb(0 0 0 / 35%);
     --ring-panel: rgb(255 255 255 / 8%);
     --shadow-lane: 0 1px 2px rgb(0 0 0 / 35%);
@@ -104,6 +115,11 @@
   --status-warning: #fbbf24;
   --status-low: #ff8a3d;
   --status-error: #f5455c;
+
+  --cat-codex: #98989d;
+  --cat-claude: #f0a080;
+  --cat-codex-dim: rgb(152 152 157 / 14%);
+  --cat-claude-dim: rgb(240 160 128 / 14%);
 
   --shadow-panel: 0 18px 40px -14px rgb(0 0 0 / 60%), 0 4px 10px rgb(0 0 0 / 35%);
   --ring-panel: rgb(255 255 255 / 8%);
