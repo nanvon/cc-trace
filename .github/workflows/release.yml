@@ -42,12 +42,14 @@ jobs:
             target: aarch64-apple-darwin
             bundles: dmg
             apple_signing_identity: "-"
+            zip_platform_label: macOS-Apple-Silicon
             asset_name_pattern: "CC-Trace_[version]_macOS-Apple-Silicon[ext]"
           - name: macOS Intel
             platform: macos-15-intel
             target: x86_64-apple-darwin
             bundles: dmg
             apple_signing_identity: "-"
+            zip_platform_label: macOS-Intel
             asset_name_pattern: "CC-Trace_[version]_macOS-Intel[ext]"
           - name: Windows x64
             platform: windows-latest
@@ -114,8 +116,8 @@ jobs:
           releaseBody: |
             自动构建产物：
 
-            - macOS Apple Silicon：下载文件名含 `macOS-Apple-Silicon`
-            - macOS Intel：下载文件名含 `macOS-Intel`
+            - macOS Apple Silicon：下载文件名含 `macOS-Apple-Silicon` 的 DMG 与 ZIP
+            - macOS Intel：下载文件名含 `macOS-Intel` 的 DMG 与 ZIP
             - Windows x64：下载 `Windows-x64-Setup.exe`
 
             macOS 产物使用 ad-hoc 签名且未经过 Apple 公证，首次打开需要在系统设置中手动放行。安装新版本后，首次读取 Claude Code 钥匙串凭据时可能再次出现授权弹窗。
@@ -125,6 +127,24 @@ jobs:
           generateReleaseNotes: true
           args: "--target ${{ matrix.target }} --bundles ${{ matrix.bundles }}"
           releaseAssetNamePattern: ${{ matrix.asset_name_pattern }}
+
+      - name: Create and upload macOS ZIP
+        if: runner.os == 'macOS'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TARGET: ${{ matrix.target }}
+          ZIP_PLATFORM_LABEL: ${{ matrix.zip_platform_label }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          bundle_dir="${GITHUB_WORKSPACE}/src-tauri/target/${RELEASE_TARGET}/release/bundle/macos"
+          zip_path="${bundle_dir}/CC-Trace_${version}_${ZIP_PLATFORM_LABEL}.zip"
+
+          ./scripts/package-macos-zip.sh "${bundle_dir}" "${zip_path}"
+          gh release upload "${GITHUB_REF_NAME}" "${zip_path}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --clobber
 
   checksums:
     name: Generate checksums

@@ -10,7 +10,7 @@
 
 CC Trace 是一款 macOS 与 Windows 桌面小工具。它常驻在 macOS 菜单栏或 Windows 系统托盘，随时告诉你两个 AI 编程工具的额度余量、什么时候重置、数据是不是最新的——不用再打开网页后台，也不用敲诊断命令。
 
-> ⚠️ **当前是开发中的 `0.1.0`，还没有发布可下载的安装包。** 想现在体验只能自行构建，见下方[安装](#安装)。
+> ⚠️ **当前是开发中的 `0.1.5`，还没有发布可下载的安装包。** 想现在体验只能自行构建，见下方[安装](#安装)。
 
 ## 它能做什么
 
@@ -47,18 +47,18 @@ macOS 上首次读取 Claude Code 的钥匙串凭据时，系统会弹出授权�
 
 ## 安装
 
-**目前还没有发布安装包。** 计划在 Releases 提供 macOS DMG（Apple Silicon／Intel 各一份）与 Windows 安装程序，届时也会附带 `SHA256SUMS.txt` 供校验。
+**目前还没有发布安装包。** 计划在 Releases 提供 macOS DMG 与 ZIP（Apple Silicon／Intel 各一组）以及 Windows 安装程序，届时也会附带 `SHA256SUMS.txt` 供校验。
 
 想先体验的话，可以自行构建：
 
 ```bash
 pnpm install
-pnpm tauri build
+pnpm build:mac:release
 ```
 
-构建前需要准备 Node.js 22+、pnpm 11、Rust 稳定版工具链，以及 [Tauri 官方要求的平台依赖](https://v2.tauri.app/start/prerequisites/)。
+上面的 macOS 发布脚本会在 `src-tauri/target/release/bundle/macos/` 生成 DMG，并将签名后的 `.app` 压成 ZIP。构建前需要准备 Node.js 22+、pnpm 11、Rust 稳定版工具链，以及 [Tauri 官方要求的平台依赖](https://v2.tauri.app/start/prerequisites/)。
 
-**关于安全提示：** CC Trace 不购买 Apple 开发者账号和 Windows 代码签名证书，所以未来发布的安装包会是未签名的。macOS 首次打开需要在「访达」里右键点图标选「打开」，Windows 可能出现 SmartScreen 的「不常见应用」提示——这是未签名应用的预期表现，不代表出了问题。（Windows 上的具体提示形式尚未实机验证。）
+**关于安全提示：** CC Trace 不购买 Apple 开发者账号和 Windows 代码签名证书。macOS 发布产物使用 ad-hoc 签名但未经过 Apple 公证，首次打开需要在「访达」里右键点图标选「打开」；Windows 产物未签名，可能出现 SmartScreen 的「不常见应用」提示——这是当前发布边界的预期表现，不代表出了问题。（Windows 上的具体提示形式尚未实机验证。）
 
 ## 怎么用
 
