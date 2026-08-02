@@ -5,8 +5,8 @@
  * 页面只读取 Rust 本地用量摘要，不读取额度，也不把 Conversations、设置等后续能力
  * 提前塞进主窗口。布局基线来自 `prototypes/usage-page/index.html` 与 ADR-0020。
  */
-import { VueDatePicker as DatePicker } from "@vuepic/vue-datepicker";
-import "@vuepic/vue-datepicker/dist/main.css";
+import { DatePicker as VDatePicker } from "v-calendar";
+import "v-calendar/style.css";
 import { computed, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
@@ -18,6 +18,7 @@ import { navigateMain } from "../features/app/navigation";
 import type { UsageDashboardRange } from "../features/usage/contracts";
 import {
   customUsageRange,
+  usageChartRange,
   usageDashboardRanges,
   usageDatePickerRange,
   usageRangePresets,
@@ -35,7 +36,27 @@ const providerSources = ["codex", "claude"] as const;
 const currentPreset = ref<UsageDashboardRange["preset"]>("today");
 const initialRange = usageDashboardRanges().today;
 const selectedRange = ref<UsageDashboardRange>(initialRange);
-const customDates = ref<Date[] | null>(usageDatePickerRange(initialRange));
+type DateRangeInput = { start: Date; end: Date } | null;
+
+function dateRangeInputValue(range: UsageDashboardRange): DateRangeInput {
+  const dates = usageDatePickerRange(range);
+  return dates ? { start: dates[0], end: dates[1] } : null;
+}
+
+const customDates = ref<DateRangeInput>(dateRangeInputValue(initialRange));
+const calendarLocale = computed(() =>
+  locale.value.toLowerCase().startsWith("zh") ? "zh-CN" : "en-US",
+);
+const todayDate = computed(() => {
+  const today = new Date();
+  return new Date(today.getFullYear(), today.getMonth(), today.getDate());
+});
+const chartRange = computed(() => usageChartRange(selectedRange.value));
+const chartUsesContextWindow = computed(
+  () =>
+    chartRange.value.from !== selectedRange.value.from ||
+    chartRange.value.to !== selectedRange.value.to,
+);
 
 const sourceSummary = computed(() => usage.dashboard.source);
 const dashboardReady = computed(() => usage.dashboardLoaded && !usage.dashboardLoading);
@@ -84,10 +105,14 @@ function formatDateTime(value: string): string {
   }).format(new Date(value));
 }
 
+function formatDateRangeInput(start?: string, end?: string): string {
+  return [start, end].filter(Boolean).join(" – ");
+}
+
 function selectPreset(preset: UsageRangePreset): void {
   const range = usageDashboardRanges()[preset];
   currentPreset.value = preset;
-  customDates.value = usageDatePickerRange(range);
+  customDates.value = dateRangeInputValue(range);
   selectedRange.value = range;
   void usage.loadDashboard(selectedRange.value);
 }
@@ -100,13 +125,12 @@ function sameDate(left: Date, right: Date): boolean {
   );
 }
 
-function handleCustomRange(value: Date[] | null): void {
-  if (!value || value.length !== 2 || !value[0] || !value[1]) return;
-  const [from, to] = value;
-  const normalizedDates: [Date, Date] = [
-    new Date(from.getFullYear(), from.getMonth(), from.getDate()),
-    new Date(to.getFullYear(), to.getMonth(), to.getDate()),
-  ];
+function handleCustomRange(value: DateRangeInput): void {
+  if (!value?.start || !value.end) return;
+  const from = new Date(value.start.getFullYear(), value.start.getMonth(), value.start.getDate());
+  const to = new Date(value.end.getFullYear(), value.end.getMonth(), value.end.getDate());
+
+  const normalizedDates: [Date, Date] = [from, to];
   const ranges = usageDashboardRanges();
   const matchingPreset = presets.find((preset) => {
     const presetDates = usageDatePickerRange(ranges[preset]);
@@ -118,7 +142,7 @@ function handleCustomRange(value: Date[] | null): void {
   });
 
   currentPreset.value = matchingPreset ?? "custom";
-  customDates.value = normalizedDates;
+  customDates.value = { start: from, end: to };
   selectedRange.value = matchingPreset ? ranges[matchingPreset] : customUsageRange(from, to);
   void usage.loadDashboard(selectedRange.value);
 }
@@ -166,21 +190,27 @@ onMounted(() => {
           </button>
         </div>
 
-        <DatePicker
-          v-model="customDates"
-          class="usage-date-picker"
-          :aria-label="t('main.customRange')"
-          :auto-apply="true"
-          :clearable="false"
-          :enable-time-picker="false"
-          format="yyyy-MM-dd"
-          :month-change-on-scroll="false"
-          :partial-range="false"
-          :placeholder="t('main.customRange')"
-          :range="true"
-          :teleport="true"
+        <VDatePicker
+          v-model.range="customDates"
+          :first-day-of-week="2"
+          :locale="calendarLocale"
+          :max-date="todayDate"
+          mode="date"
           @update:model-value="handleCustomRange"
-        />
+        >
+          <template #default="{ inputValue, inputEvents }">
+            <input
+              type="text"
+              size="26"
+              :value="formatDateRangeInput(inputValue.start, inputValue.end)"
+              :placeholder="t('main.customRange')"
+              :aria-label="t('main.customRange')"
+              autocomplete="off"
+              readonly
+              v-on="inputEvents.start"
+            />
+          </template>
+        </VDatePicker>
       </div>
 
       <section class="usage-page__block" aria-labelledby="usage-provider-heading">
@@ -190,17 +220,19 @@ onMounted(() => {
         <div class="usage-page__provider-layout">
           <article class="usage-page__total-card" :aria-label="t('main.overview')">
             <div class="usage-page__total-row">
-              <span class="usage-page__total-label">{{ t("main.totalTokens") }}</span>
               <strong class="usage-page__total-value numeric" :title="totalTokens?.full">
                 {{ totalTokens?.value ?? t("main.noValue") }}
-                <small v-if="totalTokens?.unit">{{ tokenUnitSeparator }}{{ totalTokens.unit }}</small>
+                <small v-if="totalTokens?.unit">
+                  {{ tokenUnitSeparator }}{{ totalTokens.unit }}
+                </small>
               </strong>
+              <span class="usage-page__total-label">{{ t("main.totalTokens") }}</span>
             </div>
             <div class="usage-page__total-row">
-              <span class="usage-page__total-label">{{ t("main.totalCost") }}</span>
-              <strong class="usage-page__total-value numeric">
+              <strong class="usage-page__total-value numeric" :title="totalCost ?? undefined">
                 {{ totalCost ?? t("main.noValue") }}
               </strong>
+              <span class="usage-page__total-label">{{ t("main.totalCost") }}</span>
             </div>
           </article>
 
@@ -220,19 +252,26 @@ onMounted(() => {
       <section class="usage-page__block" aria-labelledby="usage-daily-heading">
         <div class="usage-page__block-head usage-page__block-head--with-legend">
           <h2 id="usage-daily-heading">{{ t("main.dailyCost") }}</h2>
-          <div class="usage-page__legend" role="list" :aria-label="t('main.byProvider')">
-            <span class="usage-page__legend-item" data-provider="codex" role="listitem">
-              <span class="usage-page__legend-dot" aria-hidden="true"></span>
-              {{ t("provider.codex") }}
+          <div class="usage-page__chart-meta">
+            <span v-if="chartUsesContextWindow" class="usage-page__chart-note">
+              {{ t("main.chartContext") }}
             </span>
-            <span class="usage-page__legend-item" data-provider="claude" role="listitem">
-              <span class="usage-page__legend-dot" aria-hidden="true"></span>
-              {{ t("provider.claude") }}
-            </span>
+            <div class="usage-page__legend" role="list" :aria-label="t('main.byProvider')">
+              <span class="usage-page__legend-item" data-provider="codex" role="listitem">
+                <span class="usage-page__legend-dot" aria-hidden="true"></span>
+                {{ t("provider.codex") }}
+              </span>
+              <span class="usage-page__legend-item" data-provider="claude" role="listitem">
+                <span class="usage-page__legend-dot" aria-hidden="true"></span>
+                {{ t("provider.claude") }}
+              </span>
+            </div>
           </div>
         </div>
         <UsageDailyChart
           :day="usage.dashboard.day"
+          :range="selectedRange"
+          :chart-range="chartRange"
           :loaded="dashboardReady"
           :unavailable="usage.dashboardUnavailable"
         />
@@ -262,8 +301,7 @@ onMounted(() => {
   --usage-surface: var(--surface-raised);
   --usage-divider: var(--border-subtle);
   --usage-track: var(--track-background);
-  --usage-total: var(--surface-primary);
-  --usage-card-shadow: none;
+  --usage-card-shadow: var(--shadow-lane);
   min-block-size: 100vh;
   padding: clamp(1.125rem, 3vw, 1.375rem) clamp(1.125rem, 3vw, 1.875rem) 2.125rem;
   background: var(--usage-canvas);
@@ -375,35 +413,6 @@ onMounted(() => {
   font-weight: 500;
 }
 
-.usage-date-picker {
-  display: inline-flex;
-  flex: 0 1 15rem;
-  min-inline-size: min(100%, 15rem);
-}
-
-.usage-date-picker :global(.dp__input) {
-  min-block-size: 2.5rem;
-  inline-size: 100%;
-  padding-inline: 0.75rem 2rem;
-  border: 1px solid var(--usage-divider);
-  border-radius: var(--radius-control);
-  color: var(--text-primary);
-  background: var(--usage-surface);
-  font-size: 0.6875rem;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
-.usage-date-picker :global(.dp__input:hover) {
-  background: color-mix(in srgb, var(--usage-surface) 92%, var(--usage-canvas));
-}
-
-.usage-date-picker :global(.dp__input:focus) {
-  border-color: var(--action-primary);
-  outline: none;
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--action-primary) 22%, transparent);
-}
-
 .usage-page__provider-layout {
   display: grid;
   grid-template-columns: minmax(12rem, 0.42fr) minmax(0, 2fr);
@@ -412,50 +421,67 @@ onMounted(() => {
 }
 
 .usage-page__total-card {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
+  display: grid;
+  grid-template-rows: repeat(2, minmax(0, 1fr));
   min-inline-size: 0;
-  padding: 0.625rem 0.875rem;
-  border: 1px solid var(--usage-divider);
-  border-radius: 0.625rem;
-  background: var(--usage-surface);
-  box-shadow: var(--usage-card-shadow, var(--shadow-lane));
+  min-block-size: 100%;
+  padding: 0.75rem 1rem;
+  border: 1px solid color-mix(in srgb, var(--usage-divider) 72%, transparent);
+  border-radius: 1rem;
+  background: color-mix(in srgb, var(--usage-surface) 94%, var(--usage-canvas));
+  box-shadow:
+    0 1px 2px rgb(17 17 17 / 5%),
+    0 10px 24px -18px rgb(17 17 17 / 26%);
 }
 
 .usage-page__total-row {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--space-3);
-  min-block-size: 2.75rem;
+  align-items: flex-end;
+  justify-content: flex-start;
+  gap: 0.625rem;
+  min-inline-size: 0;
+  min-block-size: 0;
+  padding-block: 0.75rem;
 }
 
 .usage-page__total-row + .usage-page__total-row {
-  border-block-start: 1px solid var(--usage-divider);
+  padding-block-start: 0.875rem;
+  border-block-start: 1px solid color-mix(in srgb, var(--usage-divider) 72%, transparent);
 }
 
 .usage-page__total-label {
+  flex: 0 0 auto;
   color: var(--text-secondary);
-  font-size: 0.65625rem;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  line-height: 1.2;
+  letter-spacing: 0.01em;
   white-space: nowrap;
 }
 
 .usage-page__total-value {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.0625rem;
+  flex: 0 1 auto;
+  min-inline-size: 0;
+  max-inline-size: 100%;
+  overflow: hidden;
   color: var(--text-primary);
-  font-size: 1.125rem;
-  font-weight: 680;
-  letter-spacing: -0.025em;
-  line-height: 1;
-  text-align: end;
+  font-size: clamp(1.5rem, 2.5vw, 2rem);
+  font-weight: 650;
+  letter-spacing: -0.035em;
+  line-height: 0.96;
+  text-align: start;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .usage-page__total-value small {
-  margin-inline-start: 0.125rem;
+  margin-inline-start: 0.0625rem;
   color: var(--text-secondary);
-  font-size: 0.6875rem;
-  font-weight: 580;
+  font-size: 0.48em;
+  font-weight: 550;
   letter-spacing: -0.02em;
 }
 
@@ -498,6 +524,19 @@ onMounted(() => {
   font-size: 0.625rem;
 }
 
+.usage-page__chart-meta {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  min-inline-size: 0;
+}
+
+.usage-page__chart-note {
+  color: var(--text-secondary);
+  font-size: 0.625rem;
+  white-space: nowrap;
+}
+
 .usage-page__legend-item {
   --provider-color: var(--cat-codex);
   display: inline-flex;
@@ -523,36 +562,6 @@ onMounted(() => {
   gap: 0.75rem;
 }
 
-/* DatePicker 的弹层 teleport 到 body，不能依赖 usage-page 的 scoped 继承。 */
-:global(.dp__menu) {
-  border-color: var(--border-subtle);
-  border-radius: 0.625rem;
-  color: var(--text-primary);
-  background: var(--surface-raised);
-  font-family: var(--font-ui);
-  box-shadow: var(--shadow-panel);
-}
-
-:global(.dp__menu .dp__calendar_header_item),
-:global(.dp__menu .dp__calendar_item) {
-  color: var(--text-secondary);
-}
-
-:global(.dp__menu .dp__cell_inner) {
-  color: var(--text-primary);
-}
-
-:global(.dp__menu .dp__active_date),
-:global(.dp__menu .dp__range_end),
-:global(.dp__menu .dp__range_start) {
-  background: var(--action-primary);
-  color: var(--surface-raised);
-}
-
-:global(.dp__menu .dp__today) {
-  border-color: var(--action-primary);
-}
-
 @media (max-width: 900px) {
   .usage-page__provider-layout {
     grid-template-columns: 1fr;
@@ -572,6 +581,12 @@ onMounted(() => {
 
   .usage-page__top {
     align-items: flex-start;
+  }
+
+  .usage-page__chart-meta {
+    align-items: flex-end;
+    flex-direction: column;
+    gap: 0.25rem;
   }
 
   .usage-page__providers {

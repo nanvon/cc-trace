@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   customUsageRange,
   usageCostRanges,
+  usageChartRange,
   usageDashboardRanges,
   usageDatePickerRange,
   usageRangePresets,
@@ -76,5 +77,20 @@ describe("usageDashboardRanges", () => {
       [29, 0],
       [29, 0],
     ]);
+  });
+});
+
+describe("usageChartRange", () => {
+  it("adds a 14-day local calendar context to a single-day range", () => {
+    const today = usageDashboardRanges(new Date(2026, 6, 29, 15)).today;
+    const chart = usageChartRange(today);
+
+    expect(new Date(chart.from ?? "").toDateString()).toBe(new Date(2026, 6, 16).toDateString());
+    expect(chart.to).toBe(today.to);
+  });
+
+  it("keeps multi-day ranges unchanged", () => {
+    const month = usageDashboardRanges(new Date(2026, 6, 29)).thisMonth;
+    expect(usageChartRange(month)).toEqual(month);
   });
 });

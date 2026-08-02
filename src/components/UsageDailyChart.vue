@@ -9,7 +9,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import VChart from "vue-echarts";
 
-import type { UsageSource, UsageSummary } from "../features/usage/contracts";
+import type { UsageDashboardRange, UsageSource, UsageSummary } from "../features/usage/contracts";
 import { formatCompactUsdNanos, formatUsdNanos } from "../lib/format";
 import { usageChartColors } from "../lib/chartTheme";
 
@@ -17,6 +17,8 @@ use([BarChart, GridComponent, TooltipComponent, CanvasRenderer]);
 
 const props = defineProps<{
   day: Record<UsageSource, UsageSummary | null>;
+  range: UsageDashboardRange;
+  chartRange: UsageDashboardRange;
   loaded: boolean;
   unavailable: boolean;
 }>();
@@ -29,13 +31,55 @@ let themeObserver: MutationObserver | null = null;
 
 useResizeObserver(chartRoot, () => chart.value?.resize());
 
-const dates = computed(() => {
+function localDay(date: Date): Date {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function dayKey(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function daysInRange(range: UsageDashboardRange): string[] {
+  if (!range.from || !range.to) return [];
+
+  const fromDate = localDay(new Date(range.from));
+  const toDate = localDay(new Date(range.to));
+  const values: string[] = [];
+
+  for (
+    let current = fromDate;
+    current < toDate;
+    current = new Date(current.getFullYear(), current.getMonth(), current.getDate() + 1)
+  ) {
+    values.push(dayKey(current));
+  }
+
+  return values;
+}
+
+const rowDates = computed(() => {
   const values = new Set<string>();
   for (const source of ["codex", "claude"] as const) {
     for (const row of props.day[source]?.rows ?? []) values.add(row.key);
   }
+  return [...values];
+});
+
+const contextDates = computed(() => daysInRange(props.chartRange));
+const selectedDates = computed(() => new Set(daysInRange(props.range)));
+const contextual = computed(
+  () => props.chartRange.from !== props.range.from || props.chartRange.to !== props.range.to,
+);
+
+const dates = computed(() => {
+  const values = new Set([...contextDates.value, ...rowDates.value]);
   return [...values].sort();
 });
+
+const hasUsageRows = computed(() => rowDates.value.length > 0);
 
 function costFor(source: UsageSource, date: string): number {
   return props.day[source]?.rows.find((row) => row.key === date)?.cost.apiEquivalentCostNanos ?? 0;
@@ -44,6 +88,10 @@ function costFor(source: UsageSource, date: string): number {
 function formatDay(value: string): string {
   const date = new Date(`${value}T00:00:00`);
   return new Intl.DateTimeFormat(locale.value, { day: "numeric", month: "numeric" }).format(date);
+}
+
+function barOpacity(date: string): number {
+  return contextual.value && !selectedDates.value.has(date) ? 0.34 : 1;
 }
 
 const option = computed<EChartsOption>(() => {
@@ -76,7 +124,13 @@ const option = computed<EChartsOption>(() => {
       valueFormatter: (value) => formatUsdNanos(locale.value, Number(value)),
     },
     xAxis: {
-      axisLabel: { color: colors.muted, fontFamily: colors.fontFamily, fontSize: 10 },
+      axisLabel: {
+        color: colors.muted,
+        fontFamily: colors.fontFamily,
+        fontSize: 10,
+        hideOverlap: true,
+        interval: Math.max(0, Math.ceil(categories.length / 5) - 1),
+      },
       axisLine: { lineStyle: { color: colors.border } },
       axisTick: { show: false },
       data: categories,
@@ -97,7 +151,10 @@ const option = computed<EChartsOption>(() => {
     series: [
       {
         barMaxWidth: 28,
-        data: dates.value.map((date) => costFor("codex", date)),
+        data: dates.value.map((date) => ({
+          itemStyle: { opacity: barOpacity(date) },
+          value: costFor("codex", date),
+        })),
         itemStyle: { color: colors.codex, borderRadius: [0, 0, 2, 2] },
         name: t("provider.codex"),
         stack: "cost",
@@ -105,7 +162,10 @@ const option = computed<EChartsOption>(() => {
       },
       {
         barMaxWidth: 28,
-        data: dates.value.map((date) => costFor("claude", date)),
+        data: dates.value.map((date) => ({
+          itemStyle: { opacity: barOpacity(date) },
+          value: costFor("claude", date),
+        })),
         itemStyle: { color: colors.claude, borderRadius: [2, 2, 0, 0] },
         name: t("provider.claude"),
         stack: "cost",
@@ -136,7 +196,7 @@ onBeforeUnmount(() => {
     <div v-if="!loaded || unavailable" class="usage-chart__empty">
       {{ unavailable ? t("main.unavailable") : t("main.loading") }}
     </div>
-    <div v-else-if="dates.length === 0" class="usage-chart__empty">{{ t("main.empty") }}</div>
+    <div v-else-if="!hasUsageRows" class="usage-chart__empty">{{ t("main.empty") }}</div>
     <VChart v-else ref="chart" class="usage-chart__canvas" :option="option" autoresize />
   </div>
 </template>

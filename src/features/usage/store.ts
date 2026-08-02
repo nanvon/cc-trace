@@ -14,7 +14,7 @@ import type {
   UsageSummaryQuery,
 } from "./contracts";
 import { buildProviderCosts } from "./presentation";
-import { usageCostRanges, usageDashboardRanges } from "./ranges";
+import { usageChartRange, usageCostRanges, usageDashboardRanges } from "./ranges";
 
 function summaryQuery(
   range: Pick<UsageDashboardRange, "from" | "to">,
@@ -117,13 +117,14 @@ export const useUsageStore = defineStore("usage", () => {
     dashboardLoading.value = true;
     dashboardUnavailable.value = false;
     dashboard.value = emptyDashboard();
+    const chartRange = usageChartRange(range);
 
     await readStatus();
 
     const results = await Promise.allSettled([
       getUsageSummary(summaryQuery(range, "source")),
-      getUsageSummary(summaryQuery(range, "day", "codex")),
-      getUsageSummary(summaryQuery(range, "day", "claude")),
+      getUsageSummary(summaryQuery(chartRange, "day", "codex")),
+      getUsageSummary(summaryQuery(chartRange, "day", "claude")),
       getUsageSummary(summaryQuery(range, "model", "codex")),
       getUsageSummary(summaryQuery(range, "model", "claude")),
     ]);

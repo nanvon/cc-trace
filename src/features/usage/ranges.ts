@@ -8,6 +8,8 @@ export interface UsageCostRanges {
 
 export type UsageRangePreset = Exclude<UsageDashboardRange["preset"], "custom">;
 
+const DAILY_CHART_CONTEXT_DAYS = 14;
+
 const PRESETS: UsageRangePreset[] = [
   "today",
   "yesterday",
@@ -27,12 +29,18 @@ function toIso(date: Date): string {
   return date.toISOString();
 }
 
-function range(from: Date | null, to: Date | null, preset: UsageDashboardRange["preset"]): UsageDashboardRange {
+function range(
+  from: Date | null,
+  to: Date | null,
+  preset: UsageDashboardRange["preset"],
+): UsageDashboardRange {
   return { preset, from: from ? toIso(from) : null, to: to ? toIso(to) : null };
 }
 
 /** 所有预设都使用本地日历边界，再交给 Rust 做 UTC 查询。 */
-export function usageDashboardRanges(now: Date = new Date()): Record<UsageRangePreset, UsageDashboardRange> {
+export function usageDashboardRanges(
+  now: Date = new Date(),
+): Record<UsageRangePreset, UsageDashboardRange> {
   const today = startOfDay(now);
   const tomorrow = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
   const yesterday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1);
@@ -65,10 +73,30 @@ export function customUsageRange(from: Date, to: Date): UsageDashboardRange {
   return range(start, end, "custom");
 }
 
+/**
+ * 单日范围的每日图表沿用 cc-bar 的上下文窗口：保留所选区间口径，但向前补足 14 个本地日历日。
+ * 总量、Provider 卡片和模型表仍然只使用原始范围，不把上下文数据混入统计数字。
+ */
+export function usageChartRange(value: UsageDashboardRange): UsageDashboardRange {
+  if (!value.from || !value.to) return value;
+
+  const from = startOfDay(new Date(value.from));
+  const to = startOfDay(new Date(value.to));
+  const duration = to.getTime() - from.getTime();
+
+  // 允许夏令时导致的 23/25 小时日，但不把多日范围误判成单日上下文。
+  if (duration <= 0 || duration > 86_400_000 * 1.5) return value;
+
+  const contextFrom = new Date(
+    from.getFullYear(),
+    from.getMonth(),
+    from.getDate() - (DAILY_CHART_CONTEXT_DAYS - 1),
+  );
+  return { ...value, from: toIso(contextFrom) };
+}
+
 /** 将后端半开区间还原成日期选择器使用的两个本地日历日。 */
-export function usageDatePickerRange(
-  value: UsageDashboardRange,
-): [Date, Date] | null {
+export function usageDatePickerRange(value: UsageDashboardRange): [Date, Date] | null {
   if (!value.from || !value.to) return null;
 
   const from = new Date(value.from);

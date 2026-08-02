@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { getUsageScanStatus, getUsageSummary } from "./api";
 import type { UsageScanStatus, UsageSummary } from "./contracts";
-import { usageDashboardRanges } from "./ranges";
+import { usageChartRange, usageDashboardRanges } from "./ranges";
 import { useUsageStore } from "./store";
 
 vi.mock("./api", () => ({
@@ -102,5 +102,20 @@ describe("usage store", () => {
     expect(store.dashboardLoaded).toBe(true);
     expect(store.dashboardLoading).toBe(false);
     expect(store.dashboardUnavailable).toBe(false);
+  });
+
+  it("uses the wider context only for daily summaries in a single-day range", async () => {
+    vi.mocked(getUsageScanStatus).mockResolvedValue(idleStatus("2026-07-30T10:00:00Z"));
+    const store = useUsageStore();
+    const today = usageDashboardRanges(new Date(2026, 6, 30)).today;
+
+    await store.loadDashboard(today);
+
+    const queries = vi.mocked(getUsageSummary).mock.calls.map(([query]) => query);
+    expect(queries[0]?.filter.from).toBe(today.from);
+    expect(queries[1]?.filter.from).toBe(usageChartRange(today).from);
+    expect(queries[2]?.filter.from).toBe(usageChartRange(today).from);
+    expect(queries[3]?.filter.from).toBe(today.from);
+    expect(queries[4]?.filter.from).toBe(today.from);
   });
 });
