@@ -1,0 +1,1507 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="color-scheme" content="light" />
+<title>CC Trace · HeroUI 修复方向评审稿</title>
+<style>
+/* ============================================================
+   评审稿说明:
+   - 这是 HeroUI 方向(ADR-0012)的「修复版」,不是新方向。
+   - 与 prototypes/macos-native/ 并排对比后再定方向。
+   - 亮 / 暗以容器级 token 并排呈现,便于同屏对比。
+   - 标 🚩 的取值推翻或修改了现有文档结论,需要补 ADR。
+   ============================================================ */
+
+* { box-sizing: border-box; }
+
+html { background: #ECECEE; }
+
+body {
+  margin: 0;
+  padding: 40px 32px 80px;
+  color: #18181B;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI Variable", "Segoe UI",
+    "Noto Sans SC", "Microsoft YaHei", sans-serif;
+  font-size: 14px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+.mono {
+  font-family: "SFMono-Regular", "Cascadia Mono", ui-monospace, monospace;
+}
+
+.num { font-variant-numeric: tabular-nums; }
+
+/* ---------- 评审稿页面骨架(非产品 UI) ---------- */
+
+.stage { max-width: 1380px; margin: 0 auto; }
+
+.stage-head { max-width: 760px; margin-bottom: 44px; }
+
+.stage-head h1 {
+  margin: 0 0 10px;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.stage-head p { margin: 6px 0; color: #52525B; font-size: 13px; }
+
+.stage-section { margin-bottom: 64px; }
+
+.stage-section > h2 {
+  margin: 0 0 4px;
+  font-size: 16px;
+  font-weight: 680;
+  letter-spacing: -0.01em;
+}
+
+.stage-section > .section-sub {
+  margin: 0 0 20px;
+  color: #71717A;
+  font-size: 12.5px;
+}
+
+.row { display: flex; flex-wrap: wrap; gap: 28px; align-items: flex-start; }
+
+.specimen { display: grid; gap: 10px; }
+
+.specimen > figcaption {
+  color: #71717A;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+/* 注记卡 */
+.notes {
+  flex: 1 1 260px;
+  max-width: 330px;
+  padding: 16px 18px;
+  background: #FFFFFF;
+  border: 1px solid #E4E4E7;
+  border-radius: 14px;
+}
+
+.notes h3 { margin: 0 0 10px; font-size: 12.5px; font-weight: 680; }
+
+.notes ul { margin: 0; padding-left: 18px; display: grid; gap: 7px; }
+
+.notes li { color: #3F3F46; font-size: 12px; line-height: 1.5; }
+
+.notes li strong { color: #18181B; }
+
+.flag {
+  display: inline-block;
+  margin-right: 2px;
+  font-size: 11px;
+}
+
+/* ============================================================
+   产品 token —— 修复版取值
+   ============================================================ */
+
+.theme-light {
+  /* 🚩 canvas 从 #FAFAFA 加深到 #F4F4F5:拉开与白卡的色差 */
+  --surface-primary: #F4F4F5;
+  --surface-raised: #FFFFFF;
+  --text-primary: #18181C;
+  --text-secondary: #71717A;
+  --border-subtle: #E4E4E7;
+  --track-background: #EDEDF0;
+  --action-primary: #006FEE;
+  --status-success: #17C964;
+  --status-warning: #F5A524;
+  --status-low: #F3730E;
+  --status-error: #F31260;
+  --cat-codex: #6C6C70;
+  --cat-claude: #D97757;
+  --cat-codex-dim: rgb(108 108 112 / 12%);
+  --cat-claude-dim: rgb(217 119 87 / 11%);
+  /* 🚩 lane 阴影加档:静止时肉眼可见,仍然柔和 */
+  --shadow-lane: 0 1px 2px rgb(16 16 20 / 5%), 0 6px 20px -8px rgb(16 16 20 / 10%);
+  --shadow-panel: 0 24px 56px -18px rgb(16 16 20 / 26%), 0 4px 12px rgb(16 16 20 / 7%);
+  --ring-panel: rgb(16 16 20 / 8%);
+}
+
+.theme-dark {
+  /* 🚩 暗色弃用纯黑:#0E0E11 底 + #1C1C1F 卡,层级不再只剩发丝线 */
+  --surface-primary: #0E0E11;
+  --surface-raised: #1C1C1F;
+  --text-primary: #ECEDEE;
+  --text-secondary: #A1A1AA;
+  --border-subtle: #2E2E33;
+  --track-background: #2A2A2E;
+  --action-primary: #338EF7;
+  --status-success: #45D483;
+  --status-warning: #FBBF24;
+  --status-low: #FF8A3D;
+  --status-error: #F5455C;
+  --cat-codex: #98989D;
+  --cat-claude: #F0A080;
+  --cat-codex-dim: rgb(152 152 157 / 14%);
+  --cat-claude-dim: rgb(240 160 128 / 14%);
+  --shadow-lane: 0 1px 2px rgb(0 0 0 / 40%), 0 6px 20px -8px rgb(0 0 0 / 35%);
+  --shadow-panel: 0 24px 56px -18px rgb(0 0 0 / 65%), 0 4px 12px rgb(0 0 0 / 40%);
+  --ring-panel: rgb(255 255 255 / 9%);
+}
+
+/* ============================================================
+   紧凑面板(popover)
+   ============================================================ */
+
+.panel {
+  width: 380px;
+  background: var(--surface-primary);
+  border: 1px solid var(--ring-panel);
+  border-radius: 16px;
+  box-shadow: var(--shadow-panel);
+  overflow: hidden;
+  color: var(--text-primary);
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 12px 12px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.panel-head-text { display: grid; gap: 2px; min-width: 0; }
+
+.panel-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 680;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+}
+
+/* 状态点并入新鲜度副标题:状态与时间是一句话,不再各漂各的 */
+.panel-fresh {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.panel-fresh::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--status-success);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--status-success) 18%, transparent);
+}
+
+.panel-actions { display: flex; gap: 2px; }
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  color: var(--text-secondary);
+  background: transparent;
+  cursor: pointer;
+}
+
+.icon-btn:hover { color: var(--text-primary); background: color-mix(in srgb, var(--text-primary) 7%, transparent); }
+
+/* 图标统一 16 viewBox / stroke 1.5 —— 修复齿轮线宽不一致 */
+.icon-btn svg { display: block; }
+
+.panel-lanes { display: grid; gap: 10px; padding: 12px; }
+
+/* ---------- Provider lane ---------- */
+
+.lane {
+  padding: 13px 16px 14px;
+  background: var(--surface-raised);
+  border: 1px solid color-mix(in srgb, var(--border-subtle) 80%, transparent);
+  border-radius: 14px;
+  box-shadow: var(--shadow-lane);
+}
+
+.lane-id {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin-bottom: 10px;
+}
+
+.lane-name {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+
+.chip {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--track-background);
+  color: var(--text-secondary);
+  font-size: 10.5px;
+  font-weight: 620;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.lane-account {
+  margin-left: auto;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 读数行:% 与重置时间同一行 —— One Reading Path */
+.lane-reading {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  margin-bottom: 7px;
+}
+
+/* 🚩 大读数 44px → 26px:压制戏剧感,补回中间层级 */
+.lane-percent {
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1;
+}
+
+.lane-percent small { font-size: 15px; font-weight: 650; letter-spacing: 0; }
+
+/* ADR-0019 的定宽短码保留,只调排版位置 */
+.lane-window {
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.07em;
+}
+
+.lane-reset {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  font-size: 12.5px;
+  font-weight: 570;
+}
+
+.lane-reset .label { color: var(--text-secondary); font-size: 10.5px; font-weight: 500; }
+
+/* 进度条:6px 圆条。🚩 ok 档从 --text-primary 改为 success 绿 */
+.bar {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--track-background);
+  overflow: hidden;
+}
+
+.bar > i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--status-success);
+}
+
+.bar.warning > i { background: var(--status-warning); }
+.bar.low > i { background: var(--status-low); }
+.bar.danger > i { background: var(--status-error); }
+.bar.faded > i { background: color-mix(in srgb, var(--text-secondary) 45%, transparent); }
+
+.tone-warning { color: var(--status-warning); }
+.tone-low { color: var(--status-low); }
+.tone-danger { color: var(--status-error); }
+
+/* 次级窗口(Claude 的 ALL 行):同族样式、更细的条,不再像另一套组件 */
+.lane-secondary {
+  margin-top: 11px;
+  padding-top: 11px;
+  border-top: 1px dashed color-mix(in srgb, var(--border-subtle) 90%, transparent);
+}
+
+.lane-secondary .lane-reading { margin-bottom: 6px; }
+
+.lane-secondary .lane-percent { font-size: 15px; font-weight: 680; letter-spacing: -0.01em; }
+
+.lane-secondary .lane-percent small { font-size: 11px; }
+
+.lane-secondary .bar { height: 4px; }
+
+/* 花费行:label–value 成对内联,不再吊孤立灰字 */
+.lane-costs {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 10px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.lane-costs span b {
+  margin-left: 5px;
+  color: var(--text-primary);
+  font-size: 12.5px;
+  font-weight: 620;
+}
+
+/* ============================================================
+   主窗口 · 本地用量页
+   ============================================================ */
+
+.mainwin {
+  width: 960px;
+  max-width: 100%;
+  padding: 22px 28px 30px;
+  background: var(--surface-primary);
+  border: 1px solid var(--ring-panel);
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgb(16 16 20 / 8%);
+  color: var(--text-primary);
+}
+
+.mw-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 12px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.mw-heading { display: flex; align-items: baseline; gap: 14px; min-width: 0; }
+
+.mw-heading h1 { margin: 0; font-size: 20px; font-weight: 680; letter-spacing: -0.025em; }
+
+.mw-scan {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.mw-scan::before {
+  content: "";
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: var(--text-secondary);
+  opacity: 0.5;
+}
+
+.text-btn {
+  padding: 7px 12px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--text-secondary);
+  background: transparent;
+  font-size: 12px;
+  font-weight: 550;
+  cursor: pointer;
+}
+
+.text-btn:hover { color: var(--text-primary); background: color-mix(in srgb, var(--text-primary) 7%, transparent); }
+
+.mw-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 18px; }
+
+.segmented {
+  display: inline-flex;
+  padding: 3px;
+  border-radius: 9px;
+  background: var(--track-background);
+}
+
+.segmented button {
+  min-height: 28px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  background: transparent;
+  font-size: 11.5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.segmented button:hover { color: var(--text-primary); }
+
+.segmented button.on {
+  color: var(--text-primary);
+  background: var(--surface-raised);
+  box-shadow: 0 1px 3px rgb(16 16 20 / 12%);
+  font-weight: 570;
+}
+
+.date-input {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 9px;
+  color: var(--text-secondary);
+  background: var(--surface-raised);
+  font-size: 11.5px;
+  display: inline-flex;
+  align-items: center;
+}
+
+.mw-block { margin-bottom: 22px; }
+
+.mw-block:last-child { margin-bottom: 0; }
+
+.mw-block-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 9px;
+}
+
+.mw-block-head h2 {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 680;
+  letter-spacing: 0.04em;
+}
+
+.mw-block-head .rule { flex: 1; height: 1px; background: var(--border-subtle); }
+
+.legend { display: flex; gap: 14px; color: var(--text-secondary); font-size: 10.5px; }
+
+.legend span { display: inline-flex; align-items: center; gap: 5px; }
+
+.legend i { width: 7px; height: 7px; border-radius: 2px; }
+
+.legend .codex i { background: var(--cat-codex); }
+.legend .claude i { background: var(--cat-claude); }
+
+.chart-note { color: var(--text-secondary); font-size: 10.5px; }
+
+/* 卡片:统一阴影 / 圆角 / 边框语言 */
+.card {
+  padding: 15px 18px;
+  background: var(--surface-raised);
+  border: 1px solid color-mix(in srgb, var(--border-subtle) 80%, transparent);
+  border-radius: 14px;
+  box-shadow: var(--shadow-lane);
+}
+
+.mw-provider-layout {
+  display: grid;
+  grid-template-columns: minmax(200px, 0.44fr) 1fr 1fr;
+  gap: 12px;
+  align-items: stretch;
+}
+
+/* 总计卡:数值 + 标签横排,26px 与 lane 大读数同标尺 */
+.total-card { display: grid; align-content: center; gap: 0; }
+
+.total-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 11px 0;
+}
+
+.total-row + .total-row { border-top: 1px solid color-mix(in srgb, var(--border-subtle) 72%, transparent); }
+
+.total-value {
+  font-size: 26px;
+  font-weight: 680;
+  letter-spacing: -0.03em;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.total-value small { color: var(--text-secondary); font-size: 14px; font-weight: 570; }
+
+.total-label { color: var(--text-secondary); font-size: 11px; font-weight: 520; white-space: nowrap; }
+
+/* Provider 卡 */
+.pcard { display: grid; gap: 12px; align-content: start; }
+
+.pcard-head { display: flex; align-items: center; gap: 7px; }
+
+.pcard-head i { width: 8px; height: 8px; border-radius: 3px; }
+
+.pcard[data-p="codex"] .pcard-head i { background: var(--cat-codex); }
+.pcard[data-p="claude"] .pcard-head i { background: var(--cat-claude); }
+
+.pcard-head h3 { margin: 0; font-size: 12.5px; font-weight: 650; }
+
+.pcard-money { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+
+.pcard-cost { font-size: 21px; font-weight: 680; letter-spacing: -0.025em; line-height: 1; }
+
+.pcard-total { color: var(--text-secondary); font-size: 11.5px; }
+
+.pcard-total b { color: var(--text-primary); font-weight: 620; }
+
+.pcard-metrics {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px 14px;
+  margin: 0;
+}
+
+.pcard-metrics > div { display: flex; justify-content: space-between; gap: 8px; }
+
+.pcard-metrics dt { color: var(--text-secondary); font-size: 11px; }
+
+.pcard-metrics dd { margin: 0; font-size: 11.5px; font-weight: 570; }
+
+.pcard-hit { display: grid; gap: 6px; }
+
+.pcard-hit-label {
+  display: flex;
+  justify-content: space-between;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.pcard-hit-label b { color: var(--text-primary); font-size: 11.5px; font-weight: 620; }
+
+.pcard-hit .bar { height: 4px; }
+
+.pcard-hit .bar > i { background: color-mix(in srgb, var(--cat-codex) 75%, transparent); }
+
+.pcard[data-p="claude"] .pcard-hit .bar > i { background: color-mix(in srgb, var(--cat-claude) 80%, transparent); }
+
+/* 每日花费图:纯 CSS 柱状,选中范围高亮 */
+.chart-card { padding: 18px 18px 12px; }
+
+.chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  height: 150px;
+  padding-bottom: 8px;
+}
+
+.chart .col {
+  flex: 1;
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 2px;
+  height: 100%;
+  justify-content: flex-start;
+}
+
+.chart .col i { display: block; border-radius: 3px; min-height: 2px; }
+
+.chart .col .cx { background: var(--cat-codex); opacity: 0.82; }
+.chart .col .cl { background: var(--cat-claude); opacity: 0.88; }
+
+.chart .col.dim .cx, .chart .col.dim .cl { opacity: 0.2; }
+
+.chart-x {
+  display: flex;
+  gap: 8px;
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 7px;
+}
+
+.chart-x span {
+  flex: 1;
+  color: var(--text-secondary);
+  font-size: 9.5px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+/* 按模型表 */
+.table-card { padding: 6px 6px 4px; }
+
+.mtable { width: 100%; border-collapse: collapse; }
+
+.mtable th {
+  padding: 9px 12px 8px;
+  color: var(--text-secondary);
+  font-size: 10.5px;
+  font-weight: 620;
+  text-align: right;
+  letter-spacing: 0.02em;
+  border-bottom: 1px solid var(--border-subtle);
+  white-space: nowrap;
+}
+
+.mtable th:first-child { text-align: left; }
+
+.mtable td {
+  padding: 9px 12px;
+  font-size: 12px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.mtable td:first-child { text-align: left; font-weight: 570; }
+
+.mtable td .m-provider { display: inline-block; width: 7px; height: 7px; border-radius: 2px; margin-right: 7px; vertical-align: 1px; }
+
+.mtable tbody tr + tr td { border-top: 1px solid color-mix(in srgb, var(--border-subtle) 55%, transparent); }
+
+.mtable td.muted { color: var(--text-secondary); }
+
+.mtable tfoot td {
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-size: 11.5px;
+}
+
+.mtable tfoot td b { color: var(--text-primary); font-size: 12px; font-weight: 650; }
+
+/* ============================================================
+   设置页(主窗口子路由,窄列)
+   ============================================================ */
+
+.settingswin {
+  width: 620px;
+  max-width: 100%;
+  padding: 22px 28px 30px;
+  background: var(--surface-primary);
+  border: 1px solid var(--ring-panel);
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgb(16 16 20 / 8%);
+  color: var(--text-primary);
+}
+
+.sw-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 12px;
+  margin-bottom: 18px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.sw-top h1 { margin: 0; font-size: 20px; font-weight: 680; letter-spacing: -0.025em; }
+
+.sw-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  padding: 7px 12px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--text-secondary);
+  background: transparent;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.sw-back:hover { color: var(--text-primary); background: color-mix(in srgb, var(--text-primary) 7%, transparent); }
+
+.sw-group { margin-bottom: 20px; }
+
+.sw-group > h2 {
+  margin: 0 0 8px 2px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 680;
+  letter-spacing: 0.04em;
+}
+
+.sw-card { padding: 4px 0; }
+
+.sw-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 16px;
+}
+
+.sw-row + .sw-row { border-top: 1px solid color-mix(in srgb, var(--border-subtle) 65%, transparent); }
+
+.sw-label { font-size: 13px; font-weight: 550; }
+
+.sw-desc { margin-top: 3px; color: var(--text-secondary); font-size: 11.5px; line-height: 1.5; max-width: 360px; }
+
+.sw-row .segmented button { min-height: 26px; font-size: 11px; }
+
+.toggle {
+  position: relative;
+  width: 40px; height: 24px;
+  border-radius: 999px;
+  background: var(--status-success);
+  flex: none;
+}
+
+.toggle::after {
+  content: "";
+  position: absolute;
+  top: 2px; right: 2px;
+  width: 20px; height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 25%);
+}
+
+.toggle.off { background: var(--track-background); }
+
+.toggle.off::after { right: auto; left: 2px; }
+
+.flat-btn {
+  padding: 8px 14px;
+  border: 0;
+  border-radius: 9px;
+  color: var(--text-primary);
+  background: var(--track-background);
+  font-size: 12px;
+  font-weight: 570;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.flat-btn:hover { background: color-mix(in srgb, var(--text-primary) 12%, var(--track-background)); }
+
+.sw-about { color: var(--text-secondary); font-size: 11.5px; line-height: 1.6; padding: 12px 16px; }
+
+.sw-about b { color: var(--text-primary); font-weight: 600; display: block; margin-bottom: 4px; font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="stage">
+
+  <header class="stage-head">
+    <h1>CC Trace · HeroUI 修复方向评审稿</h1>
+    <p>基于当前实机截图的真实数据与内容,只修四类已确诊的问题:ok 档黑色进度条、大读数字号失衡、层级(canvas/阴影)不显、排版细节碎。信息架构、状态语义、ADR-0019 定宽短码全部保持不变。</p>
+    <p>🚩 = 该取值推翻或修改了现有文档结论(ADR-0017 的 ok 档色、DESIGN.md 的 canvas/阴影档位),确认方向后需补 ADR 并同步文档。可与 <code>prototypes/macos-native/</code> 并排对比后再定视觉方向。</p>
+  </header>
+
+  <!-- ========================================================
+       第 1 节 · 紧凑面板
+       ======================================================== -->
+  <section class="stage-section">
+    <h2>1 · 紧凑面板(popover)</h2>
+    <p class="section-sub">数据与截图一致:Codex 每周窗口剩 65%;Claude 5 小时窗口剩 100%、周窗口仅剩 1%。注意风险层级:现在最醒目的是橙色的 1%,不再是健康的黑条。</p>
+    <div class="row">
+
+      <figure class="specimen" style="margin:0">
+        <figcaption>浅色</figcaption>
+        <div class="theme-light">
+          <div class="panel">
+            <div class="panel-head">
+              <div class="panel-head-text">
+                <p class="panel-title">用量</p>
+                <span class="panel-fresh">刚刚已刷新</span>
+              </div>
+              <div class="panel-actions">
+                <button class="icon-btn" title="刷新">
+                  <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 1.8v2.7h-2.7"/></svg>
+                </button>
+                <button class="icon-btn" title="查看详情">
+                  <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2.5 13.5V9M6.5 13.5V4M10.5 13.5V6.5M14 13.5V2.5"/></svg>
+                </button>
+                <button class="icon-btn" title="设置">
+                  <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4.5h5M11 4.5h3M2 11.5h3M9 11.5h5"/><circle cx="9" cy="4.5" r="1.75"/><circle cx="7" cy="11.5" r="1.75"/></svg>
+                </button>
+                <button class="icon-btn" title="退出">
+                  <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 2v6"/><path d="M4.6 4.4a5 5 0 1 0 6.8 0"/></svg>
+                </button>
+              </div>
+            </div>
+
+            <div class="panel-lanes">
+              <!-- Codex -->
+              <article class="lane">
+                <div class="lane-id">
+                  <h3 class="lane-name">Codex</h3>
+                  <span class="chip">plus</span>
+                  <span class="lane-account">n***@gmail.com</span>
+                </div>
+                <div class="lane-reading">
+                  <span class="lane-percent num">65<small>%</small></span>
+                  <span class="lane-window mono">WEEKLY</span>
+                  <span class="lane-reset num">5d19h<span class="label">重置</span></span>
+                </div>
+                <div class="bar"><i style="width:65%"></i></div>
+                <div class="lane-costs num">
+                  <span>今日<b>$4</b></span>
+                  <span>本周<b>$359</b></span>
+                </div>
+              </article>
+
+              <!-- Claude Code -->
+              <article class="lane">
+                <div class="lane-id">
+                  <h3 class="lane-name">Claude Code</h3>
+                  <span class="chip">pro</span>
+                  <span class="lane-account">n***@gmail.com</span>
+                </div>
+                <div class="lane-reading">
+                  <span class="lane-percent num">100<small>%</small></span>
+                  <span class="lane-window mono">5HOUR</span>
+                  <span class="lane-reset num">—<span class="label">重置</span></span>
+                </div>
+                <div class="bar"><i style="width:100%"></i></div>
+
+                <div class="lane-secondary">
+                  <div class="lane-reading">
+                    <span class="lane-percent num tone-low">1<small>%</small></span>
+                    <span class="lane-window mono">ALL</span>
+                    <span class="lane-reset num">16h40m<span class="label">重置</span></span>
+                  </div>
+                  <div class="bar low"><i style="width:1.5%"></i></div>
+                </div>
+
+                <div class="lane-costs num">
+                  <span>今日<b>$2</b></span>
+                  <span>本周<b>$387</b></span>
+                </div>
+              </article>
+            </div>
+          </div>
+        </div>
+      </figure>
+
+      <figure class="specimen" style="margin:0">
+        <figcaption>深色</figcaption>
+        <div class="theme-dark">
+          <div class="panel">
+            <div class="panel-head">
+              <div class="panel-head-text">
+                <p class="panel-title">用量</p>
+                <span class="panel-fresh">刚刚已刷新</span>
+              </div>
+              <div class="panel-actions">
+                <button class="icon-btn" title="刷新">
+                  <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 1.8v2.7h-2.7"/></svg>
+                </button>
+                <button class="icon-btn" title="查看详情">
+                  <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2.5 13.5V9M6.5 13.5V4M10.5 13.5V6.5M14 13.5V2.5"/></svg>
+                </button>
+                <button class="icon-btn" title="设置">
+                  <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4.5h5M11 4.5h3M2 11.5h3M9 11.5h5"/><circle cx="9" cy="4.5" r="1.75"/><circle cx="7" cy="11.5" r="1.75"/></svg>
+                </button>
+                <button class="icon-btn" title="退出">
+                  <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 2v6"/><path d="M4.6 4.4a5 5 0 1 0 6.8 0"/></svg>
+                </button>
+              </div>
+            </div>
+
+            <div class="panel-lanes">
+              <article class="lane">
+                <div class="lane-id">
+                  <h3 class="lane-name">Codex</h3>
+                  <span class="chip">plus</span>
+                  <span class="lane-account">n***@gmail.com</span>
+                </div>
+                <div class="lane-reading">
+                  <span class="lane-percent num">65<small>%</small></span>
+                  <span class="lane-window mono">WEEKLY</span>
+                  <span class="lane-reset num">5d19h<span class="label">重置</span></span>
+                </div>
+                <div class="bar"><i style="width:65%"></i></div>
+                <div class="lane-costs num">
+                  <span>今日<b>$4</b></span>
+                  <span>本周<b>$359</b></span>
+                </div>
+              </article>
+
+              <article class="lane">
+                <div class="lane-id">
+                  <h3 class="lane-name">Claude Code</h3>
+                  <span class="chip">pro</span>
+                  <span class="lane-account">n***@gmail.com</span>
+                </div>
+                <div class="lane-reading">
+                  <span class="lane-percent num">100<small>%</small></span>
+                  <span class="lane-window mono">5HOUR</span>
+                  <span class="lane-reset num">—<span class="label">重置</span></span>
+                </div>
+                <div class="bar"><i style="width:100%"></i></div>
+
+                <div class="lane-secondary">
+                  <div class="lane-reading">
+                    <span class="lane-percent num tone-low">1<small>%</small></span>
+                    <span class="lane-window mono">ALL</span>
+                    <span class="lane-reset num">16h40m<span class="label">重置</span></span>
+                  </div>
+                  <div class="bar low"><i style="width:1.5%"></i></div>
+                </div>
+
+                <div class="lane-costs num">
+                  <span>今日<b>$2</b></span>
+                  <span>本周<b>$387</b></span>
+                </div>
+              </article>
+            </div>
+          </div>
+        </div>
+      </figure>
+
+      <aside class="notes">
+        <h3>改动注记</h3>
+        <ul>
+          <li><span class="flag">🚩</span><strong>ok 档填充 → success 绿</strong>(原 <code>--text-primary</code> 黑,推翻 ADR-0017 取值)。四档色阶 绿→黄→橙→红 完整;stale 降级灰不再与健康态撞色。</li>
+          <li><span class="flag">🚩</span><strong>大读数 44px → 26px</strong>;% 号降为 15px。原「strong but not theatrical」补上具体标尺。</li>
+          <li><strong>读数行合并</strong>:% 、窗口短码、重置倒计时同一行,消 Z 字阅读路径;「重置」「花费」不再是吊着的孤立灰字。</li>
+          <li><strong>次窗口同族化</strong>:ALL 行用同款条(4px)与同款读数行,1% 用 low 橙,危险自然比健康醒目。</li>
+          <li><strong>状态点并入副标题</strong>「● 刚刚已刷新」,右侧变纯动作区;图标统一 16/1.5 线宽。</li>
+        </ul>
+      </aside>
+    </div>
+  </section>
+
+  <!-- ========================================================
+       第 2 节 · 主窗口 · 本地用量页
+       ======================================================== -->
+  <section class="stage-section">
+    <h2>2 · 主窗口 · 本地用量页</h2>
+    <p class="section-sub">结构不变(筛选 → 按 Provider → 每日花费 → 按模型),统一到与紧凑面板同一套卡片、字号与阴影语言;选「今天」,数值与 popover 花费一致。</p>
+    <div class="row">
+
+      <figure class="specimen" style="margin:0">
+        <figcaption>浅色</figcaption>
+        <div class="theme-light">
+          <div class="mainwin">
+            <div class="mw-top">
+              <div class="mw-heading">
+                <h1>用量</h1>
+                <span class="mw-scan num">上次扫描 8/2 14:05</span>
+              </div>
+              <button class="text-btn">设置</button>
+            </div>
+
+            <div class="mw-filters">
+              <div class="segmented">
+                <button class="on">今天</button>
+                <button>昨天</button>
+                <button>本周</button>
+                <button>本月</button>
+                <button>本年</button>
+                <button>7 天</button>
+                <button>30 天</button>
+                <button>全部</button>
+              </div>
+              <span class="date-input num">2026/08/02 – 2026/08/02</span>
+            </div>
+
+            <div class="mw-block">
+              <div class="mw-block-head"><h2>按 Provider</h2><span class="rule"></span></div>
+              <div class="mw-provider-layout">
+                <div class="card total-card">
+                  <div class="total-row">
+                    <span class="total-value num">48.8<small>M</small></span>
+                    <span class="total-label">总 Token</span>
+                  </div>
+                  <div class="total-row">
+                    <span class="total-value num">$6.19</span>
+                    <span class="total-label">总花费</span>
+                  </div>
+                </div>
+
+                <div class="card pcard" data-p="codex">
+                  <div class="pcard-head"><i></i><h3>Codex</h3></div>
+                  <div class="pcard-money">
+                    <span class="pcard-cost num">$4.21</span>
+                    <span class="pcard-total num"><b>31.4M</b> Token</span>
+                  </div>
+                  <dl class="pcard-metrics">
+                    <div><dt>输入</dt><dd class="num">27.8M</dd></div>
+                    <div><dt>输出</dt><dd class="num">1.4M</dd></div>
+                    <div><dt>缓存命中</dt><dd class="num">24.1M</dd></div>
+                    <div><dt>缓存写入</dt><dd class="num">2.1M</dd></div>
+                  </dl>
+                  <div class="pcard-hit">
+                    <div class="pcard-hit-label"><span>缓存命中率</span><b class="num">87%</b></div>
+                    <div class="bar"><i style="width:87%"></i></div>
+                  </div>
+                </div>
+
+                <div class="card pcard" data-p="claude">
+                  <div class="pcard-head"><i></i><h3>Claude Code</h3></div>
+                  <div class="pcard-money">
+                    <span class="pcard-cost num">$1.98</span>
+                    <span class="pcard-total num"><b>16.8M</b> Token</span>
+                  </div>
+                  <dl class="pcard-metrics">
+                    <div><dt>输入</dt><dd class="num">14.6M</dd></div>
+                    <div><dt>输出</dt><dd class="num">0.9M</dd></div>
+                    <div><dt>缓存命中</dt><dd class="num">13.3M</dd></div>
+                    <div><dt>缓存写入</dt><dd class="num">1.2M</dd></div>
+                  </dl>
+                  <div class="pcard-hit">
+                    <div class="pcard-hit-label"><span>缓存命中率</span><b class="num">91%</b></div>
+                    <div class="bar"><i style="width:91%"></i></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="mw-block">
+              <div class="mw-block-head">
+                <h2>每日花费</h2>
+                <div style="display:flex;align-items:center;gap:14px">
+                  <span class="chart-note">近 14 天 · 高亮为所选范围</span>
+                  <div class="legend">
+                    <span class="codex"><i></i>Codex</span>
+                    <span class="claude"><i></i>Claude Code</span>
+                  </div>
+                </div>
+              </div>
+              <div class="card chart-card">
+                <div class="chart">
+                  <div class="col dim"><i class="cx" style="height:34%"></i><i class="cl" style="height:16%"></i></div>
+                  <div class="col dim"><i class="cx" style="height:48%"></i><i class="cl" style="height:22%"></i></div>
+                  <div class="col dim"><i class="cx" style="height:26%"></i><i class="cl" style="height:30%"></i></div>
+                  <div class="col dim"><i class="cx" style="height:56%"></i><i class="cl" style="height:12%"></i></div>
+                  <div class="col dim"><i class="cx" style="height:20%"></i><i class="cl" style="height:8%"></i></div>
+                  <div class="col dim"><i class="cx" style="height:8%"></i><i class="cl" style="height:4%"></i></div>
+                  <div class="col dim"><i class="cx" style="height:42%"></i><i class="cl" style="height:26%"></i></div>
+                  <div class="col dim"><i class="cx" style="height:62%"></i><i class="cl" style="height:18%"></i></div>
+                  <div class="col dim"><i class="cx" style="height:38%"></i><i class="cl" style="height:34%"></i></div>
+                  <div class="col dim"><i class="cx" style="height:52%"></i><i class="cl" style="height:20%"></i></div>
+                  <div class="col dim"><i class="cx" style="height:30%"></i><i class="cl" style="height:14%"></i></div>
+                  <div class="col dim"><i class="cx" style="height:66%"></i><i class="cl" style="height:24%"></i></div>
+                  <div class="col dim"><i class="cx" style="height:44%"></i><i class="cl" style="height:38%"></i></div>
+                  <div class="col"><i class="cx" style="height:40%"></i><i class="cl" style="height:19%"></i></div>
+                </div>
+                <div class="chart-x num">
+                  <span>7/20</span><span></span><span>7/22</span><span></span><span>7/24</span><span></span><span>7/26</span><span></span><span>7/28</span><span></span><span>7/30</span><span></span><span>8/1</span><span>8/2</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="mw-block">
+              <div class="mw-block-head"><h2>按模型</h2><span class="rule"></span></div>
+              <div class="card table-card">
+                <table class="mtable num">
+                  <thead>
+                    <tr>
+                      <th>模型</th><th>输入</th><th>输出</th><th>缓存命中</th><th>缓存写入</th><th>总 Token</th><th>花费</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><i class="m-provider" style="background:var(--cat-codex)"></i>gpt-5.2-codex</td>
+                      <td>27.8M</td><td>1.4M</td><td>24.1M</td><td class="muted">—</td><td>31.4M</td><td>$4.21</td>
+                    </tr>
+                    <tr>
+                      <td><i class="m-provider" style="background:var(--cat-claude)"></i>claude-opus-4-8</td>
+                      <td>14.3M</td><td>0.86M</td><td>13.1M</td><td>1.14M</td><td>16.2M</td><td>$1.83</td>
+                    </tr>
+                    <tr>
+                      <td><i class="m-provider" style="background:var(--cat-claude)"></i>claude-haiku-4-5</td>
+                      <td>0.31M</td><td>42K</td><td>180K</td><td>65K</td><td>0.6M</td><td>$0.15</td>
+                    </tr>
+                  </tbody>
+                  <tfoot>
+                    <tr>
+                      <td>合计 · 3 个模型</td>
+                      <td>42.4M</td><td>2.3M</td><td>37.4M</td><td>1.2M</td><td><b>48.8M</b></td><td><b>$6.19</b></td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </figure>
+
+      <aside class="notes">
+        <h3>改动注记</h3>
+        <ul>
+          <li><strong>三卡同排</strong>:总计卡与两张 Provider 卡等高并列,总计不再是孤立窄条;26px 读数与 popover 同标尺。</li>
+          <li><strong>卡片语言统一</strong>:主窗口卡与 popover lane 共用同一套 14px 圆角、边框与 🚩 加档阴影,不再「主窗口一套、面板一套」。</li>
+          <li><strong>命中率条复用余量条</strong>组件形态(4px),染 Provider 品牌色的降饱和版,不占用语义色。</li>
+          <li><strong>表格数字右对齐</strong>、行分隔降到 55% 透明度;「—」代表未定价/无值,沿用现有文案规则。</li>
+          <li><strong>图表高亮语义</strong>:非所选范围降到 20% 透明度,「今天」一眼可辨,不再整图同权重。</li>
+        </ul>
+      </aside>
+    </div>
+
+    <div class="row" style="margin-top:28px">
+      <figure class="specimen" style="margin:0">
+        <figcaption>深色</figcaption>
+        <div class="theme-dark">
+          <div class="mainwin">
+            <div class="mw-top">
+              <div class="mw-heading">
+                <h1>用量</h1>
+                <span class="mw-scan num">上次扫描 8/2 14:05</span>
+              </div>
+              <button class="text-btn">设置</button>
+            </div>
+
+            <div class="mw-filters">
+              <div class="segmented">
+                <button class="on">今天</button>
+                <button>昨天</button>
+                <button>本周</button>
+                <button>本月</button>
+                <button>本年</button>
+                <button>7 天</button>
+                <button>30 天</button>
+                <button>全部</button>
+              </div>
+              <span class="date-input num">2026/08/02 – 2026/08/02</span>
+            </div>
+
+            <div class="mw-block">
+              <div class="mw-block-head"><h2>按 Provider</h2><span class="rule"></span></div>
+              <div class="mw-provider-layout">
+                <div class="card total-card">
+                  <div class="total-row">
+                    <span class="total-value num">48.8<small>M</small></span>
+                    <span class="total-label">总 Token</span>
+                  </div>
+                  <div class="total-row">
+                    <span class="total-value num">$6.19</span>
+                    <span class="total-label">总花费</span>
+                  </div>
+                </div>
+
+                <div class="card pcard" data-p="codex">
+                  <div class="pcard-head"><i></i><h3>Codex</h3></div>
+                  <div class="pcard-money">
+                    <span class="pcard-cost num">$4.21</span>
+                    <span class="pcard-total num"><b>31.4M</b> Token</span>
+                  </div>
+                  <dl class="pcard-metrics">
+                    <div><dt>输入</dt><dd class="num">27.8M</dd></div>
+                    <div><dt>输出</dt><dd class="num">1.4M</dd></div>
+                    <div><dt>缓存命中</dt><dd class="num">24.1M</dd></div>
+                    <div><dt>缓存写入</dt><dd class="num">2.1M</dd></div>
+                  </dl>
+                  <div class="pcard-hit">
+                    <div class="pcard-hit-label"><span>缓存命中率</span><b class="num">87%</b></div>
+                    <div class="bar"><i style="width:87%"></i></div>
+                  </div>
+                </div>
+
+                <div class="card pcard" data-p="claude">
+                  <div class="pcard-head"><i></i><h3>Claude Code</h3></div>
+                  <div class="pcard-money">
+                    <span class="pcard-cost num">$1.98</span>
+                    <span class="pcard-total num"><b>16.8M</b> Token</span>
+                  </div>
+                  <dl class="pcard-metrics">
+                    <div><dt>输入</dt><dd class="num">14.6M</dd></div>
+                    <div><dt>输出</dt><dd class="num">0.9M</dd></div>
+                    <div><dt>缓存命中</dt><dd class="num">13.3M</dd></div>
+                    <div><dt>缓存写入</dt><dd class="num">1.2M</dd></div>
+                  </dl>
+                  <div class="pcard-hit">
+                    <div class="pcard-hit-label"><span>缓存命中率</span><b class="num">91%</b></div>
+                    <div class="bar"><i style="width:91%"></i></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="mw-block">
+              <div class="mw-block-head">
+                <h2>每日花费</h2>
+                <div style="display:flex;align-items:center;gap:14px">
+                  <span class="chart-note">近 14 天 · 高亮为所选范围</span>
+                  <div class="legend">
+                    <span class="codex"><i></i>Codex</span>
+                    <span class="claude"><i></i>Claude Code</span>
+                  </div>
+                </div>
+              </div>
+              <div class="card chart-card">
+                <div class="chart">
+                  <div class="col dim"><i class="cx" style="height:34%"></i><i class="cl" style="height:16%"></i></div>
+                  <div class="col dim"><i class="cx" style="height:48%"></i><i class="cl" style="height:22%"></i></div>
+                  <div class="col dim"><i class="cx" style="height:26%"></i><i class="cl" style="height:30%"></i></div>
+                  <div class="col dim"><i class="cx" style="height:56%"></i><i class="cl" style="height:12%"></i></div>
+                  <div class="col dim"><i class="cx" style="height:20%"></i><i class="cl" style="height:8%"></i></div>
+                  <div class="col dim"><i class="cx" style="height:8%"></i><i class="cl" style="height:4%"></i></div>
+                  <div class="col dim"><i class="cx" style="height:42%"></i><i class="cl" style="height:26%"></i></div>
+                  <div class="col dim"><i class="cx" style="height:62%"></i><i class="cl" style="height:18%"></i></div>
+                  <div class="col dim"><i class="cx" style="height:38%"></i><i class="cl" style="height:34%"></i></div>
+                  <div class="col dim"><i class="cx" style="height:52%"></i><i class="cl" style="height:20%"></i></div>
+                  <div class="col dim"><i class="cx" style="height:30%"></i><i class="cl" style="height:14%"></i></div>
+                  <div class="col dim"><i class="cx" style="height:66%"></i><i class="cl" style="height:24%"></i></div>
+                  <div class="col dim"><i class="cx" style="height:44%"></i><i class="cl" style="height:38%"></i></div>
+                  <div class="col"><i class="cx" style="height:40%"></i><i class="cl" style="height:19%"></i></div>
+                </div>
+                <div class="chart-x num">
+                  <span>7/20</span><span></span><span>7/22</span><span></span><span>7/24</span><span></span><span>7/26</span><span></span><span>7/28</span><span></span><span>7/30</span><span></span><span>8/1</span><span>8/2</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="mw-block">
+              <div class="mw-block-head"><h2>按模型</h2><span class="rule"></span></div>
+              <div class="card table-card">
+                <table class="mtable num">
+                  <thead>
+                    <tr>
+                      <th>模型</th><th>输入</th><th>输出</th><th>缓存命中</th><th>缓存写入</th><th>总 Token</th><th>花费</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><i class="m-provider" style="background:var(--cat-codex)"></i>gpt-5.2-codex</td>
+                      <td>27.8M</td><td>1.4M</td><td>24.1M</td><td class="muted">—</td><td>31.4M</td><td>$4.21</td>
+                    </tr>
+                    <tr>
+                      <td><i class="m-provider" style="background:var(--cat-claude)"></i>claude-opus-4-8</td>
+                      <td>14.3M</td><td>0.86M</td><td>13.1M</td><td>1.14M</td><td>16.2M</td><td>$1.83</td>
+                    </tr>
+                    <tr>
+                      <td><i class="m-provider" style="background:var(--cat-claude)"></i>claude-haiku-4-5</td>
+                      <td>0.31M</td><td>42K</td><td>180K</td><td>65K</td><td>0.6M</td><td>$0.15</td>
+                    </tr>
+                  </tbody>
+                  <tfoot>
+                    <tr>
+                      <td>合计 · 3 个模型</td>
+                      <td>42.4M</td><td>2.3M</td><td>37.4M</td><td>1.2M</td><td><b>48.8M</b></td><td><b>$6.19</b></td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </figure>
+    </div>
+  </section>
+
+  <!-- ========================================================
+       第 3 节 · 设置页
+       ======================================================== -->
+  <section class="stage-section">
+    <h2>3 · 设置(主窗口子路由)</h2>
+    <p class="section-sub">分组卡片承载现有全部设置项;控件行左 label 右控件,与用量页共用同一套卡片与分组标题语言。</p>
+    <div class="row">
+
+      <figure class="specimen" style="margin:0">
+        <figcaption>浅色</figcaption>
+        <div class="theme-light">
+          <div class="settingswin">
+            <div class="sw-top">
+              <h1>设置</h1>
+              <button class="sw-back">← 返回用量</button>
+            </div>
+
+            <div class="sw-group">
+              <h2>通用</h2>
+              <div class="card sw-card">
+                <div class="sw-row">
+                  <span class="sw-label">自动刷新间隔</span>
+                  <div class="segmented">
+                    <button>15 分钟</button>
+                    <button class="on">30 分钟</button>
+                    <button>60 分钟</button>
+                  </div>
+                </div>
+                <div class="sw-row">
+                  <span class="sw-label">开机时启动 CC Trace</span>
+                  <span class="toggle"></span>
+                </div>
+              </div>
+            </div>
+
+            <div class="sw-group">
+              <h2>外观与语言</h2>
+              <div class="card sw-card">
+                <div class="sw-row">
+                  <span class="sw-label">语言</span>
+                  <div class="segmented">
+                    <button class="on">跟随系统</button>
+                    <button>中文</button>
+                    <button>English</button>
+                  </div>
+                </div>
+                <div class="sw-row">
+                  <span class="sw-label">外观</span>
+                  <div class="segmented">
+                    <button class="on">跟随系统</button>
+                    <button>浅色</button>
+                    <button>深色</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="sw-group">
+              <h2>用量与计价</h2>
+              <div class="card sw-card">
+                <div class="sw-row">
+                  <div>
+                    <span class="sw-label">价格目录</span>
+                    <p class="sw-desc">立即检查 LiteLLM 与 models.dev;更新失败时继续使用原有价格。</p>
+                  </div>
+                  <button class="flat-btn">更新</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="sw-group">
+              <h2>关于</h2>
+              <div class="card sw-card">
+                <p class="sw-about">
+                  <b>CC Trace · 版本 0.1.4</b>
+                  CC Trace 只读取本机已有的 Codex 与 Claude Code 凭据,不上传任何数据,也不读取或迁移 cc-bar 的应用数据。
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </figure>
+
+      <figure class="specimen" style="margin:0">
+        <figcaption>深色</figcaption>
+        <div class="theme-dark">
+          <div class="settingswin">
+            <div class="sw-top">
+              <h1>设置</h1>
+              <button class="sw-back">← 返回用量</button>
+            </div>
+
+            <div class="sw-group">
+              <h2>通用</h2>
+              <div class="card sw-card">
+                <div class="sw-row">
+                  <span class="sw-label">自动刷新间隔</span>
+                  <div class="segmented">
+                    <button>15 分钟</button>
+                    <button class="on">30 分钟</button>
+                    <button>60 分钟</button>
+                  </div>
+                </div>
+                <div class="sw-row">
+                  <span class="sw-label">开机时启动 CC Trace</span>
+                  <span class="toggle"></span>
+                </div>
+              </div>
+            </div>
+
+            <div class="sw-group">
+              <h2>外观与语言</h2>
+              <div class="card sw-card">
+                <div class="sw-row">
+                  <span class="sw-label">语言</span>
+                  <div class="segmented">
+                    <button class="on">跟随系统</button>
+                    <button>中文</button>
+                    <button>English</button>
+                  </div>
+                </div>
+                <div class="sw-row">
+                  <span class="sw-label">外观</span>
+                  <div class="segmented">
+                    <button class="on">跟随系统</button>
+                    <button>浅色</button>
+                    <button>深色</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="sw-group">
+              <h2>用量与计价</h2>
+              <div class="card sw-card">
+                <div class="sw-row">
+                  <div>
+                    <span class="sw-label">价格目录</span>
+                    <p class="sw-desc">立即检查 LiteLLM 与 models.dev;更新失败时继续使用原有价格。</p>
+                  </div>
+                  <button class="flat-btn">更新</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="sw-group">
+              <h2>关于</h2>
+              <div class="card sw-card">
+                <p class="sw-about">
+                  <b>CC Trace · 版本 0.1.4</b>
+                  CC Trace 只读取本机已有的 Codex 与 Claude Code 凭据,不上传任何数据,也不读取或迁移 cc-bar 的应用数据。
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </figure>
+
+      <aside class="notes">
+        <h3>改动注记</h3>
+        <ul>
+          <li><strong>分组卡片化</strong>:通用 / 外观与语言 / 用量与计价 / 关于,四组各一张卡,组标题沿用用量页的小标题语言。</li>
+          <li><strong>行式控件</strong>:label 左、控件右,行间 65% 透明分隔线;segmented 与用量页筛选同款。</li>
+          <li><strong>开关用 success 绿</strong>:与「健康余量」同色系,交互蓝仍只留给焦点与主动作。</li>
+          <li><strong>设置项零增减</strong>:内容与现有 i18n 完全一致,不带入后续能力。</li>
+        </ul>
+      </aside>
+    </div>
+  </section>
+
+  <!-- ========================================================
+       第 4 节 · 余量四档 & 关键分歧
+       ======================================================== -->
+  <section class="stage-section">
+    <h2>4 · 余量四档色阶(修改后)</h2>
+    <p class="section-sub">唯一的语义变化点:ok 档不再是 Ink 黑。其余三档取值不动,stale 降级灰与 ok 绿从此可区分。</p>
+    <div class="row">
+      <div class="theme-light" style="flex:0 0 380px">
+        <div class="panel" style="box-shadow:none">
+          <div class="panel-lanes" style="padding:14px">
+            <div class="lane" style="display:grid;gap:12px">
+              <div>
+                <div class="lane-reading"><span class="lane-percent num" style="font-size:15px">ok · &gt;50%</span><span class="lane-reset num">72%</span></div>
+                <div class="bar"><i style="width:72%"></i></div>
+              </div>
+              <div>
+                <div class="lane-reading"><span class="lane-percent num tone-warning" style="font-size:15px">warning · 20–50%</span><span class="lane-reset num tone-warning">38%</span></div>
+                <div class="bar warning"><i style="width:38%"></i></div>
+              </div>
+              <div>
+                <div class="lane-reading"><span class="lane-percent num tone-low" style="font-size:15px">low · &lt;20%</span><span class="lane-reset num tone-low">12%</span></div>
+                <div class="bar low"><i style="width:12%"></i></div>
+              </div>
+              <div>
+                <div class="lane-reading"><span class="lane-percent num tone-danger" style="font-size:15px">danger · 0%</span><span class="lane-reset num tone-danger">0%</span></div>
+                <div class="bar danger"><i style="width:0%"></i></div>
+              </div>
+              <div>
+                <div class="lane-reading"><span class="lane-percent num" style="font-size:15px;color:var(--text-secondary)">stale 降级(旧数据)</span><span class="lane-reset num" style="color:var(--text-secondary)">65%</span></div>
+                <div class="bar faded"><i style="width:65%"></i></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <aside class="notes">
+        <h3>为什么 ok 档必须有颜色</h3>
+        <ul>
+          <li>原方案 ok = Ink 黑:健康态反而是全面板<strong>视觉重量最大</strong>的元素,100% 满黑条看起来像出了事——风险层级倒挂。</li>
+          <li>改成「安静灰」也不行:<strong>灰已经被 stale 降级占用</strong>。若 ok 也是灰,「新鲜且健康」与「数据过期」将无法区分。</li>
+          <li>所以 ok 档只能是 success 绿:「当前成功数据」语义的自然延伸,且绿→黄→橙→红是最直觉的余量语言。</li>
+          <li>需要推翻 ADR-0017 的 <code>ok → --text-primary</code> 一行,并同步 DESIGN.md 与 <code>docs/设计方向与状态规范.md</code> §3.4。</li>
+        </ul>
+      </aside>
+    </div>
+  </section>
+
+</div>
+</body>
+</html>
