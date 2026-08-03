@@ -166,9 +166,11 @@ export default {
     privacy:
       "CC Trace 只读取本机已有的 Codex 与 Claude Code 凭据，不上传任何数据，也不读取或迁移 cc-bar 的应用数据。",
     intervalOption: {
-      m15: "15 分钟",
-      m30: "30 分钟",
-      m60: "60 分钟",
+      m1: "1 分钟",
+      m2: "2 分钟",
+      m3: "3 分钟",
+      m5: "5 分钟",
+      m10: "10 分钟",
     },
     languageOption: {
       system: "跟随系统",

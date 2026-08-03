@@ -125,7 +125,7 @@ mod tests {
         let settings = Settings {
             language: LanguagePreference::En,
             appearance: AppearancePreference::Dark,
-            refresh_interval: RefreshInterval::FifteenMinutes,
+            refresh_interval: RefreshInterval::OneMinute,
             launch_at_login: true,
             onboarding: OnboardingState {
                 completed: true,
@@ -192,6 +192,6 @@ mod tests {
 
         assert_eq!(issue, None);
         assert_eq!(settings.appearance, AppearancePreference::Dark);
-        assert_eq!(settings.refresh_interval, RefreshInterval::ThirtyMinutes);
+        assert_eq!(settings.refresh_interval, RefreshInterval::TwoMinutes);
     }
 }

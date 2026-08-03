@@ -13,6 +13,20 @@ export function providerLabel(t: ComposerTranslation, provider: ProviderId): str
   return t(`provider.${provider}`);
 }
 
+/**
+ * 套餐名的展示格式。
+ *
+ * Provider 凭据里的套餐值是外部系统的原文（Codex 的 `chatgpt_plan_type` 全小写，如
+ * `"plus"` `"pro"`），不应该在解析层臆造格式；这里只是展示层的大小写规范化，
+ * 按单词首字母大写，不改变原始语义。
+ */
+export function planLabel(plan: string): string {
+  return plan
+    .split(/([\s_-]+)/)
+    .map((part) => (/[\s_-]/.test(part) ? part : part.charAt(0).toUpperCase() + part.slice(1)))
+    .join("");
+}
+
 export function windowLabel(t: ComposerTranslation, window: QuotaWindow): string {
   if (window.kind === "modelWeekly" && window.displayName) {
     return t("quota.window.modelWeekly", { model: window.displayName });

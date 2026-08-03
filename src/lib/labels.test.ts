@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { QuotaWindow, QuotaWindowKind } from "../features/quota/contracts";
-import { windowCode } from "./labels";
+import { planLabel, windowCode } from "./labels";
 
 function makeWindow(kind: QuotaWindowKind, displayName: string | null = null): QuotaWindow {
   return {
@@ -47,5 +47,21 @@ describe("windowCode", () => {
     for (const code of codes) {
       expect(code).toMatch(/^[A-Z0-9]{3,7}$/);
     }
+  });
+});
+
+describe("planLabel", () => {
+  it("capitalizes the raw lowercase plan value from Provider credentials", () => {
+    expect(planLabel("plus")).toBe("Plus");
+    expect(planLabel("pro")).toBe("Pro");
+  });
+
+  it("capitalizes every word in a multi-word plan", () => {
+    expect(planLabel("team plan")).toBe("Team Plan");
+    expect(planLabel("enterprise-max")).toBe("Enterprise-Max");
+  });
+
+  it("leaves an already-capitalized plan unchanged", () => {
+    expect(planLabel("Plus")).toBe("Plus");
   });
 });

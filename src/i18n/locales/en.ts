@@ -168,9 +168,11 @@ export default {
     privacy:
       "CC Trace only reads the Codex and Claude Code credentials already on this machine. It uploads nothing, and it never reads or migrates cc-bar application data.",
     intervalOption: {
-      m15: "15 minutes",
-      m30: "30 minutes",
-      m60: "60 minutes",
+      m1: "1 minute",
+      m2: "2 minutes",
+      m3: "3 minutes",
+      m5: "5 minutes",
+      m10: "10 minutes",
     },
     languageOption: {
       system: "Follow system",

@@ -10,7 +10,7 @@ pub const AUTO_REFRESH_JITTER_RATIO: f64 = 0.10;
 pub const USAGE_SCAN_INTERVAL_SECS: u64 = 5 * 60;
 
 /// 同一 Provider 手动刷新最小间隔（秒）。期间的重复触发合并到当前任务，不排队重发。
-pub const MANUAL_REFRESH_MIN_INTERVAL_SECS: i64 = 30;
+pub const MANUAL_REFRESH_MIN_INTERVAL_SECS: i64 = 60;
 
 /// 单次 Provider 请求超时（秒）。超时归为网络类失败。
 pub const REQUEST_TIMEOUT_SECS: u64 = 15;
@@ -86,7 +86,7 @@ mod tests {
     #[test]
     fn baseline_values_match_the_architecture_table() {
         assert_eq!(USAGE_SCAN_INTERVAL_SECS, 300);
-        assert_eq!(MANUAL_REFRESH_MIN_INTERVAL_SECS, 30);
+        assert_eq!(MANUAL_REFRESH_MIN_INTERVAL_SECS, 60);
         assert_eq!(REQUEST_TIMEOUT_SECS, 15);
         assert_eq!(RATE_LIMIT_BACKOFF_STEPS_SECS, [60, 120, 300]);
         assert_eq!(RATE_LIMIT_BACKOFF_CAP_SECS, 900);

@@ -537,7 +537,7 @@ mod tests {
         let (_dir, core) = core_with_unwritable_config_path();
         let original = core.settings();
         let update = SettingsUpdate {
-            refresh_interval: Some(RefreshInterval::FifteenMinutes),
+            refresh_interval: Some(RefreshInterval::OneMinute),
             ..SettingsUpdate::default()
         };
 

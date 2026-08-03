@@ -33,21 +33,27 @@ pub enum AppearancePreference {
 /// 自动刷新间隔。首版不提供关闭自动刷新，因此没有 `Off` 取值。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum RefreshInterval {
-    #[serde(rename = "15m")]
-    FifteenMinutes,
+    #[serde(rename = "1m")]
+    OneMinute,
     #[default]
-    #[serde(rename = "30m")]
-    ThirtyMinutes,
-    #[serde(rename = "60m")]
-    SixtyMinutes,
+    #[serde(rename = "2m")]
+    TwoMinutes,
+    #[serde(rename = "3m")]
+    ThreeMinutes,
+    #[serde(rename = "5m")]
+    FiveMinutes,
+    #[serde(rename = "10m")]
+    TenMinutes,
 }
 
 impl RefreshInterval {
     pub fn minutes(self) -> u64 {
         match self {
-            Self::FifteenMinutes => 15,
-            Self::ThirtyMinutes => 30,
-            Self::SixtyMinutes => 60,
+            Self::OneMinute => 1,
+            Self::TwoMinutes => 2,
+            Self::ThreeMinutes => 3,
+            Self::FiveMinutes => 5,
+            Self::TenMinutes => 10,
         }
     }
 
@@ -126,8 +132,8 @@ mod tests {
     fn defaults_match_the_product_scope() {
         let settings = Settings::default();
         assert_eq!(settings.schema_version, SETTINGS_SCHEMA_VERSION);
-        assert_eq!(settings.refresh_interval, RefreshInterval::ThirtyMinutes);
-        assert_eq!(settings.refresh_interval.minutes(), 30);
+        assert_eq!(settings.refresh_interval, RefreshInterval::TwoMinutes);
+        assert_eq!(settings.refresh_interval.minutes(), 2);
         assert_eq!(settings.language, LanguagePreference::System);
         assert_eq!(settings.appearance, AppearancePreference::System);
         assert!(!settings.launch_at_login);
@@ -146,7 +152,7 @@ mod tests {
     fn missing_fields_fall_back_to_safe_defaults() {
         let settings: Settings = serde_json::from_str(r#"{"language":"en"}"#).expect("parses");
         assert_eq!(settings.language, LanguagePreference::En);
-        assert_eq!(settings.refresh_interval, RefreshInterval::ThirtyMinutes);
+        assert_eq!(settings.refresh_interval, RefreshInterval::TwoMinutes);
         assert_eq!(settings.schema_version, SETTINGS_SCHEMA_VERSION);
     }
 
@@ -162,7 +168,7 @@ mod tests {
         update.apply_to(&mut settings);
 
         assert_eq!(settings.appearance, AppearancePreference::Dark);
-        assert_eq!(settings.refresh_interval, RefreshInterval::ThirtyMinutes);
+        assert_eq!(settings.refresh_interval, RefreshInterval::TwoMinutes);
         assert!(
             settings.onboarding.completed,
             "settings_update must not reset the onboarding marker"

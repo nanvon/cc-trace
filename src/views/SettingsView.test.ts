@@ -37,7 +37,7 @@ function render() {
     schemaVersion: 1,
     language: "zh-CN",
     appearance: "system",
-    refreshInterval: "30m",
+    refreshInterval: "2m",
     launchAtLogin: false,
     onboarding: { completed: true, completedAt: null },
   });

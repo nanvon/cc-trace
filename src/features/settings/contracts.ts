@@ -7,7 +7,7 @@ export type LanguagePreference = "system" | "zh-CN" | "en";
 export type AppearancePreference = "system" | "light" | "dark";
 
 /** 首版不提供关闭自动刷新，因此没有 `off` 取值。 */
-export type RefreshIntervalOption = "15m" | "30m" | "60m";
+export type RefreshIntervalOption = "1m" | "2m" | "3m" | "5m" | "10m";
 
 export interface OnboardingState {
   completed: boolean;
@@ -38,9 +38,11 @@ export const APPEARANCE_OPTIONS: readonly AppearancePreference[] = [
   "dark",
 ] as const;
 export const REFRESH_INTERVAL_OPTIONS: readonly RefreshIntervalOption[] = [
-  "15m",
-  "30m",
-  "60m",
+  "1m",
+  "2m",
+  "3m",
+  "5m",
+  "10m",
 ] as const;
 
 export interface AppStatus {

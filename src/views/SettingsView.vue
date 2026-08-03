@@ -37,9 +37,11 @@ const PRICING_REFRESH_STATE = {
 const current = computed(() => settings.settings);
 
 const INTERVAL_LABEL: Record<RefreshIntervalOption, string> = {
-  "15m": "settings.intervalOption.m15",
-  "30m": "settings.intervalOption.m30",
-  "60m": "settings.intervalOption.m60",
+  "1m": "settings.intervalOption.m1",
+  "2m": "settings.intervalOption.m2",
+  "3m": "settings.intervalOption.m3",
+  "5m": "settings.intervalOption.m5",
+  "10m": "settings.intervalOption.m10",
 };
 
 const LANGUAGE_LABEL: Record<LanguagePreference, string> = {

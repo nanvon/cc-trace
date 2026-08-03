@@ -17,7 +17,7 @@ import {
   type ProviderSnapshot,
 } from "../features/quota/contracts";
 import type { UsageProviderCosts } from "../features/usage/contracts";
-import { providerLabel, windowCode, windowLabel } from "../lib/labels";
+import { planLabel, providerLabel, windowCode, windowLabel } from "../lib/labels";
 import { hasQuotaValues, presentProvider } from "../lib/status";
 import QuotaProgress from "./QuotaProgress.vue";
 import StatusExplanation from "./StatusExplanation.vue";
@@ -41,7 +41,10 @@ const name = computed(() => providerLabel(t, props.provider.provider));
  * 宽度不足时收缩的是账号，不是套餐——套餐决定额度上限，属于要读的信息；
  * 账号只用来确认「是不是我这个号」，截断后仍然认得出来。
  */
-const plan = computed(() => props.provider.identity?.plan ?? null);
+const plan = computed(() => {
+  const value = props.provider.identity?.plan;
+  return value ? planLabel(value) : null;
+});
 const account = computed(() => props.provider.identity?.accountHint ?? null);
 
 const primary = computed(() => primaryWindow(props.provider.snapshot));

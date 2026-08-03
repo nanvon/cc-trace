@@ -609,17 +609,17 @@ mod tests {
     }
 
     #[test]
-    fn manual_refresh_is_throttled_for_thirty_seconds() {
+    fn manual_refresh_is_throttled_for_sixty_seconds() {
         let mut runtime = refreshed_runtime();
         runtime.begin(RefreshTrigger::Manual, at(100));
         runtime.apply(success(at(100)), at(100));
 
         assert_eq!(
-            runtime.decide(RefreshTrigger::Manual, at(129)),
+            runtime.decide(RefreshTrigger::Manual, at(159)),
             RefreshDecision::Throttled
         );
         assert_eq!(
-            runtime.decide(RefreshTrigger::Manual, at(130)),
+            runtime.decide(RefreshTrigger::Manual, at(160)),
             RefreshDecision::Start
         );
         assert_eq!(
