@@ -195,11 +195,10 @@ body {
 
 .panel-fresh::before {
   content: "";
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: var(--status-success);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--status-success) 18%, transparent);
 }
 
 .panel-actions { display: flex; gap: 2px; }
@@ -235,12 +234,45 @@ body {
   box-shadow: var(--shadow-lane);
 }
 
+/* 服务 logo tile:参考 cc-bar 的 ServiceTile —— 22px squircle + 14px logo */
+.lane-logo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  flex: none;
+}
+.lane-logo svg { width: 14px; height: 14px; display: block; }
+/* Codex 走 OpenAI 官方观感:白底黑 logo + 极细边框(深浅色一致) */
+.lane-logo.codex {
+  background: #FFFFFF;
+  border: 0.5px solid rgb(0 0 0 / 12%);
+  color: #000000;
+}
+/* Claude:品牌色底 + 白 logo */
+.lane-logo.claude {
+  background: var(--cat-claude);
+  color: #FFFFFF;
+}
+
 .lane-id {
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
   margin-bottom: 10px;
+}
+
+/* API 服务状态点:靠右,与 cc-bar headerRow 的状态点一致 */
+.lane-status {
+  margin-left: auto;
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--status-success);
 }
 
 .lane-name {
@@ -263,7 +295,7 @@ body {
 }
 
 .lane-account {
-  margin-left: auto;
+  min-width: 0;
   color: var(--text-secondary);
   font-size: 11.5px;
   white-space: nowrap;
@@ -368,14 +400,90 @@ body {
    ============================================================ */
 
 .mainwin {
-  width: 960px;
+  width: 1180px;
   max-width: 100%;
-  padding: 22px 28px 30px;
+  display: flex;
   background: var(--surface-primary);
   border: 1px solid var(--ring-panel);
   border-radius: 12px;
   box-shadow: 0 2px 8px rgb(16 16 20 / 8%);
   color: var(--text-primary);
+  overflow: hidden;
+}
+
+/* ---------- 侧边栏:视图组 + 数据源组 + 设置钉底(未来导航形态) ---------- */
+
+.mw-sidebar {
+  width: 176px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 14px 10px 12px;
+  border-right: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--surface-primary) 88%, var(--track-background) 12%);
+}
+
+.sb-group { display: grid; gap: 2px; }
+
+.sb-group > h3 {
+  margin: 0 0 4px 10px;
+  color: var(--text-secondary);
+  font-size: 10.5px;
+  font-weight: 680;
+  letter-spacing: 0.05em;
+}
+
+.sb-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 5px 10px;
+  border-radius: 8px;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  font-weight: 550;
+  white-space: nowrap;
+}
+
+.sb-item.on {
+  background: var(--track-background);
+  color: var(--text-primary);
+  font-weight: 620;
+}
+
+.sb-dot { width: 7px; height: 7px; border-radius: 2.5px; flex: none; }
+.sb-dot.codex { background: var(--cat-codex); }
+.sb-dot.claude { background: var(--cat-claude); }
+
+/* 「后续」chip:未来视图,首版不做 */
+.sb-later {
+  margin-left: auto;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-secondary) 12%, transparent);
+  color: var(--text-secondary);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.sb-spacer { flex: 1; }
+
+/* 设置钉底:与数据源无关,分隔线隔开 */
+.sb-bottom {
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 6px;
+}
+
+.sb-item.settings { font-weight: 570; }
+
+/* 内容区 */
+.mw-body {
+  flex: 1;
+  min-width: 0;
+  padding: 22px 28px 30px;
 }
 
 .mw-top {
@@ -495,6 +603,7 @@ body {
 .legend .codex i { background: var(--cat-codex); }
 .legend .claude i { background: var(--cat-claude); }
 
+.legend:has(> span:only-child) { display: none; } /* 单 Provider 时图例无信息量,隐藏 */
 .chart-note { color: var(--text-secondary); font-size: 10.5px; }
 
 /* 卡片:统一阴影 / 圆角 / 边框语言 */
@@ -508,37 +617,33 @@ body {
 
 .mw-provider-layout {
   display: grid;
-  grid-template-columns: minmax(200px, 0.44fr) 1fr 1fr;
+  grid-template-columns: repeat(3, 1fr);
   gap: 12px;
   align-items: stretch;
 }
 
-/* 总计卡:数值 + 标签横排,26px 与 lane 大读数同标尺 */
-.total-card { display: grid; align-content: center; gap: 0; }
-
-.total-row {
-  display: flex;
+/* 总览摘要:挂在「按 Provider」标题行右侧,钱为主、Token 为次,不再是第三张卡 */
+.mw-summary {
+  display: inline-flex;
   align-items: baseline;
-  gap: 10px;
-  padding: 11px 0;
-}
-
-.total-row + .total-row { border-top: 1px solid color-mix(in srgb, var(--border-subtle) 72%, transparent); }
-
-.total-value {
-  font-size: 26px;
-  font-weight: 680;
-  letter-spacing: -0.03em;
-  line-height: 1;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 520;
   white-space: nowrap;
 }
+.mw-summary b {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 650;
+}
+.mw-summary b.money {
+  font-size: 13.5px;
+  font-weight: 700;
+}
 
-.total-value small { color: var(--text-secondary); font-size: 14px; font-weight: 570; }
-
-.total-label { color: var(--text-secondary); font-size: 11px; font-weight: 520; white-space: nowrap; }
-
-/* Provider 卡 */
-.pcard { display: grid; gap: 12px; align-content: start; }
+/* Provider 卡:矮宽形态,只留 费用 + 总Token + 命中率 三要素 */
+.pcard { display: grid; gap: 9px; align-content: start; padding: 13px 15px 12px; }
 
 .pcard-head { display: flex; align-items: center; gap: 7px; }
 
@@ -546,6 +651,7 @@ body {
 
 .pcard[data-p="codex"] .pcard-head i { background: var(--cat-codex); }
 .pcard[data-p="claude"] .pcard-head i { background: var(--cat-claude); }
+.pcard[data-p="placeholder"] .pcard-head i { background: var(--text-secondary); opacity: 0.55; }
 
 .pcard-head h3 { margin: 0; font-size: 12.5px; font-weight: 650; }
 
@@ -555,20 +661,7 @@ body {
 
 .pcard-total { color: var(--text-secondary); font-size: 11.5px; }
 
-.pcard-total b { color: var(--text-primary); font-weight: 620; }
-
-.pcard-metrics {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 7px 14px;
-  margin: 0;
-}
-
-.pcard-metrics > div { display: flex; justify-content: space-between; gap: 8px; }
-
-.pcard-metrics dt { color: var(--text-secondary); font-size: 11px; }
-
-.pcard-metrics dd { margin: 0; font-size: 11.5px; font-weight: 570; }
+.pcard-total b { color: var(--text-primary); font-weight: 620; font-size: 13px; }
 
 .pcard-hit { display: grid; gap: 6px; }
 
@@ -586,6 +679,7 @@ body {
 .pcard-hit .bar > i { background: color-mix(in srgb, var(--cat-codex) 75%, transparent); }
 
 .pcard[data-p="claude"] .pcard-hit .bar > i { background: color-mix(in srgb, var(--cat-claude) 80%, transparent); }
+.pcard[data-p="placeholder"] .pcard-hit .bar > i { background: color-mix(in srgb, var(--text-secondary) 45%, transparent); }
 
 /* 每日花费图:纯 CSS 柱状,选中范围高亮 */
 .chart-card { padding: 18px 18px 12px; }
@@ -612,7 +706,7 @@ body {
 .chart .col .cx { background: var(--cat-codex); opacity: 0.82; }
 .chart .col .cl { background: var(--cat-claude); opacity: 0.88; }
 
-.chart .col.dim .cx, .chart .col.dim .cl { opacity: 0.2; }
+.chart .col.dim .cx, .chart .col.dim .cl { opacity: 0.35; }
 
 .chart-x {
   display: flex;
@@ -655,40 +749,21 @@ body {
 }
 
 .mtable td:first-child { text-align: left; font-weight: 570; }
-
-.mtable td .m-provider { display: inline-block; width: 7px; height: 7px; border-radius: 2px; margin-right: 7px; vertical-align: 1px; }
-
-.mtable tbody tr + tr td { border-top: 1px solid color-mix(in srgb, var(--border-subtle) 55%, transparent); }
-
-.mtable td.muted { color: var(--text-secondary); }
-
-.mtable tfoot td {
-  border-top: 1px solid var(--border-subtle);
-  color: var(--text-secondary);
-  font-size: 11.5px;
-}
-
-.mtable tfoot td b { color: var(--text-primary); font-size: 12px; font-weight: 650; }
-
 /* ============================================================
-   设置页(主窗口子路由,窄列)
+   设置页(主窗口内容区窄列,侧边栏数据源组隐藏)
    ============================================================ */
 
 .settingswin {
-  width: 620px;
-  max-width: 100%;
-  padding: 22px 28px 30px;
-  background: var(--surface-primary);
-  border: 1px solid var(--ring-panel);
-  border-radius: 12px;
-  box-shadow: 0 2px 8px rgb(16 16 20 / 8%);
-  color: var(--text-primary);
+  max-width: 640px;
+  margin: 0 auto; /* 窄列居中:两侧均匀留白,与规范 162 行「水平居中」一致 */
 }
 
 .sw-top {
   display: flex;
   align-items: center;
   gap: 10px;
+  max-width: 640px;
+  margin: 0 auto;
   padding-bottom: 12px;
   margin-bottom: 18px;
   border-bottom: 1px solid var(--border-subtle);
@@ -696,21 +771,7 @@ body {
 
 .sw-top h1 { margin: 0; font-size: 20px; font-weight: 680; letter-spacing: -0.025em; }
 
-.sw-back {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  margin-left: auto;
-  padding: 7px 12px;
-  border: 0;
-  border-radius: 8px;
-  color: var(--text-secondary);
-  background: transparent;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.sw-back:hover { color: var(--text-primary); background: color-mix(in srgb, var(--text-primary) 7%, transparent); }
+/* .sw-back 已删除:返回由侧边栏承担 */
 
 .sw-group { margin-bottom: 20px; }
 
@@ -785,9 +846,10 @@ body {
 <div class="stage">
 
   <header class="stage-head">
-    <h1>CC Trace · HeroUI 修复方向评审稿</h1>
-    <p>基于当前实机截图的真实数据与内容,只修四类已确诊的问题:ok 档黑色进度条、大读数字号失衡、层级(canvas/阴影)不显、排版细节碎。信息架构、状态语义、ADR-0019 定宽短码全部保持不变。</p>
-    <p>🚩 = 该取值推翻或修改了现有文档结论(ADR-0017 的 ok 档色、DESIGN.md 的 canvas/阴影档位),确认方向后需补 ADR 并同步文档。可与 <code>prototypes/macos-native/</code> 并排对比后再定视觉方向。</p>
+    <h1>CC Trace · 视觉方向 + 主窗口导航形态评审稿</h1>
+    <p>视觉部分基于当前实机截图的真实数据,只修四类已确诊的问题:ok 档黑色进度条、大读数字号失衡、层级(canvas/阴影)不显、排版细节碎。信息架构、状态语义、ADR-0019 定宽短码全部保持不变。</p>
+    <p>导航部分(第 2～3 节)评审<b>未来</b>主窗口形态:分组侧边栏(视图组 + 数据源组 + 设置钉底),数据源跨页面全局共享,时间范围留在各页面内。视觉 token 两处共用同一套取值。</p>
+    <p>🚩 = 推翻或修改现有文档结论(ADR-0017 ok 档色、DESIGN.md canvas/阴影档位、窗口宽度 960→1180);🆕 = 新增未来结论,首版不实现。对话、时间线页面内容未切片,本次只看导航形态。</p>
   </header>
 
   <!-- ========================================================
@@ -804,7 +866,7 @@ body {
           <div class="panel">
             <div class="panel-head">
               <div class="panel-head-text">
-                <p class="panel-title">用量</p>
+                <p class="panel-title">CC Trace</p>
                 <span class="panel-fresh">刚刚已刷新</span>
               </div>
               <div class="panel-actions">
@@ -827,9 +889,13 @@ body {
               <!-- Codex -->
               <article class="lane">
                 <div class="lane-id">
+                  <span class="lane-logo codex" aria-hidden="true">
+                    <svg viewBox="0 0 100 100" fill="currentColor"><path d="M83.7733 42.8087C84.6678 40.1149 84.9771 37.2613 84.6807 34.4385C84.3843 31.6156 83.489 28.8885 82.0544 26.4394C77.6908 18.8436 68.9203 14.9365 60.3548 16.7725C57.9831 14.1344 54.9591 12.1668 51.5864 11.0673C48.2137 9.96772 44.611 9.77498 41.1402 10.5084C37.6694 11.2418 34.4527 12.8755 31.8132 15.2455C29.1736 17.6155 27.204 20.6383 26.1024 24.0103C23.3212 24.5806 20.6938 25.738 18.3958 27.405C16.0977 29.0721 14.1819 31.2104 12.7765 33.6772C8.36538 41.2609 9.3669 50.8267 15.2527 57.3327C14.3549 60.0251 14.0424 62.8782 14.3361 65.7012C14.6298 68.5241 15.523 71.2518 16.9558 73.7017C21.325 81.3002 30.1011 85.207 38.6712 83.3686C40.5554 85.4904 42.8707 87.1858 45.4623 88.3416C48.0539 89.4975 50.8622 90.0871 53.6999 90.0713C62.4793 90.079 70.2575 84.4114 72.9393 76.0515C75.7201 75.4802 78.347 74.3225 80.6449 72.6555C82.9427 70.9886 84.8587 68.8507 86.2649 66.3846C90.6227 58.8145 89.6172 49.3005 83.7733 42.8087ZM53.6999 84.8356C50.1955 84.8411 46.801 83.6129 44.1116 81.3661L44.5848 81.098L60.5123 71.9043C60.9087 71.6718 61.2379 71.3402 61.4674 70.942C61.6969 70.5439 61.8189 70.0929 61.8215 69.6333V47.1769L68.5553 51.072C68.6225 51.1063 68.6694 51.1707 68.6814 51.2456V69.854C68.6641 78.1208 61.9667 84.8183 53.6999 84.8356ZM21.4977 71.0843C19.7402 68.0497 19.1092 64.4925 19.7156 61.0386L20.1885 61.3225L36.1321 70.5165C36.5266 70.748 36.9757 70.87 37.4331 70.87C37.8905 70.87 38.3396 70.748 38.7341 70.5165L58.21 59.2883V67.0628C58.2081 67.1031 58.1973 67.1424 58.1782 67.1779C58.1591 67.2134 58.1322 67.2441 58.0996 67.2678L41.9671 76.5722C34.798 80.7022 25.6388 78.2463 21.4977 71.0843ZM17.3026 36.3898C19.0723 33.3357 21.8655 31.0062 25.1878 29.8138V48.7376C25.1818 49.1949 25.2986 49.6453 25.5261 50.042C25.7535 50.4387 26.0833 50.7671 26.4809 50.9928L45.8622 62.1739L39.1283 66.069C39.0919 66.0883 39.0513 66.0984 39.0101 66.0984C38.9689 66.0984 38.9283 66.0883 38.8919 66.069L22.7908 56.7809C15.6359 52.6337 13.1822 43.4816 17.3026 36.3112V36.3898ZM72.624 49.2426L53.1792 37.9512L59.8976 34.0718C59.9341 34.0524 59.9747 34.0423 60.016 34.0423C60.0573 34.0423 60.0979 34.0524 60.1344 34.0718L76.2355 43.3761C78.6973 44.7966 80.7043 46.8882 82.0221 49.4065C83.3398 51.9249 83.914 54.7661 83.6775 57.5985C83.4411 60.431 82.4038 63.1377 80.6867 65.4027C78.9696 67.6677 76.6436 69.3975 73.9803 70.3901V51.466C73.9663 51.0096 73.834 50.5647 73.5962 50.1749C73.3584 49.7851 73.0234 49.4638 72.624 49.2426ZM79.3261 39.1657L78.8529 38.8815L62.9411 29.6089C62.5442 29.376 62.0924 29.2532 61.6322 29.2532C61.172 29.2532 60.7202 29.376 60.3233 29.6089L40.8629 40.8374V33.0628C40.8587 33.0233 40.8654 32.9834 40.882 32.9473C40.8987 32.9113 40.9248 32.8803 40.9575 32.8579L57.0586 23.5692C59.5263 22.1476 62.3478 21.458 65.193 21.5811C68.0382 21.7042 70.7896 22.6348 73.1253 24.2642C75.461 25.8936 77.2845 28.1543 78.3825 30.782C79.4806 33.4097 79.8077 36.2957 79.3257 39.1025V39.1657H79.3261ZM37.1888 52.9484L30.455 49.069C30.4213 49.0487 30.3925 49.0212 30.3707 48.9884C30.3488 48.9557 30.3345 48.9186 30.3286 48.8797V30.3188C30.3323 27.4714 31.1466 24.6839 32.6761 22.2822C34.2057 19.8805 36.3874 17.9639 38.9661 16.7564C41.5448 15.549 44.4139 15.1005 47.2381 15.4636C50.0622 15.8267 52.7247 16.9862 54.9141 18.8067L54.4409 19.0748L38.5134 28.2686C38.117 28.5011 37.7879 28.8327 37.5584 29.2308C37.329 29.629 37.207 30.0799 37.2045 30.5395L37.1888 52.9487V52.9484ZM40.8472 45.0632L49.5209 40.0643L58.21 45.0635V55.0615L49.5523 60.0608L40.8632 55.0615L40.8472 45.0632Z"/></svg>
+                  </span>
                   <h3 class="lane-name">Codex</h3>
-                  <span class="chip">plus</span>
-                  <span class="lane-account">n***@gmail.com</span>
+                  <span class="chip">Plus</span>
+                  <span class="lane-account">gmail@gmail.com</span>
+                  <span class="lane-status" title="服务正常"></span>
                 </div>
                 <div class="lane-reading">
                   <span class="lane-percent num">65<small>%</small></span>
@@ -846,9 +912,13 @@ body {
               <!-- Claude Code -->
               <article class="lane">
                 <div class="lane-id">
+                  <span class="lane-logo claude" aria-hidden="true">
+                    <svg viewBox="0 0 100 100" fill="currentColor"><path d="M25.7146 63.2153L41.4393 54.3917L41.7025 53.6226L41.4393 53.1976H40.6705L38.0394 53.0359L29.054 52.7929L21.2624 52.4691L13.7134 52.0644L11.8111 51.6594L10.0303 49.3118L10.2123 48.138L11.8111 47.0657L14.0981 47.2681L19.1574 47.6119L26.7467 48.138L32.2516 48.4618L40.4073 49.3118H41.7025L41.8846 48.7857L41.4393 48.4618L41.0955 48.138L33.243 42.8155L24.7432 37.1894L20.2909 33.9513L17.8824 32.3119L16.6684 30.774L16.1422 27.4147L18.328 25.0062L21.2624 25.2088L22.0112 25.4112L24.9861 27.6979L31.3407 32.616L39.6381 38.7273L40.8525 39.7391L41.3381 39.395L41.399 39.1523L40.8525 38.2415L36.3394 30.0858L31.5227 21.7883L29.3775 18.3478L28.811 16.2837C28.6087 15.4334 28.4669 14.7252 28.4669 13.8549L30.9563 10.4753L32.3321 10.0303L35.6515 10.4756L37.0479 11.6897L39.112 16.4052L42.4513 23.8327L47.6321 33.9313L49.15 36.9265L49.9594 39.6991L50.2632 40.5491H50.7894V40.0632L51.2141 34.3766L52.0035 27.3944L52.7726 18.4087L53.0358 15.8793L54.2905 12.8435L56.7795 11.2041L58.7224 12.135L60.3212 14.422L60.0986 15.899L59.1474 22.0718L57.2857 31.7458L56.0713 38.2218H56.7795L57.5892 37.4121L60.8677 33.061L66.3723 26.18L68.801 23.448L71.6342 20.4325L73.4556 18.9957H76.8962L79.4255 22.7601L78.2926 26.6456L74.7509 31.1384L71.8163 34.943L67.607 40.6097L64.9758 45.1431L65.2188 45.5072L65.8464 45.4466L75.358 43.4228L80.4984 42.4917L86.6304 41.4393L89.4033 42.7346L89.7065 44.0502L88.6135 46.7419L82.0566 48.3607L74.3662 49.8989L62.9118 52.6109L62.77 52.7121L62.9321 52.9144L68.0925 53.4L70.2987 53.5214H75.7021L85.7601 54.2702L88.3912 56.0108L89.9697 58.1358L89.7065 59.7545L85.6589 61.8189L80.1949 60.5236L67.4452 57.4881L63.0735 56.3952H62.4665V56.7596L66.1093 60.3213L72.7877 66.3523L81.1461 74.1236L81.5707 76.0462L80.4984 77.5638L79.3649 77.4021L72.0186 71.8772L69.1854 69.3879L62.77 63.9844H62.3453V64.5509L63.8223 66.7164L71.6342 78.4544L72.0389 82.0567L71.4725 83.2308L69.4487 83.939L67.2222 83.534L62.6485 77.1189L57.9333 69.8937L54.1284 63.4177L53.6631 63.6809L51.4167 87.8651L50.3644 89.0995L47.9356 90.0303L45.9121 88.4924L44.8392 86.0031L45.9118 81.0852L47.2071 74.6701L48.2594 69.5699L49.2106 63.2356L49.7773 61.131L49.7367 60.9892L49.2715 61.0498L44.4954 67.607L37.23 77.4224L31.4825 83.5746L30.1063 84.1211L27.7181 82.8864L27.9408 80.6805L29.2763 78.7177L37.2297 68.5988L42.026 62.3248L45.1227 58.7025L45.1024 58.176H44.9204L23.7917 71.8975L20.0274 72.3831L18.4083 70.8655L18.6106 68.3761L19.3798 67.5664L25.7343 63.195L25.7146 63.2153Z"/></svg>
+                  </span>
                   <h3 class="lane-name">Claude Code</h3>
-                  <span class="chip">pro</span>
-                  <span class="lane-account">n***@gmail.com</span>
+                  <span class="chip">Pro</span>
+                  <span class="lane-account">gmail@gmail.com</span>
+                  <span class="lane-status" title="服务正常"></span>
                 </div>
                 <div class="lane-reading">
                   <span class="lane-percent num">100<small>%</small></span>
@@ -882,7 +952,7 @@ body {
           <div class="panel">
             <div class="panel-head">
               <div class="panel-head-text">
-                <p class="panel-title">用量</p>
+                <p class="panel-title">CC Trace</p>
                 <span class="panel-fresh">刚刚已刷新</span>
               </div>
               <div class="panel-actions">
@@ -904,9 +974,13 @@ body {
             <div class="panel-lanes">
               <article class="lane">
                 <div class="lane-id">
+                  <span class="lane-logo codex" aria-hidden="true">
+                    <svg viewBox="0 0 100 100" fill="currentColor"><path d="M83.7733 42.8087C84.6678 40.1149 84.9771 37.2613 84.6807 34.4385C84.3843 31.6156 83.489 28.8885 82.0544 26.4394C77.6908 18.8436 68.9203 14.9365 60.3548 16.7725C57.9831 14.1344 54.9591 12.1668 51.5864 11.0673C48.2137 9.96772 44.611 9.77498 41.1402 10.5084C37.6694 11.2418 34.4527 12.8755 31.8132 15.2455C29.1736 17.6155 27.204 20.6383 26.1024 24.0103C23.3212 24.5806 20.6938 25.738 18.3958 27.405C16.0977 29.0721 14.1819 31.2104 12.7765 33.6772C8.36538 41.2609 9.3669 50.8267 15.2527 57.3327C14.3549 60.0251 14.0424 62.8782 14.3361 65.7012C14.6298 68.5241 15.523 71.2518 16.9558 73.7017C21.325 81.3002 30.1011 85.207 38.6712 83.3686C40.5554 85.4904 42.8707 87.1858 45.4623 88.3416C48.0539 89.4975 50.8622 90.0871 53.6999 90.0713C62.4793 90.079 70.2575 84.4114 72.9393 76.0515C75.7201 75.4802 78.347 74.3225 80.6449 72.6555C82.9427 70.9886 84.8587 68.8507 86.2649 66.3846C90.6227 58.8145 89.6172 49.3005 83.7733 42.8087ZM53.6999 84.8356C50.1955 84.8411 46.801 83.6129 44.1116 81.3661L44.5848 81.098L60.5123 71.9043C60.9087 71.6718 61.2379 71.3402 61.4674 70.942C61.6969 70.5439 61.8189 70.0929 61.8215 69.6333V47.1769L68.5553 51.072C68.6225 51.1063 68.6694 51.1707 68.6814 51.2456V69.854C68.6641 78.1208 61.9667 84.8183 53.6999 84.8356ZM21.4977 71.0843C19.7402 68.0497 19.1092 64.4925 19.7156 61.0386L20.1885 61.3225L36.1321 70.5165C36.5266 70.748 36.9757 70.87 37.4331 70.87C37.8905 70.87 38.3396 70.748 38.7341 70.5165L58.21 59.2883V67.0628C58.2081 67.1031 58.1973 67.1424 58.1782 67.1779C58.1591 67.2134 58.1322 67.2441 58.0996 67.2678L41.9671 76.5722C34.798 80.7022 25.6388 78.2463 21.4977 71.0843ZM17.3026 36.3898C19.0723 33.3357 21.8655 31.0062 25.1878 29.8138V48.7376C25.1818 49.1949 25.2986 49.6453 25.5261 50.042C25.7535 50.4387 26.0833 50.7671 26.4809 50.9928L45.8622 62.1739L39.1283 66.069C39.0919 66.0883 39.0513 66.0984 39.0101 66.0984C38.9689 66.0984 38.9283 66.0883 38.8919 66.069L22.7908 56.7809C15.6359 52.6337 13.1822 43.4816 17.3026 36.3112V36.3898ZM72.624 49.2426L53.1792 37.9512L59.8976 34.0718C59.9341 34.0524 59.9747 34.0423 60.016 34.0423C60.0573 34.0423 60.0979 34.0524 60.1344 34.0718L76.2355 43.3761C78.6973 44.7966 80.7043 46.8882 82.0221 49.4065C83.3398 51.9249 83.914 54.7661 83.6775 57.5985C83.4411 60.431 82.4038 63.1377 80.6867 65.4027C78.9696 67.6677 76.6436 69.3975 73.9803 70.3901V51.466C73.9663 51.0096 73.834 50.5647 73.5962 50.1749C73.3584 49.7851 73.0234 49.4638 72.624 49.2426ZM79.3261 39.1657L78.8529 38.8815L62.9411 29.6089C62.5442 29.376 62.0924 29.2532 61.6322 29.2532C61.172 29.2532 60.7202 29.376 60.3233 29.6089L40.8629 40.8374V33.0628C40.8587 33.0233 40.8654 32.9834 40.882 32.9473C40.8987 32.9113 40.9248 32.8803 40.9575 32.8579L57.0586 23.5692C59.5263 22.1476 62.3478 21.458 65.193 21.5811C68.0382 21.7042 70.7896 22.6348 73.1253 24.2642C75.461 25.8936 77.2845 28.1543 78.3825 30.782C79.4806 33.4097 79.8077 36.2957 79.3257 39.1025V39.1657H79.3261ZM37.1888 52.9484L30.455 49.069C30.4213 49.0487 30.3925 49.0212 30.3707 48.9884C30.3488 48.9557 30.3345 48.9186 30.3286 48.8797V30.3188C30.3323 27.4714 31.1466 24.6839 32.6761 22.2822C34.2057 19.8805 36.3874 17.9639 38.9661 16.7564C41.5448 15.549 44.4139 15.1005 47.2381 15.4636C50.0622 15.8267 52.7247 16.9862 54.9141 18.8067L54.4409 19.0748L38.5134 28.2686C38.117 28.5011 37.7879 28.8327 37.5584 29.2308C37.329 29.629 37.207 30.0799 37.2045 30.5395L37.1888 52.9487V52.9484ZM40.8472 45.0632L49.5209 40.0643L58.21 45.0635V55.0615L49.5523 60.0608L40.8632 55.0615L40.8472 45.0632Z"/></svg>
+                  </span>
                   <h3 class="lane-name">Codex</h3>
-                  <span class="chip">plus</span>
-                  <span class="lane-account">n***@gmail.com</span>
+                  <span class="chip">Plus</span>
+                  <span class="lane-account">gmail@gmail.com</span>
+                  <span class="lane-status" title="服务正常"></span>
                 </div>
                 <div class="lane-reading">
                   <span class="lane-percent num">65<small>%</small></span>
@@ -922,9 +996,13 @@ body {
 
               <article class="lane">
                 <div class="lane-id">
+                  <span class="lane-logo claude" aria-hidden="true">
+                    <svg viewBox="0 0 100 100" fill="currentColor"><path d="M25.7146 63.2153L41.4393 54.3917L41.7025 53.6226L41.4393 53.1976H40.6705L38.0394 53.0359L29.054 52.7929L21.2624 52.4691L13.7134 52.0644L11.8111 51.6594L10.0303 49.3118L10.2123 48.138L11.8111 47.0657L14.0981 47.2681L19.1574 47.6119L26.7467 48.138L32.2516 48.4618L40.4073 49.3118H41.7025L41.8846 48.7857L41.4393 48.4618L41.0955 48.138L33.243 42.8155L24.7432 37.1894L20.2909 33.9513L17.8824 32.3119L16.6684 30.774L16.1422 27.4147L18.328 25.0062L21.2624 25.2088L22.0112 25.4112L24.9861 27.6979L31.3407 32.616L39.6381 38.7273L40.8525 39.7391L41.3381 39.395L41.399 39.1523L40.8525 38.2415L36.3394 30.0858L31.5227 21.7883L29.3775 18.3478L28.811 16.2837C28.6087 15.4334 28.4669 14.7252 28.4669 13.8549L30.9563 10.4753L32.3321 10.0303L35.6515 10.4756L37.0479 11.6897L39.112 16.4052L42.4513 23.8327L47.6321 33.9313L49.15 36.9265L49.9594 39.6991L50.2632 40.5491H50.7894V40.0632L51.2141 34.3766L52.0035 27.3944L52.7726 18.4087L53.0358 15.8793L54.2905 12.8435L56.7795 11.2041L58.7224 12.135L60.3212 14.422L60.0986 15.899L59.1474 22.0718L57.2857 31.7458L56.0713 38.2218H56.7795L57.5892 37.4121L60.8677 33.061L66.3723 26.18L68.801 23.448L71.6342 20.4325L73.4556 18.9957H76.8962L79.4255 22.7601L78.2926 26.6456L74.7509 31.1384L71.8163 34.943L67.607 40.6097L64.9758 45.1431L65.2188 45.5072L65.8464 45.4466L75.358 43.4228L80.4984 42.4917L86.6304 41.4393L89.4033 42.7346L89.7065 44.0502L88.6135 46.7419L82.0566 48.3607L74.3662 49.8989L62.9118 52.6109L62.77 52.7121L62.9321 52.9144L68.0925 53.4L70.2987 53.5214H75.7021L85.7601 54.2702L88.3912 56.0108L89.9697 58.1358L89.7065 59.7545L85.6589 61.8189L80.1949 60.5236L67.4452 57.4881L63.0735 56.3952H62.4665V56.7596L66.1093 60.3213L72.7877 66.3523L81.1461 74.1236L81.5707 76.0462L80.4984 77.5638L79.3649 77.4021L72.0186 71.8772L69.1854 69.3879L62.77 63.9844H62.3453V64.5509L63.8223 66.7164L71.6342 78.4544L72.0389 82.0567L71.4725 83.2308L69.4487 83.939L67.2222 83.534L62.6485 77.1189L57.9333 69.8937L54.1284 63.4177L53.6631 63.6809L51.4167 87.8651L50.3644 89.0995L47.9356 90.0303L45.9121 88.4924L44.8392 86.0031L45.9118 81.0852L47.2071 74.6701L48.2594 69.5699L49.2106 63.2356L49.7773 61.131L49.7367 60.9892L49.2715 61.0498L44.4954 67.607L37.23 77.4224L31.4825 83.5746L30.1063 84.1211L27.7181 82.8864L27.9408 80.6805L29.2763 78.7177L37.2297 68.5988L42.026 62.3248L45.1227 58.7025L45.1024 58.176H44.9204L23.7917 71.8975L20.0274 72.3831L18.4083 70.8655L18.6106 68.3761L19.3798 67.5664L25.7343 63.195L25.7146 63.2153Z"/></svg>
+                  </span>
                   <h3 class="lane-name">Claude Code</h3>
-                  <span class="chip">pro</span>
-                  <span class="lane-account">n***@gmail.com</span>
+                  <span class="chip">Pro</span>
+                  <span class="lane-account">gmail@gmail.com</span>
+                  <span class="lane-status" title="服务正常"></span>
                 </div>
                 <div class="lane-reading">
                   <span class="lane-percent num">100<small>%</small></span>
@@ -970,13 +1048,34 @@ body {
        ======================================================== -->
   <section class="stage-section">
     <h2>2 · 主窗口 · 本地用量页</h2>
-    <p class="section-sub">结构不变(筛选 → 按 Provider → 每日花费 → 按模型),统一到与紧凑面板同一套卡片、字号与阴影语言;选「今天」,数值与 popover 花费一致。</p>
+    <p class="section-sub">🚩 窗口 960→1180px,左侧为<b>分组侧边栏</b>(视图组 + 数据源组 + 设置钉底);内容区结构不变(筛选 → 按 Provider → 每日花费 → 按模型),统一到与紧凑面板同一套卡片、字号与阴影语言。🆕 数据源是全局状态:选单个 Provider 后页面所有区块只剩该 Provider 数据(见下方第三个 specimen),时间范围仍是页面内状态。右上角「设置」按钮移除,由侧边栏承担。</p>
     <div class="row">
 
       <figure class="specimen" style="margin:0">
         <figcaption>浅色</figcaption>
         <div class="theme-light">
           <div class="mainwin">
+            <aside class="mw-sidebar">
+              <div class="sb-group">
+                <h3>视图</h3>
+                <div class="sb-item on">用量</div>
+                <div class="sb-item">对话<span class="sb-later">后续</span></div>
+                <div class="sb-item">时间线<span class="sb-later">后续</span></div>
+              </div>
+              <div class="sb-group">
+                <h3>数据源</h3>
+                <div class="sb-item on">全部</div>
+                <div class="sb-item"><i class="sb-dot codex"></i>Codex</div>
+                <div class="sb-item"><i class="sb-dot claude"></i>Claude Code</div>
+              </div>
+              <div class="sb-spacer"></div>
+              <div class="sb-bottom">
+                <div class="sb-group">
+                  <div class="sb-item settings">设置</div>
+                </div>
+              </div>
+            </aside>
+            <div class="mw-body">
             <div class="mw-top">
               <div class="mw-heading">
                 <h1>用量</h1>
@@ -1000,31 +1099,14 @@ body {
             </div>
 
             <div class="mw-block">
-              <div class="mw-block-head"><h2>按 Provider</h2><span class="rule"></span></div>
+              <div class="mw-block-head"><h2>按 Provider</h2><span class="rule"></span><span class="mw-summary num">总 Token <b>48.8M</b> · 总花费 <b class="money">$6.19</b></span></div>
               <div class="mw-provider-layout">
-                <div class="card total-card">
-                  <div class="total-row">
-                    <span class="total-value num">48.8<small>M</small></span>
-                    <span class="total-label">总 Token</span>
-                  </div>
-                  <div class="total-row">
-                    <span class="total-value num">$6.19</span>
-                    <span class="total-label">总花费</span>
-                  </div>
-                </div>
-
                 <div class="card pcard" data-p="codex">
                   <div class="pcard-head"><i></i><h3>Codex</h3></div>
                   <div class="pcard-money">
                     <span class="pcard-cost num">$4.21</span>
                     <span class="pcard-total num"><b>31.4M</b> Token</span>
                   </div>
-                  <dl class="pcard-metrics">
-                    <div><dt>输入</dt><dd class="num">27.8M</dd></div>
-                    <div><dt>输出</dt><dd class="num">1.4M</dd></div>
-                    <div><dt>缓存命中</dt><dd class="num">24.1M</dd></div>
-                    <div><dt>缓存写入</dt><dd class="num">2.1M</dd></div>
-                  </dl>
                   <div class="pcard-hit">
                     <div class="pcard-hit-label"><span>缓存命中率</span><b class="num">87%</b></div>
                     <div class="bar"><i style="width:87%"></i></div>
@@ -1037,12 +1119,19 @@ body {
                     <span class="pcard-cost num">$1.98</span>
                     <span class="pcard-total num"><b>16.8M</b> Token</span>
                   </div>
-                  <dl class="pcard-metrics">
-                    <div><dt>输入</dt><dd class="num">14.6M</dd></div>
-                    <div><dt>输出</dt><dd class="num">0.9M</dd></div>
-                    <div><dt>缓存命中</dt><dd class="num">13.3M</dd></div>
-                    <div><dt>缓存写入</dt><dd class="num">1.2M</dd></div>
-                  </dl>
+                  <div class="pcard-hit">
+                    <div class="pcard-hit-label"><span>缓存命中率</span><b class="num">91%</b></div>
+                    <div class="bar"><i style="width:91%"></i></div>
+                  </div>
+                </div>
+
+                <!-- 服务商占位卡:验证三卡布局,后续替换为真实服务商 -->
+                <div class="card pcard" data-p="placeholder">
+                  <div class="pcard-head"><i></i><h3>服务商</h3></div>
+                  <div class="pcard-money">
+                    <span class="pcard-cost num">$1.98</span>
+                    <span class="pcard-total num"><b>16.8M</b> Token</span>
+                  </div>
                   <div class="pcard-hit">
                     <div class="pcard-hit-label"><span>缓存命中率</span><b class="num">91%</b></div>
                     <div class="bar"><i style="width:91%"></i></div>
@@ -1117,6 +1206,7 @@ body {
                 </table>
               </div>
             </div>
+            </div>
           </div>
         </div>
       </figure>
@@ -1124,7 +1214,12 @@ body {
       <aside class="notes">
         <h3>改动注记</h3>
         <ul>
-          <li><strong>三卡同排</strong>:总计卡与两张 Provider 卡等高并列,总计不再是孤立窄条;26px 读数与 popover 同标尺。</li>
+          <li><strong>🆕 分组侧边栏</strong>:视图组(用量／对话／时间线)+ 数据源组(全部／Codex／Claude Code)同列;对话、时间线是未来视图,灰色「后续」chip 标注,首版不做。</li>
+          <li><strong>🆕 数据源全局化</strong>:Provider 筛选跨页面共享,切换视图时保留;时间范围是各页面内状态。选单个 Provider 后为纯过滤:总览、卡区、图表、模型表同步收窄,数字纵向对账仍成立。</li>
+          <li><strong>🆕 设置钉底</strong>:侧边栏底部固定项,与数据源无关;进入设置时隐藏数据源组(见第 3 节)。</li>
+          <li><strong>🚩 窗口 960→1180px</strong>:176px 侧边栏 + 内容区;幅度待确认,定稿需同步 <code>tauri.conf.json</code>。</li>
+          <li><strong>服务商占位卡</strong>:第三张灰点卡为占位,数据暂复制 Claude,仅用于验证三卡布局;与导航数据源组的对应关系待真实服务商接入时处理。</li>
+          <li><strong>Provider 卡三要素化</strong>:矮宽形态,每卡只留 费用 + 总Token + 命中率三要素,一眼可扫;输入／输出／缓存命中／写入交还按模型表(表头已有这些列),不再重复。卡高从 ~190px 降到 ~120px。</li>
           <li><strong>卡片语言统一</strong>:主窗口卡与 popover lane 共用同一套 14px 圆角、边框与 🚩 加档阴影,不再「主窗口一套、面板一套」。</li>
           <li><strong>命中率条复用余量条</strong>组件形态(4px),染 Provider 品牌色的降饱和版,不占用语义色。</li>
           <li><strong>表格数字右对齐</strong>、行分隔降到 55% 透明度;「—」代表未定价/无值,沿用现有文案规则。</li>
@@ -1138,6 +1233,27 @@ body {
         <figcaption>深色</figcaption>
         <div class="theme-dark">
           <div class="mainwin">
+            <aside class="mw-sidebar">
+              <div class="sb-group">
+                <h3>视图</h3>
+                <div class="sb-item on">用量</div>
+                <div class="sb-item">对话<span class="sb-later">后续</span></div>
+                <div class="sb-item">时间线<span class="sb-later">后续</span></div>
+              </div>
+              <div class="sb-group">
+                <h3>数据源</h3>
+                <div class="sb-item on">全部</div>
+                <div class="sb-item"><i class="sb-dot codex"></i>Codex</div>
+                <div class="sb-item"><i class="sb-dot claude"></i>Claude Code</div>
+              </div>
+              <div class="sb-spacer"></div>
+              <div class="sb-bottom">
+                <div class="sb-group">
+                  <div class="sb-item settings">设置</div>
+                </div>
+              </div>
+            </aside>
+            <div class="mw-body">
             <div class="mw-top">
               <div class="mw-heading">
                 <h1>用量</h1>
@@ -1161,31 +1277,14 @@ body {
             </div>
 
             <div class="mw-block">
-              <div class="mw-block-head"><h2>按 Provider</h2><span class="rule"></span></div>
+              <div class="mw-block-head"><h2>按 Provider</h2><span class="rule"></span><span class="mw-summary num">总 Token <b>48.8M</b> · 总花费 <b class="money">$6.19</b></span></div>
               <div class="mw-provider-layout">
-                <div class="card total-card">
-                  <div class="total-row">
-                    <span class="total-value num">48.8<small>M</small></span>
-                    <span class="total-label">总 Token</span>
-                  </div>
-                  <div class="total-row">
-                    <span class="total-value num">$6.19</span>
-                    <span class="total-label">总花费</span>
-                  </div>
-                </div>
-
                 <div class="card pcard" data-p="codex">
                   <div class="pcard-head"><i></i><h3>Codex</h3></div>
                   <div class="pcard-money">
                     <span class="pcard-cost num">$4.21</span>
                     <span class="pcard-total num"><b>31.4M</b> Token</span>
                   </div>
-                  <dl class="pcard-metrics">
-                    <div><dt>输入</dt><dd class="num">27.8M</dd></div>
-                    <div><dt>输出</dt><dd class="num">1.4M</dd></div>
-                    <div><dt>缓存命中</dt><dd class="num">24.1M</dd></div>
-                    <div><dt>缓存写入</dt><dd class="num">2.1M</dd></div>
-                  </dl>
                   <div class="pcard-hit">
                     <div class="pcard-hit-label"><span>缓存命中率</span><b class="num">87%</b></div>
                     <div class="bar"><i style="width:87%"></i></div>
@@ -1198,12 +1297,19 @@ body {
                     <span class="pcard-cost num">$1.98</span>
                     <span class="pcard-total num"><b>16.8M</b> Token</span>
                   </div>
-                  <dl class="pcard-metrics">
-                    <div><dt>输入</dt><dd class="num">14.6M</dd></div>
-                    <div><dt>输出</dt><dd class="num">0.9M</dd></div>
-                    <div><dt>缓存命中</dt><dd class="num">13.3M</dd></div>
-                    <div><dt>缓存写入</dt><dd class="num">1.2M</dd></div>
-                  </dl>
+                  <div class="pcard-hit">
+                    <div class="pcard-hit-label"><span>缓存命中率</span><b class="num">91%</b></div>
+                    <div class="bar"><i style="width:91%"></i></div>
+                  </div>
+                </div>
+
+                <!-- 服务商占位卡:验证三卡布局,后续替换为真实服务商 -->
+                <div class="card pcard" data-p="placeholder">
+                  <div class="pcard-head"><i></i><h3>服务商</h3></div>
+                  <div class="pcard-money">
+                    <span class="pcard-cost num">$1.98</span>
+                    <span class="pcard-total num"><b>16.8M</b> Token</span>
+                  </div>
                   <div class="pcard-hit">
                     <div class="pcard-hit-label"><span>缓存命中率</span><b class="num">91%</b></div>
                     <div class="bar"><i style="width:91%"></i></div>
@@ -1278,9 +1384,136 @@ body {
                 </table>
               </div>
             </div>
+            </div>
           </div>
         </div>
       </figure>
+
+      <figure class="specimen" style="margin:0">
+        <figcaption>浅色 · 数据源 = Codex(纯过滤响应)</figcaption>
+        <div class="theme-light">
+          <div class="mainwin">
+            <aside class="mw-sidebar">
+              <div class="sb-group">
+                <h3>视图</h3>
+                <div class="sb-item on">用量</div>
+                <div class="sb-item">对话<span class="sb-later">后续</span></div>
+                <div class="sb-item">时间线<span class="sb-later">后续</span></div>
+              </div>
+              <div class="sb-group">
+                <h3>数据源</h3>
+                <div class="sb-item">全部</div>
+                <div class="sb-item on"><i class="sb-dot codex"></i>Codex</div>
+                <div class="sb-item"><i class="sb-dot claude"></i>Claude Code</div>
+              </div>
+              <div class="sb-spacer"></div>
+              <div class="sb-bottom">
+                <div class="sb-group">
+                  <div class="sb-item settings">设置</div>
+                </div>
+              </div>
+            </aside>
+            <div class="mw-body">
+              <div class="mw-top">
+                <div class="mw-heading">
+                  <h1>用量</h1>
+                  <span class="mw-scan num">上次扫描 8/2 14:05</span>
+                </div>
+              </div>
+
+              <div class="mw-filters">
+                <div class="segmented">
+                  <button class="on">今天</button>
+                  <button>昨天</button>
+                  <button>本周</button>
+                  <button>本月</button>
+                  <button>本年</button>
+                  <button>7 天</button>
+                  <button>30 天</button>
+                  <button>全部</button>
+                </div>
+                <span class="date-input num">2026/08/02 – 2026/08/02</span>
+              </div>
+
+              <div class="mw-block">
+                <div class="mw-block-head"><h2>按 Provider</h2><span class="rule"></span><span class="mw-summary num">总 Token <b>31.4M</b> · 总花费 <b class="money">$4.21</b></span></div>
+                <div class="mw-provider-layout" style="grid-template-columns:1fr">
+                  <div class="card pcard" data-p="codex">
+                    <div class="pcard-head"><i></i><h3>Codex</h3></div>
+                    <div class="pcard-money">
+                      <span class="pcard-cost num">$4.21</span>
+                      <span class="pcard-total num"><b>31.4M</b> Token</span>
+                    </div>
+                    <div class="pcard-hit">
+                      <div class="pcard-hit-label"><span>缓存命中率</span><b class="num">87%</b></div>
+                      <div class="bar"><i style="width:87%"></i></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="mw-block">
+                <div class="mw-block-head">
+                  <h2>每日花费</h2>
+                  <div style="display:flex;align-items:center;gap:14px">
+                    <span class="chart-note">近 14 天 · 高亮为所选范围</span>
+                    <div class="legend">
+                      <span class="codex"><i></i>Codex</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="card chart-card">
+                  <div class="chart">
+                    <div class="col dim"><i class="cx" style="height:34%"></i></div>
+                    <div class="col dim"><i class="cx" style="height:48%"></i></div>
+                    <div class="col dim"><i class="cx" style="height:26%"></i></div>
+                    <div class="col dim"><i class="cx" style="height:56%"></i></div>
+                    <div class="col dim"><i class="cx" style="height:20%"></i></div>
+                    <div class="col dim"><i class="cx" style="height:8%"></i></div>
+                    <div class="col dim"><i class="cx" style="height:42%"></i></div>
+                    <div class="col dim"><i class="cx" style="height:62%"></i></div>
+                    <div class="col dim"><i class="cx" style="height:38%"></i></div>
+                    <div class="col dim"><i class="cx" style="height:52%"></i></div>
+                    <div class="col dim"><i class="cx" style="height:30%"></i></div>
+                    <div class="col dim"><i class="cx" style="height:66%"></i></div>
+                    <div class="col dim"><i class="cx" style="height:44%"></i></div>
+                    <div class="col"><i class="cx" style="height:40%"></i></div>
+                  </div>
+                  <div class="chart-x num">
+                    <span>7/20</span><span></span><span>7/22</span><span></span><span>7/24</span><span></span><span>7/26</span><span></span><span>7/28</span><span></span><span>7/30</span><span></span><span>8/1</span><span>8/2</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="mw-block">
+                <div class="mw-block-head"><h2>按模型</h2><span class="rule"></span></div>
+                <div class="card table-card">
+                  <table class="mtable num">
+                    <thead>
+                      <tr>
+                        <th>模型</th><th>输入</th><th>输出</th><th>缓存命中</th><th>缓存写入</th><th>总 Token</th><th>花费</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td><i class="m-provider" style="background:var(--cat-codex)"></i>gpt-5.2-codex</td>
+                        <td>27.8M</td><td>1.4M</td><td>24.1M</td><td class="muted">—</td><td>31.4M</td><td>$4.21</td>
+                      </tr>
+                    </tbody>
+                    <tfoot>
+                      <tr>
+                        <td>合计 · 1 个模型</td>
+                        <td>27.8M</td><td>1.4M</td><td>24.1M</td><td>—</td><td><b>31.4M</b></td><td><b>$4.21</b></td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </figure>
+
     </div>
   </section>
 
@@ -1288,79 +1521,95 @@ body {
        第 3 节 · 设置页
        ======================================================== -->
   <section class="stage-section">
-    <h2>3 · 设置(主窗口子路由)</h2>
-    <p class="section-sub">分组卡片承载现有全部设置项;控件行左 label 右控件,与用量页共用同一套卡片与分组标题语言。</p>
+    <h2>3 · 设置(主窗口内容区窄列)</h2>
+    <p class="section-sub">设置钉在侧边栏底部;进入设置时<b>隐藏数据源组</b>(设置无数据源维度),视图组保留以便返回。原「返回用量」按钮移除,由侧边栏承担返回。</p>
     <div class="row">
 
       <figure class="specimen" style="margin:0">
         <figcaption>浅色</figcaption>
         <div class="theme-light">
-          <div class="settingswin">
-            <div class="sw-top">
-              <h1>设置</h1>
-              <button class="sw-back">← 返回用量</button>
-            </div>
-
-            <div class="sw-group">
-              <h2>通用</h2>
-              <div class="card sw-card">
-                <div class="sw-row">
-                  <span class="sw-label">自动刷新间隔</span>
-                  <div class="segmented">
-                    <button>15 分钟</button>
-                    <button class="on">30 分钟</button>
-                    <button>60 分钟</button>
-                  </div>
-                </div>
-                <div class="sw-row">
-                  <span class="sw-label">开机时启动 CC Trace</span>
-                  <span class="toggle"></span>
+          <div class="mainwin">
+            <aside class="mw-sidebar">
+              <div class="sb-group">
+                <h3>视图</h3>
+                <div class="sb-item">用量</div>
+                <div class="sb-item">对话<span class="sb-later">后续</span></div>
+                <div class="sb-item">时间线<span class="sb-later">后续</span></div>
+              </div>
+              <div class="sb-spacer"></div>
+              <div class="sb-bottom">
+                <div class="sb-group">
+                  <div class="sb-item settings on">设置</div>
                 </div>
               </div>
-            </div>
-
-            <div class="sw-group">
-              <h2>外观与语言</h2>
-              <div class="card sw-card">
-                <div class="sw-row">
-                  <span class="sw-label">语言</span>
-                  <div class="segmented">
-                    <button class="on">跟随系统</button>
-                    <button>中文</button>
-                    <button>English</button>
-                  </div>
-                </div>
-                <div class="sw-row">
-                  <span class="sw-label">外观</span>
-                  <div class="segmented">
-                    <button class="on">跟随系统</button>
-                    <button>浅色</button>
-                    <button>深色</button>
-                  </div>
-                </div>
+            </aside>
+            <div class="mw-body">
+              <div class="sw-top">
+                <h1>设置</h1>
               </div>
-            </div>
-
-            <div class="sw-group">
-              <h2>用量与计价</h2>
-              <div class="card sw-card">
-                <div class="sw-row">
-                  <div>
-                    <span class="sw-label">价格目录</span>
-                    <p class="sw-desc">立即检查 LiteLLM 与 models.dev;更新失败时继续使用原有价格。</p>
+              <div class="settingswin">
+                <div class="sw-group">
+                  <h2>通用</h2>
+                  <div class="card sw-card">
+                    <div class="sw-row">
+                      <span class="sw-label">自动刷新间隔</span>
+                      <div class="segmented">
+                        <button>15 分钟</button>
+                        <button class="on">30 分钟</button>
+                        <button>60 分钟</button>
+                      </div>
+                    </div>
+                    <div class="sw-row">
+                      <span class="sw-label">开机时启动 CC Trace</span>
+                      <span class="toggle"></span>
+                    </div>
                   </div>
-                  <button class="flat-btn">更新</button>
                 </div>
-              </div>
-            </div>
 
-            <div class="sw-group">
-              <h2>关于</h2>
-              <div class="card sw-card">
-                <p class="sw-about">
-                  <b>CC Trace · 版本 0.1.4</b>
-                  CC Trace 只读取本机已有的 Codex 与 Claude Code 凭据,不上传任何数据,也不读取或迁移 cc-bar 的应用数据。
-                </p>
+                <div class="sw-group">
+                  <h2>外观与语言</h2>
+                  <div class="card sw-card">
+                    <div class="sw-row">
+                      <span class="sw-label">语言</span>
+                      <div class="segmented">
+                        <button class="on">跟随系统</button>
+                        <button>中文</button>
+                        <button>English</button>
+                      </div>
+                    </div>
+                    <div class="sw-row">
+                      <span class="sw-label">外观</span>
+                      <div class="segmented">
+                        <button class="on">跟随系统</button>
+                        <button>浅色</button>
+                        <button>深色</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="sw-group">
+                  <h2>用量与计价</h2>
+                  <div class="card sw-card">
+                    <div class="sw-row">
+                      <div>
+                        <span class="sw-label">价格目录</span>
+                        <p class="sw-desc">立即检查 LiteLLM 与 models.dev;更新失败时继续使用原有价格。</p>
+                      </div>
+                      <button class="flat-btn">更新</button>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="sw-group">
+                  <h2>关于</h2>
+                  <div class="card sw-card">
+                    <p class="sw-about">
+                      <b>CC Trace · 版本 0.1.4</b>
+                      CC Trace 只读取本机已有的 Codex 与 Claude Code 凭据,不上传任何数据,也不读取或迁移 cc-bar 的应用数据。
+                    </p>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -1370,72 +1619,88 @@ body {
       <figure class="specimen" style="margin:0">
         <figcaption>深色</figcaption>
         <div class="theme-dark">
-          <div class="settingswin">
-            <div class="sw-top">
-              <h1>设置</h1>
-              <button class="sw-back">← 返回用量</button>
-            </div>
-
-            <div class="sw-group">
-              <h2>通用</h2>
-              <div class="card sw-card">
-                <div class="sw-row">
-                  <span class="sw-label">自动刷新间隔</span>
-                  <div class="segmented">
-                    <button>15 分钟</button>
-                    <button class="on">30 分钟</button>
-                    <button>60 分钟</button>
-                  </div>
-                </div>
-                <div class="sw-row">
-                  <span class="sw-label">开机时启动 CC Trace</span>
-                  <span class="toggle"></span>
+          <div class="mainwin">
+            <aside class="mw-sidebar">
+              <div class="sb-group">
+                <h3>视图</h3>
+                <div class="sb-item">用量</div>
+                <div class="sb-item">对话<span class="sb-later">后续</span></div>
+                <div class="sb-item">时间线<span class="sb-later">后续</span></div>
+              </div>
+              <div class="sb-spacer"></div>
+              <div class="sb-bottom">
+                <div class="sb-group">
+                  <div class="sb-item settings on">设置</div>
                 </div>
               </div>
-            </div>
-
-            <div class="sw-group">
-              <h2>外观与语言</h2>
-              <div class="card sw-card">
-                <div class="sw-row">
-                  <span class="sw-label">语言</span>
-                  <div class="segmented">
-                    <button class="on">跟随系统</button>
-                    <button>中文</button>
-                    <button>English</button>
-                  </div>
-                </div>
-                <div class="sw-row">
-                  <span class="sw-label">外观</span>
-                  <div class="segmented">
-                    <button class="on">跟随系统</button>
-                    <button>浅色</button>
-                    <button>深色</button>
-                  </div>
-                </div>
+            </aside>
+            <div class="mw-body">
+              <div class="sw-top">
+                <h1>设置</h1>
               </div>
-            </div>
-
-            <div class="sw-group">
-              <h2>用量与计价</h2>
-              <div class="card sw-card">
-                <div class="sw-row">
-                  <div>
-                    <span class="sw-label">价格目录</span>
-                    <p class="sw-desc">立即检查 LiteLLM 与 models.dev;更新失败时继续使用原有价格。</p>
+              <div class="settingswin">
+                <div class="sw-group">
+                  <h2>通用</h2>
+                  <div class="card sw-card">
+                    <div class="sw-row">
+                      <span class="sw-label">自动刷新间隔</span>
+                      <div class="segmented">
+                        <button>15 分钟</button>
+                        <button class="on">30 分钟</button>
+                        <button>60 分钟</button>
+                      </div>
+                    </div>
+                    <div class="sw-row">
+                      <span class="sw-label">开机时启动 CC Trace</span>
+                      <span class="toggle"></span>
+                    </div>
                   </div>
-                  <button class="flat-btn">更新</button>
                 </div>
-              </div>
-            </div>
 
-            <div class="sw-group">
-              <h2>关于</h2>
-              <div class="card sw-card">
-                <p class="sw-about">
-                  <b>CC Trace · 版本 0.1.4</b>
-                  CC Trace 只读取本机已有的 Codex 与 Claude Code 凭据,不上传任何数据,也不读取或迁移 cc-bar 的应用数据。
-                </p>
+                <div class="sw-group">
+                  <h2>外观与语言</h2>
+                  <div class="card sw-card">
+                    <div class="sw-row">
+                      <span class="sw-label">语言</span>
+                      <div class="segmented">
+                        <button class="on">跟随系统</button>
+                        <button>中文</button>
+                        <button>English</button>
+                      </div>
+                    </div>
+                    <div class="sw-row">
+                      <span class="sw-label">外观</span>
+                      <div class="segmented">
+                        <button class="on">跟随系统</button>
+                        <button>浅色</button>
+                        <button>深色</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="sw-group">
+                  <h2>用量与计价</h2>
+                  <div class="card sw-card">
+                    <div class="sw-row">
+                      <div>
+                        <span class="sw-label">价格目录</span>
+                        <p class="sw-desc">立即检查 LiteLLM 与 models.dev;更新失败时继续使用原有价格。</p>
+                      </div>
+                      <button class="flat-btn">更新</button>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="sw-group">
+                  <h2>关于</h2>
+                  <div class="card sw-card">
+                    <p class="sw-about">
+                      <b>CC Trace · 版本 0.1.4</b>
+                      CC Trace 只读取本机已有的 Codex 与 Claude Code 凭据,不上传任何数据,也不读取或迁移 cc-bar 的应用数据。
+                    </p>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -1445,10 +1710,11 @@ body {
       <aside class="notes">
         <h3>改动注记</h3>
         <ul>
-          <li><strong>分组卡片化</strong>:通用 / 外观与语言 / 用量与计价 / 关于,四组各一张卡,组标题沿用用量页的小标题语言。</li>
-          <li><strong>行式控件</strong>:label 左、控件右,行间 65% 透明分隔线;segmented 与用量页筛选同款。</li>
-          <li><strong>开关用 success 绿</strong>:与「健康余量」同色系,交互蓝仍只留给焦点与主动作。</li>
+          <li><strong>设置钉底</strong>:侧边栏底部固定项,与数据源无关;进入设置时<b>隐藏数据源组</b>,避免「改了没反应」的错觉。</li>
+          <li><strong>「返回用量」按钮移除</strong>:侧边栏承担返回语义;内容区右上角不再需要按钮。</li>
+          <li><strong>表单窄列居中</strong>:设置保持 640px 单列阅读宽度并在内容区水平居中,两侧均匀留白,行宽不长难读。宽度与[设计方向与状态规范](../../docs/设计方向与状态规范.md)第 162 行同步(520px → 640px)。</li>
           <li><strong>设置项零增减</strong>:内容与现有 i18n 完全一致,不带入后续能力。</li>
+          <li>⌘, / Ctrl+, 打开设置不变;⌘1 切用量、⌘2 切对话等视图快捷键参考 cc-bar,待切片时定。</li>
         </ul>
       </aside>
     </div>
