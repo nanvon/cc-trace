@@ -463,7 +463,7 @@ dependencies = [
 
 [[package]]
 name = "cc-trace"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "chrono",
  "reqwest 0.12.28",

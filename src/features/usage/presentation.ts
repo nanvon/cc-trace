@@ -70,7 +70,12 @@ export interface UsageTokenDisplay {
   full: string;
 }
 
-function compactNumber(locale: string, value: number, unit: string, scale: number): UsageTokenDisplay {
+function compactNumber(
+  locale: string,
+  value: number,
+  unit: string,
+  scale: number,
+): UsageTokenDisplay {
   const scaled = Math.max(0, value) / scale;
   return {
     value: new Intl.NumberFormat(locale, {
