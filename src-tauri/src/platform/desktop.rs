@@ -149,11 +149,40 @@ pub fn show_window(app: &AppHandle, label: &str) -> Result<(), WindowError> {
 pub fn show_main(app: &AppHandle, target: MainNavigationTarget) -> Result<(), WindowError> {
     let window = app.get_webview_window(MAIN_WINDOW).ok_or(WindowError)?;
 
+    set_main_window_activation(app, true);
     window
         .emit(EVENT_MAIN_NAVIGATION, target.as_str())
         .map_err(|_| WindowError)?;
     present_window(&window)
 }
+
+/// 主窗口隐藏后退出常驻 Dock 状态。
+///
+/// 与主窗口的 `CloseRequested` 处理配对使用；主窗口本身预创建、关闭即隐藏而非销毁，
+/// 因此这里的「隐藏」就是 Swift 版 `onDisappear` 的等价时机。
+pub fn leave_main(app: &AppHandle) {
+    set_main_window_activation(app, false);
+}
+
+/// 与 Swift 版 cc-bar 完全一致的 Dock 图标策略（`../cc-bar/Main/MainWindowRootView.swift`
+/// 与 `AppDelegate.swift`）：平时是纯托盘的 accessory 应用，不出现在 Dock；只有主窗口
+/// 打开的这段时间才临时变成 regular，让主窗口能出现在 Dock、被 Cmd+Tab 切到。
+///
+/// 这也避免了常驻 regular 时，点击状态栏图标触发的系统级应用激活会把已经打开、
+/// 但停留在背景里的主窗口一并顶到最前——因为这段时间里应用本来就不是 regular，
+/// 系统不会把它和其余可见窗口一起提到最前。
+#[cfg(target_os = "macos")]
+fn set_main_window_activation(app: &AppHandle, visible: bool) {
+    let policy = if visible {
+        tauri::ActivationPolicy::Regular
+    } else {
+        tauri::ActivationPolicy::Accessory
+    };
+    let _ = app.set_activation_policy(policy);
+}
+
+#[cfg(not(target_os = "macos"))]
+fn set_main_window_activation(_app: &AppHandle, _visible: bool) {}
 
 fn present_window(window: &WebviewWindow) -> Result<(), WindowError> {
     window.unminimize().map_err(|_| WindowError)?;

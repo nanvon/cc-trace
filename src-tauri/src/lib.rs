@@ -44,10 +44,11 @@ pub fn run() {
             None,
         ))
         .setup(|app| {
-            // 保留 Menu Bar / Tray 入口，同时作为正常 macOS 应用显示在 Dock。
-            // 快捷键仍由前端统一处理 metaKey / ctrlKey。
+            // 与 Swift 版 cc-bar 一致：平时是纯托盘的 accessory 应用，不出现在 Dock；
+            // 只有主窗口打开期间才临时变成 regular，见 `platform::desktop::show_main` /
+            // `leave_main`。快捷键仍由前端统一处理 metaKey / ctrlKey。
             #[cfg(target_os = "macos")]
-            app.set_activation_policy(tauri::ActivationPolicy::Regular);
+            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
             let config_dir = app.path().app_config_dir()?;
             let (core, _load_issue) = AppCore::new(config_dir);
@@ -94,6 +95,9 @@ pub fn run() {
             {
                 api.prevent_close();
                 let _ = window.hide();
+                if window.label() == MAIN_WINDOW {
+                    desktop::leave_main(window.app_handle());
+                }
             }
             _ => {}
         });
