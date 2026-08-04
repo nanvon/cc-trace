@@ -241,6 +241,15 @@ fn present_compact(
 
     position_compact(app, window, anchor, height)?;
     window.show().map_err(|_| WindowError)?;
+    // macOS 上 `show()` 已经等价于 `makeKeyAndOrderFront`：面板置前，但不激活应用。
+    // 这里不能再用 `set_focus()`——tao 的 macOS 实现会在其后追加
+    // `activateIgnoringOtherApps: YES` 把整个应用激活；主窗口打开期间激活策略是
+    // `.regular`，AppKit 激活行为会把应用的所有可见窗口一并 order front，后台的
+    // 主窗口因此被顶到最前。与 Swift 版 cc-bar 的 NSPopover 一致：弹面板不抢焦点。
+    #[cfg(target_os = "macos")]
+    return Ok(());
+
+    #[cfg(not(target_os = "macos"))]
     window.set_focus().map_err(|_| WindowError)
 }
 

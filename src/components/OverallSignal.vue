@@ -93,17 +93,19 @@ const lastSuccess = computed(() => {
       >
         {{ title }}
       </component>
-      <p class="signal__meta numeric supporting">{{ lastSuccess }}</p>
+      <p class="signal__meta numeric supporting">
+        <span
+          class="signal__dot"
+          :class="`signal__dot--${dot}`"
+          role="img"
+          :aria-label="dotText"
+          :title="dotText"
+        />
+        {{ lastSuccess }}
+      </p>
     </div>
 
     <div class="signal__actions">
-      <span
-        class="signal__dot"
-        :class="`signal__dot--${dot}`"
-        role="img"
-        :aria-label="dotText"
-        :title="dotText"
-      />
       <slot name="actions" />
     </div>
   </div>
@@ -114,6 +116,10 @@ const lastSuccess = computed(() => {
   display: flex;
   align-items: center;
   gap: var(--space-4);
+}
+
+.signal--compact {
+  gap: 0.75rem;
 }
 
 .signal--full {
@@ -140,7 +146,9 @@ const lastSuccess = computed(() => {
 }
 
 .signal--compact .signal__title {
-  font-size: 0.8125rem;
+  font-size: 0.9375rem;
+  font-weight: 680;
+  letter-spacing: -0.01em;
   white-space: nowrap;
 }
 
@@ -155,12 +163,21 @@ const lastSuccess = computed(() => {
  * 单行且省略：头部右侧的图标按钮组不收缩，副标题一换行就会把面板顶高
  * ——而这一行只是新鲜度，不值得为它多占一行。
  */
+/* 副标题行：状态点与新鲜度是一句话（原型评审稿「● 刚刚已刷新」） */
 .signal__meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   margin: 1px 0 0;
+  min-inline-size: 0;
   overflow: hidden;
   font-size: 0.6875rem;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.signal__meta > span {
+  flex: 0 0 auto;
 }
 
 .signal--full .signal__meta {
@@ -176,22 +193,24 @@ const lastSuccess = computed(() => {
   margin-inline-start: auto;
 }
 
+.signal--compact .signal__actions {
+  gap: 2px;
+}
+
 .signal--full .signal__actions {
   gap: var(--space-2);
 }
 
 .signal__dot {
   flex: 0 0 auto;
-  inline-size: 7px;
-  block-size: 7px;
-  margin-inline-end: var(--space-1);
+  inline-size: 6px;
+  block-size: 6px;
   background: var(--text-secondary);
   border-radius: 50%;
 }
 
 .signal__dot--live {
   background: var(--status-success);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--status-success) 22%, transparent);
 }
 
 .signal__dot--warning {
@@ -200,23 +219,5 @@ const lastSuccess = computed(() => {
 
 .signal__dot--critical {
   background: var(--status-error);
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  /* 只有「一切正常」才呼吸：它是唯一不需要用户读文字的状态 */
-  .signal__dot--live {
-    animation: signal-pulse 2.4s var(--ease-out) infinite;
-  }
-}
-
-@keyframes signal-pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-
-  50% {
-    opacity: 0.55;
-  }
 }
 </style>

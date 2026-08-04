@@ -78,7 +78,8 @@ export default {
   },
 
   compact: {
-    title: "用量",
+    /** 品牌表面名；不翻译。 */
+    title: "CC Trace",
     signal: {
       live: "数据是最新的",
       stale: "部分数据已过期",
@@ -88,7 +89,6 @@ export default {
     usage: {
       today: "今日",
       thisWeek: "本周",
-      costLabel: "花费",
       amountExact: "{period} API 等值费用为 {amount}，不代表订阅实付金额。",
       amountPending: "{period}费用尚未完成本地索引。",
       amountUnpriced: "{period}用量暂无可匹配的公开价格。",

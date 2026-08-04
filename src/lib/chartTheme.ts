@@ -25,7 +25,7 @@ export function usageChartColors(): UsageChartColors {
       "--font-ui",
       '-apple-system, BlinkMacSystemFont, "Segoe UI Variable", "Segoe UI", sans-serif',
     ),
-    text: cssVariable("--text-primary", "#11181c"),
+    text: cssVariable("--text-primary", "#18181c"),
     muted: cssVariable("--text-secondary", "#71717a"),
     border: cssVariable("--border-subtle", "#e4e4e7"),
     surface: cssVariable("--surface-raised", "#ffffff"),

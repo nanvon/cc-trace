@@ -71,59 +71,50 @@ const periods = computed<PeriodPresentation[]>(() => [
     role="group"
     :aria-label="t('a11y.apiEquivalentCosts', { provider: providerName })"
   >
-    <div class="usage-cost__readout">
-      <dl class="usage-cost__periods">
-        <div v-for="period in periods" :key="period.key" class="usage-cost__period">
-          <dt>{{ period.label }}</dt>
-          <dd
-            class="usage-cost__amount numeric"
-            :title="period.description"
-            :aria-label="period.description"
-          >
-            {{ period.visible }}
-          </dd>
-        </div>
-      </dl>
+    <dl class="usage-cost__periods">
+      <div v-for="period in periods" :key="period.key" class="usage-cost__period">
+        <dt>{{ period.label }}</dt>
+        <dd
+          class="usage-cost__amount numeric"
+          :title="period.description"
+          :aria-label="period.description"
+        >
+          {{ period.visible }}
+        </dd>
+      </div>
+    </dl>
 
-      <span v-if="scanning" class="usage-cost__loading" aria-hidden="true">
-        <svg viewBox="0 0 12 12" width="10" height="10" fill="none">
-          <circle
-            cx="6"
-            cy="6"
-            r="4.25"
-            stroke="currentColor"
-            stroke-width="1.5"
-            stroke-linecap="round"
-            stroke-dasharray="18 9"
-          />
-        </svg>
-      </span>
-    </div>
-
-    <p class="usage-cost__caption">{{ t("compact.usage.costLabel") }}</p>
+    <span v-if="scanning" class="usage-cost__loading" aria-hidden="true">
+      <svg viewBox="0 0 12 12" width="10" height="10" fill="none">
+        <circle
+          cx="6"
+          cy="6"
+          r="4.25"
+          stroke="currentColor"
+          stroke-width="1.5"
+          stroke-linecap="round"
+          stroke-dasharray="18 9"
+        />
+      </svg>
+    </span>
   </div>
 </template>
 
 <style scoped>
+/* 原型评审稿 lane-costs：label–value 成对内联，两端对齐 */
 .usage-cost {
-  display: grid;
-  justify-items: end;
-  gap: 1px;
-  flex: 0 1 auto;
-  min-inline-size: 0;
-  overflow: hidden;
-}
-
-.usage-cost__readout {
   display: flex;
-  align-items: center;
-  gap: 0.25rem;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.625rem;
   min-inline-size: 0;
+  color: var(--text-secondary);
+  font-size: 0.6875rem;
 }
 
 .usage-cost__periods {
   display: flex;
-  align-items: first baseline;
+  align-items: baseline;
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 1px 0.625rem;
@@ -132,18 +123,14 @@ const periods = computed<PeriodPresentation[]>(() => [
 }
 
 .usage-cost__period {
-  display: flex;
+  display: inline-flex;
   align-items: baseline;
-  gap: 0.25rem;
+  gap: 5px;
   min-inline-size: 0;
   overflow: hidden;
 }
 
 .usage-cost__period dt {
-  color: var(--text-secondary);
-  font-size: 0.625rem;
-  line-height: 1;
-  opacity: 0.7;
   white-space: nowrap;
 }
 
@@ -151,12 +138,12 @@ const periods = computed<PeriodPresentation[]>(() => [
   min-inline-size: 0;
   margin: 0;
   overflow: hidden;
-  color: var(--text-primary);
-  font-size: 0.6875rem;
-  font-weight: 500;
-  line-height: 1;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: var(--text-primary);
+  font-size: 0.78125rem;
+  font-weight: 620;
+  line-height: 1;
 }
 
 .usage-cost__loading {
@@ -173,15 +160,6 @@ const periods = computed<PeriodPresentation[]>(() => [
   display: block;
   transform-box: fill-box;
   transform-origin: center;
-}
-
-.usage-cost__caption {
-  margin: 0;
-  color: var(--text-secondary);
-  font-size: 0.59375rem;
-  line-height: 1;
-  opacity: 0.7;
-  white-space: nowrap;
 }
 
 @media (prefers-reduced-motion: no-preference) {

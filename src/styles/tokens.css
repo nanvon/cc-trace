@@ -17,13 +17,13 @@
     "Microsoft YaHei", sans-serif;
   --font-data: "SFMono-Regular", "Cascadia Mono", ui-monospace, monospace;
 
-  /* 页面背景和卡片表面刻意非常接近：层级靠阴影表达，不是靠色差 */
-  --surface-primary: #fafafa;
+  /* 页面背景比白卡深一档（原型评审稿 🚩：#FAFAFA → #F4F4F5），层级靠阴影与色差共同表达 */
+  --surface-primary: #f4f4f5;
   --surface-raised: #ffffff;
-  --text-primary: #11181c;
+  --text-primary: #18181c;
   --text-secondary: #71717a;
   --border-subtle: #e4e4e7;
-  --track-background: #f4f4f5;
+  --track-background: #ededf0;
 
   /* HeroUI primary，只表达交互，不兼任成功、Provider 品牌或装饰色 */
   --action-primary: #006fee;
@@ -37,15 +37,14 @@
   /* Provider 品牌识别是分类维度；Codex 与 cc-bar 对齐为石墨灰，不表达可用性、风险或交互状态。 */
   --cat-codex: #6c6c70;
   --cat-claude: #d97757;
-  --cat-codex-dim: rgb(108 108 112 / 14%);
-  --cat-claude-dim: rgb(217 119 87 / 12%);
+  --cat-codex-dim: rgb(108 108 112 / 12%);
+  --cat-claude-dim: rgb(217 119 87 / 11%);
 
-  /* 紧凑面板是悬浮层，阴影比主窗口里的卡片更明显 */
-  --shadow-panel: 0 14px 32px -12px rgb(17 17 17 / 20%), 0 3px 8px rgb(17 17 17 / 8%);
-  --ring-panel: rgb(17 17 17 / 8%);
-  /* Provider lane 静止时也带阴影，不需要交互才出现 */
-  --shadow-lane: 0 1px 2px rgb(17 17 17 / 5%), 0 1px 1px rgb(17 17 17 / 4%);
-
+  /* 紧凑面板是悬浮层，阴影比主窗口里的卡片更明显（原型评审稿 🚩 加档） */
+  --shadow-panel: 0 24px 56px -18px rgb(16 16 20 / 26%), 0 4px 12px rgb(16 16 20 / 7%);
+  --ring-panel: rgb(16 16 20 / 8%);
+  /* Provider lane 静止时也带阴影，不需要交互才出现（🚩 加档：静止时肉眼可见） */
+  --shadow-lane: 0 1px 2px rgb(16 16 20 / 5%), 0 6px 20px -8px rgb(16 16 20 / 10%);
   /* 4 / 8 / 12 / 16 / 20 / 24 / 32 */
   --space-1: 0.25rem;
   --space-2: 0.5rem;
@@ -78,12 +77,13 @@
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-appearance="light"]) {
-    --surface-primary: #000000;
-    --surface-raised: #18181b;
+    /* 暗色弃用纯黑（原型评审稿 🚩）：#0E0E11 底 + #1C1C1F 卡，层级不再只剩发丝线 */
+    --surface-primary: #0e0e11;
+    --surface-raised: #1c1c1f;
     --text-primary: #ecedee;
     --text-secondary: #a1a1aa;
-    --border-subtle: #27272a;
-    --track-background: #27272a;
+    --border-subtle: #2e2e33;
+    --track-background: #2a2a2e;
 
     --action-primary: #338ef7;
     --status-success: #45d483;
@@ -96,19 +96,19 @@
     --cat-codex-dim: rgb(152 152 157 / 14%);
     --cat-claude-dim: rgb(240 160 128 / 14%);
 
-    --shadow-panel: 0 18px 40px -14px rgb(0 0 0 / 60%), 0 4px 10px rgb(0 0 0 / 35%);
-    --ring-panel: rgb(255 255 255 / 8%);
-    --shadow-lane: 0 1px 2px rgb(0 0 0 / 35%);
+    --shadow-panel: 0 24px 56px -18px rgb(0 0 0 / 65%), 0 4px 12px rgb(0 0 0 / 40%);
+    --ring-panel: rgb(255 255 255 / 9%);
+    --shadow-lane: 0 1px 2px rgb(0 0 0 / 40%), 0 6px 20px -8px rgb(0 0 0 / 35%);
   }
 }
 
 :root[data-appearance="dark"] {
-  --surface-primary: #000000;
-  --surface-raised: #18181b;
+  --surface-primary: #0e0e11;
+  --surface-raised: #1c1c1f;
   --text-primary: #ecedee;
   --text-secondary: #a1a1aa;
-  --border-subtle: #27272a;
-  --track-background: #27272a;
+  --border-subtle: #2e2e33;
+  --track-background: #2a2a2e;
 
   --action-primary: #338ef7;
   --status-success: #45d483;
@@ -121,7 +121,7 @@
   --cat-codex-dim: rgb(152 152 157 / 14%);
   --cat-claude-dim: rgb(240 160 128 / 14%);
 
-  --shadow-panel: 0 18px 40px -14px rgb(0 0 0 / 60%), 0 4px 10px rgb(0 0 0 / 35%);
-  --ring-panel: rgb(255 255 255 / 8%);
-  --shadow-lane: 0 1px 2px rgb(0 0 0 / 35%);
+  --shadow-panel: 0 24px 56px -18px rgb(0 0 0 / 65%), 0 4px 12px rgb(0 0 0 / 40%);
+  --ring-panel: rgb(255 255 255 / 9%);
+  --shadow-lane: 0 1px 2px rgb(0 0 0 / 40%), 0 6px 20px -8px rgb(0 0 0 / 35%);
 }

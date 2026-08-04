@@ -54,7 +54,6 @@ describe("UsageCostReadout", () => {
     );
 
     expect(wrapper.findAll("dd").map((amount) => amount.text())).toEqual(["—", "—"]);
-    expect(wrapper.find(".usage-cost__caption").text()).toBe("花费");
   });
 
   it("renders compact today and week costs with accessible full amounts", () => {
@@ -66,7 +65,6 @@ describe("UsageCostReadout", () => {
     expect(amounts.map((amount) => amount.text())).toEqual(["<$1", "$2"]);
     expect(amounts[0].attributes("aria-label")).toContain("$0.42");
     expect(wrapper.attributes("aria-label")).toContain("Codex");
-    expect(wrapper.find(".usage-cost__caption").text()).toBe("花费");
     expect(wrapper.find(".usage-cost__loading").exists()).toBe(false);
   });
 

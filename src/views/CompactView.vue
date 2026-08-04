@@ -237,21 +237,20 @@ onBeforeUnmount(() => {
             @click="openSettingsWindow"
           >
             <svg
-              viewBox="0 0 24 24"
+              viewBox="0 0 16 16"
               width="16"
               height="16"
               fill="none"
               stroke="currentColor"
-              stroke-width="2"
+              stroke-width="1.5"
               stroke-linecap="round"
               stroke-linejoin="round"
               aria-hidden="true"
               focusable="false"
             >
-              <path
-                d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.09a2 2 0 0 1 1 1.74v.5a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"
-              />
-              <circle cx="12" cy="12" r="3" />
+              <path d="M2 4.5h5M11 4.5h3M2 11.5h3M9 11.5h5" />
+              <circle cx="9" cy="4.5" r="1.75" />
+              <circle cx="7" cy="11.5" r="1.75" />
             </svg>
           </button>
 
@@ -311,20 +310,20 @@ onBeforeUnmount(() => {
 
 /* 分隔线属于头部：lane 区滚动时它留在原地 */
 .panel__header {
-  padding: var(--space-3) 0.8125rem;
+  padding: 0.75rem 0.75rem 0.75rem 1rem;
   border-block-end: 1px solid var(--border-subtle);
 }
 
 /* 留白留在外层，排布交给内层：内层高度因此只反映内容，不含窗口的富余空间 */
 .panel__lanes {
-  padding: 0.5625rem;
+  padding: 0.75rem;
   overflow-y: auto;
 }
 
 .panel__lanes-inner {
   display: grid;
   align-content: start;
-  gap: 0.5625rem;
+  gap: 0.625rem;
 }
 
 @media (prefers-reduced-motion: no-preference) {

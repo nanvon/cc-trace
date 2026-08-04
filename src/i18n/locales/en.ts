@@ -77,7 +77,8 @@ export default {
   },
 
   compact: {
-    title: "Usage",
+    /** Brand surface name; not translated. */
+    title: "CC Trace",
     signal: {
       live: "Data is current",
       stale: "Some data is stale",
@@ -87,7 +88,6 @@ export default {
     usage: {
       today: "today",
       thisWeek: "this week",
-      costLabel: "Cost",
       amountExact:
         "{period} API-equivalent cost is {amount}. This is not the amount paid for a subscription.",
       amountPending: "The {period} cost has not been indexed yet.",
