@@ -8,8 +8,9 @@ use tauri::State;
 
 use crate::app::AppCore;
 use crate::contracts::{
-    PricingCatalogRefreshStatus, UsageConversation, UsageConversationPage, UsageConversationQuery,
-    UsageRepriceResult, UsageScanStatus, UsageSummary, UsageSummaryQuery,
+    PricingCatalogRefreshStatus, QuotaHistory, QuotaHistoryQuery, UsageConversation,
+    UsageConversationPage, UsageConversationQuery, UsageRepriceResult, UsageScanStatus,
+    UsageSummary, UsageSummaryQuery,
 };
 use crate::usage::UsageError;
 
@@ -54,6 +55,14 @@ pub fn usage_get_conversation(
     core.usage()
         .conversation(conversation_key)
         .map_err(map_usage_error)
+}
+
+#[tauri::command]
+pub fn usage_get_quota_history(
+    core: State<'_, Arc<AppCore>>,
+    query: QuotaHistoryQuery,
+) -> Result<QuotaHistory, CommandError> {
+    core.usage().quota_history(query).map_err(map_usage_error)
 }
 
 #[tauri::command]

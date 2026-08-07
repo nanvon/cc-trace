@@ -5,6 +5,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::quota::{ProviderId, QuotaWindowKind};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum UsageSource {
@@ -242,6 +244,38 @@ pub struct UsageConversationPage {
     pub total: i64,
     pub limit: u32,
     pub offset: u64,
+}
+
+/// 额度历史中的单个事件点。`remaining_percent` 是当时该窗口的整数剩余值。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotaHistoryEvent {
+    pub provider: ProviderId,
+    /// 不可逆身份指纹，只用于把事件归到同一账号序列，不承载账号明文。
+    pub identity_key: String,
+    pub window_kind: QuotaWindowKind,
+    pub window_id: Option<String>,
+    pub remaining_percent: i64,
+    /// ISO 8601 UTC。
+    pub observed_at: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotaHistoryQuery {
+    pub provider: Option<ProviderId>,
+    /// 起始观察时间（含）。
+    pub from: Option<String>,
+    /// 结束观察时间（不含）。
+    pub to: Option<String>,
+    /// 最多返回事件数；按最近优先截取，默认 200，上限 500。
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotaHistory {
+    pub events: Vec<QuotaHistoryEvent>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

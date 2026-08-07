@@ -5,6 +5,7 @@ import MainView from "../views/MainView.vue";
 import MainWindowView from "../views/MainWindowView.vue";
 import OnboardingView from "../views/OnboardingView.vue";
 import SettingsView from "../views/SettingsView.vue";
+import TimelineView from "../views/TimelineView.vue";
 
 /**
  * 紧凑面板与首次启动仍各自通过 hash 载入独立表面。
@@ -19,6 +20,7 @@ export const router = createRouter({
       children: [
         { path: "", name: "main", component: MainView },
         { path: "settings", name: "settings", component: SettingsView },
+        { path: "timeline", name: "timeline", component: TimelineView },
       ],
     },
     { path: "/compact", name: "compact", component: CompactView },

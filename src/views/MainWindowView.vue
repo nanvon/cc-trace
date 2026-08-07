@@ -21,7 +21,12 @@ const router = useRouter();
 let unlistenNavigation: UnlistenFn | undefined;
 
 function handleNavigation(target: MainNavigationTarget): void {
-  const focusTarget = target === "settings" ? "settings-title" : "usage-title";
+  const focusTarget =
+    target === "settings"
+      ? "settings-title"
+      : target === "timeline"
+        ? "timeline-title"
+        : "usage-title";
   void navigateMain(router, target, focusTarget);
 }
 

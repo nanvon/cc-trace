@@ -13,10 +13,10 @@ use chrono::Utc;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 
 use crate::contracts::{
-    ProviderId, QuotaSnapshot, QuotaWindowKind, UsageConversation, UsageConversationPage,
-    UsageConversationQuery, UsageCostTotals, UsageFastTotals, UsageGroupBy, UsageRepriceResult,
-    UsageSource, UsageSpeed, UsageSummary, UsageSummaryQuery, UsageSummaryRow, UsageTokenTotals,
-    decimal_nanos_string,
+    ProviderId, QuotaHistoryEvent, QuotaSnapshot, QuotaWindowKind, UsageConversation,
+    UsageConversationPage, UsageConversationQuery, UsageCostTotals, UsageFastTotals, UsageGroupBy,
+    UsageRepriceResult, UsageSource, UsageSpeed, UsageSummary, UsageSummaryQuery, UsageSummaryRow,
+    UsageTokenTotals, decimal_nanos_string,
 };
 use crate::usage::model::{InferenceGeo, RepriceRow, ScanBatch, ScanFileState, TokenFacts};
 use crate::usage::pricing::{PricingCatalog, PricingUsageKey};
@@ -663,6 +663,48 @@ impl UsageDb {
         rows.collect::<Result<HashSet<_>, _>>().map_err(Into::into)
     }
 
+    /// 额度历史查询：返回去重后的事件点，最近优先截取 `limit` 条，再按时间升序返回。
+    /// `identity_key` 用于前端按账号归组；主账号镜像去重由「只显示每个 Provider 当前
+    /// 身份的活动序列」在前端完成，这里不做跨指纹的账号合并。
+    pub fn quota_history(
+        &self,
+        provider: Option<ProviderId>,
+        from: Option<&str>,
+        to: Option<&str>,
+        limit: u32,
+    ) -> Result<Vec<QuotaHistoryEvent>, UsageDbError> {
+        let connection = self.open_read()?;
+        let mut statement = connection.prepare(
+            "SELECT provider, identity_key, window_kind, window_id,
+                    remaining_percent, observed_at
+               FROM (
+                 SELECT id, provider, identity_key, window_kind, window_id,
+                        remaining_percent, observed_at
+                   FROM quota_events
+                  WHERE (?1 IS NULL OR provider = ?1)
+                    AND (?2 IS NULL OR observed_at >= ?2)
+                    AND (?3 IS NULL OR observed_at < ?3)
+                  ORDER BY observed_at DESC, id DESC
+                  LIMIT ?4
+               )
+              ORDER BY observed_at ASC, id ASC",
+        )?;
+        let rows = statement.query_map(
+            params![provider.map(provider_db), from, to, i64::from(limit)],
+            |row| {
+                Ok(QuotaHistoryEvent {
+                    provider: provider_from_db(&row.get::<_, String>(0)?)?,
+                    identity_key: row.get(1)?,
+                    window_kind: window_kind_from_db(&row.get::<_, String>(2)?)?,
+                    window_id: row.get(3)?,
+                    remaining_percent: row.get(4)?,
+                    observed_at: row.get(5)?,
+                })
+            },
+        )?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
     pub fn record_quota_snapshot(
         &self,
         provider: ProviderId,
@@ -1023,6 +1065,32 @@ fn quota_kind(kind: QuotaWindowKind) -> &'static str {
         QuotaWindowKind::Weekly => "weekly",
         QuotaWindowKind::ModelWeekly => "model_weekly",
         QuotaWindowKind::Unknown => "unknown",
+    }
+}
+
+fn provider_from_db(value: &str) -> rusqlite::Result<ProviderId> {
+    match value {
+        "codex" => Ok(ProviderId::Codex),
+        "claude" => Ok(ProviderId::Claude),
+        _ => Err(rusqlite::Error::FromSqlConversionFailure(
+            0,
+            rusqlite::types::Type::Text,
+            format!("unknown provider {value}").into(),
+        )),
+    }
+}
+
+fn window_kind_from_db(value: &str) -> rusqlite::Result<QuotaWindowKind> {
+    match value {
+        "five_hour" => Ok(QuotaWindowKind::FiveHour),
+        "weekly" => Ok(QuotaWindowKind::Weekly),
+        "model_weekly" => Ok(QuotaWindowKind::ModelWeekly),
+        "unknown" => Ok(QuotaWindowKind::Unknown),
+        _ => Err(rusqlite::Error::FromSqlConversionFailure(
+            0,
+            rusqlite::types::Type::Text,
+            format!("unknown window kind {value}").into(),
+        )),
     }
 }
 
@@ -1616,6 +1684,100 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM quota_events", [], |row| row.get(0))
             .expect("count");
         assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn quota_history_returns_chronological_events_with_filtering_and_limit() {
+        let (_dir, database) = database();
+        fn snapshot(captured_at: &str, remaining: f64) -> QuotaSnapshot {
+            QuotaSnapshot {
+                windows: vec![QuotaWindow {
+                    id: "window".to_owned(),
+                    kind: QuotaWindowKind::FiveHour,
+                    display_name: None,
+                    used_percent: 100.0 - remaining,
+                    remaining_percent: remaining,
+                    resets_at: None,
+                    window_seconds: Some(18_000),
+                    is_active: true,
+                    is_primary: true,
+                }],
+                captured_at: captured_at.to_owned(),
+            }
+        }
+
+        database
+            .record_quota_snapshot(
+                ProviderId::Codex,
+                "codex-identity",
+                &snapshot("2026-07-30T00:00:00Z", 80.0),
+            )
+            .expect("codex-1");
+        database
+            .record_quota_snapshot(
+                ProviderId::Codex,
+                "codex-identity",
+                &snapshot("2026-07-30T02:00:00Z", 70.0),
+            )
+            .expect("codex-2");
+        database
+            .record_quota_snapshot(
+                ProviderId::Claude,
+                "claude-identity",
+                &snapshot("2026-07-30T01:00:00Z", 90.0),
+            )
+            .expect("claude-1");
+
+        let all = database.quota_history(None, None, None, 500).expect("all");
+        assert_eq!(all.len(), 3);
+        assert_eq!(
+            all.iter()
+                .map(|event| event.observed_at.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "2026-07-30T00:00:00Z",
+                "2026-07-30T01:00:00Z",
+                "2026-07-30T02:00:00Z"
+            ],
+            "events must come back in chronological order"
+        );
+        assert_eq!(all[0].provider, ProviderId::Codex);
+        assert_eq!(all[0].identity_key, "codex-identity");
+        assert_eq!(all[0].window_kind, QuotaWindowKind::FiveHour);
+        assert_eq!(all[0].remaining_percent, 80);
+
+        let codex = database
+            .quota_history(Some(ProviderId::Codex), None, None, 500)
+            .expect("codex");
+        assert_eq!(codex.len(), 2);
+        assert!(
+            codex
+                .iter()
+                .all(|event| event.provider == ProviderId::Codex)
+        );
+
+        let bounded = database
+            .quota_history(
+                None,
+                Some("2026-07-30T00:30:00Z"),
+                Some("2026-07-30T01:30:00Z"),
+                500,
+            )
+            .expect("bounded");
+        assert_eq!(bounded.len(), 1);
+        assert_eq!(bounded[0].identity_key, "claude-identity");
+
+        let limited = database
+            .quota_history(None, None, None, 2)
+            .expect("limited");
+        assert_eq!(
+            limited
+                .iter()
+                .map(|event| event.observed_at.as_str())
+                .collect::<Vec<_>>(),
+            vec!["2026-07-30T01:00:00Z", "2026-07-30T02:00:00Z"],
+            "limit keeps the two most recent events, still in chronological order"
+        );
     }
 
     #[test]

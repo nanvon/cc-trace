@@ -21,9 +21,10 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::contracts::{
-    PricingCatalogRefreshStatus, ProviderId, QuotaSnapshot, UsageConversation,
-    UsageConversationPage, UsageConversationQuery, UsageFilter, UsageRepriceResult, UsageScanState,
-    UsageScanStatus, UsageSource, UsageSummary, UsageSummaryQuery,
+    PricingCatalogRefreshStatus, ProviderId, QuotaHistory, QuotaHistoryQuery, QuotaSnapshot,
+    UsageConversation, UsageConversationPage, UsageConversationQuery, UsageFilter,
+    UsageRepriceResult, UsageScanState, UsageScanStatus, UsageSource, UsageSummary,
+    UsageSummaryQuery,
 };
 use crate::storage::{UsageDb, UsageDbError};
 
@@ -151,6 +152,24 @@ impl UsageService {
             return Err(UsageError::InvalidQuery);
         }
         self.db.conversation(key).map_err(Into::into)
+    }
+
+    pub fn quota_history(&self, mut query: QuotaHistoryQuery) -> Result<QuotaHistory, UsageError> {
+        query.from = normalize_time(query.from.as_deref())?;
+        query.to = normalize_time(query.to.as_deref())?;
+        if let (Some(from), Some(to)) = (&query.from, &query.to)
+            && from >= to
+        {
+            return Err(UsageError::InvalidQuery);
+        }
+        let limit = query.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
+        let events = self.db.quota_history(
+            query.provider,
+            query.from.as_deref(),
+            query.to.as_deref(),
+            limit,
+        )?;
+        Ok(QuotaHistory { events })
     }
 
     pub fn reprice(&self) -> Result<UsageRepriceResult, UsageError> {

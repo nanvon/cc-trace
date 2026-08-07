@@ -151,6 +151,10 @@ function openSettings(): void {
   void navigateMain(router, "settings", "settings-title", "quota");
 }
 
+function openTimeline(): void {
+  void navigateMain(router, "timeline", "timeline-title");
+}
+
 onMounted(() => {
   void usage.loadDashboard(selectedRange.value);
 });
@@ -166,14 +170,24 @@ onMounted(() => {
           <h1 id="main-usage-title" tabindex="-1">{{ t("main.title") }}</h1>
           <span class="usage-page__scan">{{ scanText }}</span>
         </div>
-        <button
-          id="main-settings-trigger"
-          type="button"
-          class="button button--quiet"
-          @click="openSettings"
-        >
-          {{ t("common.settings") }}
-        </button>
+        <div class="usage-page__top-actions">
+          <button
+            id="main-timeline-trigger"
+            type="button"
+            class="button button--quiet"
+            @click="openTimeline"
+          >
+            {{ t("timeline.title") }}
+          </button>
+          <button
+            id="main-settings-trigger"
+            type="button"
+            class="button button--quiet"
+            @click="openSettings"
+          >
+            {{ t("common.settings") }}
+          </button>
+        </div>
       </header>
 
       <div class="usage-page__filters" role="group" :aria-label="t('main.filter')">
@@ -369,6 +383,12 @@ onMounted(() => {
   padding-inline: 0.75rem;
   border-radius: var(--radius-control);
   font-size: 0.75rem;
+}
+
+.usage-page__top-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
 }
 
 .usage-page__filters {

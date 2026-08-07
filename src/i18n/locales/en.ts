@@ -144,6 +144,20 @@ export default {
     },
   },
 
+  timeline: {
+    title: "Quota history",
+    backToUsage: "Back to usage",
+    current: "Current",
+    todayDelta: "Today change",
+    events: "Events",
+    observedAt: "Time",
+    remaining: "Remaining",
+    noChangeToday: "No change today",
+    loading: "Reading quota history",
+    unavailable: "Quota history is temporarily unavailable",
+    empty: "No quota history yet",
+  },
+
   settings: {
     title: "Settings",
     backToUsage: "Back to usage",
@@ -226,6 +240,9 @@ export default {
     usageChart: "Daily cost by provider",
     usageTable: "Usage details by model",
     sortColumn: "Sort by {column}",
+    timelineRegion: "Quota history",
+    timelineChart: "{provider} quota history",
+    timelineTable: "{provider} quota history table",
   },
 
   preview: {

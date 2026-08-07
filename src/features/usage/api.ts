@@ -2,6 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 
 import type {
   PricingCatalogRefreshStatus,
+  QuotaHistory,
+  QuotaHistoryQuery,
   UsageScanStatus,
   UsageSummary,
   UsageSummaryQuery,
@@ -21,6 +23,10 @@ export function cancelUsageScan(): Promise<UsageScanStatus> {
 
 export function getUsageSummary(query: UsageSummaryQuery): Promise<UsageSummary> {
   return invoke<UsageSummary>("usage_get_summary", { query });
+}
+
+export function getQuotaHistory(query: QuotaHistoryQuery): Promise<QuotaHistory> {
+  return invoke<QuotaHistory>("usage_get_quota_history", { query });
 }
 
 export function refreshPricingCatalog(): Promise<PricingCatalogRefreshStatus> {

@@ -144,6 +144,20 @@ export default {
     },
   },
 
+  timeline: {
+    title: "额度历史",
+    backToUsage: "返回用量",
+    current: "当前",
+    todayDelta: "今日变化",
+    events: "事件数",
+    observedAt: "时间",
+    remaining: "剩余",
+    noChangeToday: "今日无变化",
+    loading: "正在读取额度历史",
+    unavailable: "额度历史暂不可用",
+    empty: "暂无额度历史",
+  },
+
   settings: {
     title: "设置",
     backToUsage: "返回用量",
@@ -219,9 +233,12 @@ export default {
     statusRegion: "额度状态",
     apiEquivalentCosts: "{provider} 今日与本周 API 等值费用",
     usageRegion: "本地用量",
-    usageChart: "按 Provider 的每日花费图",
+    usageChart: "按 Provider 的每日费用",
     usageTable: "按模型的用量明细",
-    sortColumn: "按 {column}排序",
+    sortColumn: "按 {column} 排序",
+    timelineRegion: "额度历史",
+    timelineChart: "{provider} 额度历史曲线",
+    timelineTable: "{provider} 额度历史表格",
   },
 
   preview: {

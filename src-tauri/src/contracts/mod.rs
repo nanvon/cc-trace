@@ -21,8 +21,9 @@ pub use settings::{
 };
 pub(crate) use usage::decimal_nanos_string;
 pub use usage::{
-    PricingCatalogRefreshStatus, UsageConversation, UsageConversationPage, UsageConversationQuery,
-    UsageCostTotals, UsageFastTotals, UsageFilter, UsageGroupBy, UsageRepriceResult,
-    UsageScanState, UsageScanStatus, UsageSource, UsageSpeed, UsageSummary, UsageSummaryQuery,
-    UsageSummaryRow, UsageTokenTotals,
+    PricingCatalogRefreshStatus, QuotaHistory, QuotaHistoryEvent, QuotaHistoryQuery,
+    UsageConversation, UsageConversationPage, UsageConversationQuery, UsageCostTotals,
+    UsageFastTotals, UsageFilter, UsageGroupBy, UsageRepriceResult, UsageScanState,
+    UsageScanStatus, UsageSource, UsageSpeed, UsageSummary, UsageSummaryQuery, UsageSummaryRow,
+    UsageTokenTotals,
 };

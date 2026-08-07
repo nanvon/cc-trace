@@ -5,7 +5,7 @@
  * 属于后续主窗口切片，不在这里提前镜像。
  */
 
-import type { ProviderId } from "../quota/contracts";
+import type { ProviderId, QuotaWindowKind } from "../quota/contracts";
 
 export type UsageSource = ProviderId;
 export type UsageScanState = "idle" | "running" | "cancelling";
@@ -122,4 +122,27 @@ export interface UsageDashboardData {
   source: UsageSummary | null;
   day: Record<UsageSource, UsageSummary | null>;
   model: Record<UsageSource, UsageSummary | null>;
+}
+
+/** 额度历史中的单个事件点。`remainingPercent` 是当时该窗口的整数剩余值。 */
+export interface QuotaHistoryEvent {
+  provider: ProviderId;
+  /** 不可逆身份指纹，只用于把事件归到同一账号序列，不承载账号明文。 */
+  identityKey: string;
+  windowKind: QuotaWindowKind;
+  windowId: string | null;
+  remainingPercent: number;
+  /** ISO 8601 UTC。 */
+  observedAt: string;
+}
+
+export interface QuotaHistoryQuery {
+  provider: ProviderId | null;
+  from: string | null;
+  to: string | null;
+  limit: number | null;
+}
+
+export interface QuotaHistory {
+  events: QuotaHistoryEvent[];
 }
