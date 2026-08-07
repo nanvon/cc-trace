@@ -155,6 +155,10 @@ function openTimeline(): void {
   void navigateMain(router, "timeline", "timeline-title");
 }
 
+function openConversations(): void {
+  void navigateMain(router, "conversations", "conversations-title");
+}
+
 onMounted(() => {
   void usage.loadDashboard(selectedRange.value);
 });
@@ -178,6 +182,14 @@ onMounted(() => {
             @click="openTimeline"
           >
             {{ t("timeline.title") }}
+          </button>
+          <button
+            id="main-conversations-trigger"
+            type="button"
+            class="button button--quiet"
+            @click="openConversations"
+          >
+            {{ t("conversations.title") }}
           </button>
           <button
             id="main-settings-trigger"

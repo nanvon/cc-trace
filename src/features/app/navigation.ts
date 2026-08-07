@@ -11,12 +11,14 @@ import type { RouteLocationRaw, Router } from "vue-router";
 
 export const EVENT_MAIN_NAVIGATION = "navigation://main";
 
-export type MainNavigationTarget = "quota" | "settings" | "timeline";
+export type MainNavigationTarget = "quota" | "settings" | "timeline" | "conversations";
 export type MainFocusTarget =
-  "usage-title" | "settings-title" | "settings-trigger" | "timeline-title";
+  "usage-title" | "settings-title" | "settings-trigger" | "timeline-title" | "conversations-title";
 
 export function isMainNavigationTarget(value: unknown): value is MainNavigationTarget {
-  return value === "quota" || value === "settings" || value === "timeline";
+  return (
+    value === "quota" || value === "settings" || value === "timeline" || value === "conversations"
+  );
 }
 
 export function mainRoute(target: MainNavigationTarget, origin?: "quota"): RouteLocationRaw {
@@ -28,6 +30,9 @@ export function mainRoute(target: MainNavigationTarget, origin?: "quota"): Route
   }
   if (target === "timeline") {
     return { name: "timeline" };
+  }
+  if (target === "conversations") {
+    return { name: "conversations" };
   }
   return { name: "main" };
 }

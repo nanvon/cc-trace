@@ -26,7 +26,9 @@ function handleNavigation(target: MainNavigationTarget): void {
       ? "settings-title"
       : target === "timeline"
         ? "timeline-title"
-        : "usage-title";
+        : target === "conversations"
+          ? "conversations-title"
+          : "usage-title";
   void navigateMain(router, target, focusTarget);
 }
 

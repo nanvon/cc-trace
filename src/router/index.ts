@@ -1,6 +1,8 @@
 import { createRouter, createWebHashHistory } from "vue-router";
 
 import CompactView from "../views/CompactView.vue";
+import ConversationDetailView from "../views/ConversationDetailView.vue";
+import ConversationsView from "../views/ConversationsView.vue";
 import MainView from "../views/MainView.vue";
 import MainWindowView from "../views/MainWindowView.vue";
 import OnboardingView from "../views/OnboardingView.vue";
@@ -21,6 +23,12 @@ export const router = createRouter({
         { path: "", name: "main", component: MainView },
         { path: "settings", name: "settings", component: SettingsView },
         { path: "timeline", name: "timeline", component: TimelineView },
+        { path: "conversations", name: "conversations", component: ConversationsView },
+        {
+          path: "conversations/:key",
+          name: "conversation-detail",
+          component: ConversationDetailView,
+        },
       ],
     },
     { path: "/compact", name: "compact", component: CompactView },

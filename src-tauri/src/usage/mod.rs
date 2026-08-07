@@ -22,8 +22,8 @@ use sha2::{Digest, Sha256};
 
 use crate::contracts::{
     PricingCatalogRefreshStatus, ProviderId, QuotaHistory, QuotaHistoryQuery, QuotaSnapshot,
-    UsageConversation, UsageConversationPage, UsageConversationQuery, UsageFilter,
-    UsageRepriceResult, UsageScanState, UsageScanStatus, UsageSource, UsageSummary,
+    UsageConversation, UsageConversationBreakdown, UsageConversationPage, UsageConversationQuery,
+    UsageFilter, UsageRepriceResult, UsageScanState, UsageScanStatus, UsageSource, UsageSummary,
     UsageSummaryQuery,
 };
 use crate::storage::{UsageDb, UsageDbError};
@@ -129,6 +129,7 @@ impl UsageService {
     ) -> Result<UsageConversationPage, UsageError> {
         normalize_filter(&mut query.filter)?;
         let search = normalize_optional(&query.search)?;
+        let project = normalize_optional(&query.project)?;
         let limit = query.limit.unwrap_or(DEFAULT_LIMIT);
         if !(1..=MAX_LIMIT).contains(&limit) {
             return Err(UsageError::InvalidQuery);
@@ -137,9 +138,8 @@ impl UsageService {
         if i64::try_from(offset).is_err() {
             return Err(UsageError::InvalidQuery);
         }
-        query.search = search.clone();
         self.db
-            .conversations(&query, limit, offset, search.as_deref())
+            .conversations(&query, limit, offset, search.as_deref(), project.as_deref())
             .map_err(Into::into)
     }
 
@@ -152,6 +152,23 @@ impl UsageService {
             return Err(UsageError::InvalidQuery);
         }
         self.db.conversation(key).map_err(Into::into)
+    }
+
+    pub fn conversation_breakdown(
+        &self,
+        conversation_key: String,
+    ) -> Result<Option<UsageConversationBreakdown>, UsageError> {
+        let key = conversation_key.trim();
+        if key.is_empty() || key.len() > 128 {
+            return Err(UsageError::InvalidQuery);
+        }
+        if self.db.conversation(key)?.is_none() {
+            return Ok(None);
+        }
+        self.db
+            .conversation_breakdown(key)
+            .map(Some)
+            .map_err(Into::into)
     }
 
     pub fn quota_history(&self, mut query: QuotaHistoryQuery) -> Result<QuotaHistory, UsageError> {
@@ -1022,6 +1039,7 @@ mod tests {
                 search: None,
                 limit: Some(10),
                 offset: Some(0),
+                ..UsageConversationQuery::default()
             })
             .expect("conversations");
         assert_eq!(page.total, 2);
@@ -1037,6 +1055,7 @@ mod tests {
                 search: None,
                 limit: Some(1),
                 offset: Some(0),
+                ..UsageConversationQuery::default()
             })
             .expect("first page");
         let second = service
@@ -1045,6 +1064,7 @@ mod tests {
                 search: None,
                 limit: Some(1),
                 offset: Some(1),
+                ..UsageConversationQuery::default()
             })
             .expect("second page");
         assert_eq!(first.total, 2);
@@ -1204,6 +1224,7 @@ mod tests {
                 search: None,
                 limit: Some(1),
                 offset: Some(u64::MAX),
+                ..UsageConversationQuery::default()
             }),
             Err(UsageError::InvalidQuery)
         ));

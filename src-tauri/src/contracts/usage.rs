@@ -170,12 +170,26 @@ pub struct UsageSummary {
     pub cost: UsageCostTotals,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum UsageConversationSort {
+    /// 最近活动优先。
+    Recent,
+    /// 总 Token 降序。
+    Tokens,
+    /// API 等值费用降序。
+    Cost,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageConversationQuery {
     #[serde(default)]
     pub filter: UsageFilter,
     pub search: Option<String>,
+    /// 精确匹配脱敏项目提示。
+    pub project: Option<String>,
+    pub sort: Option<UsageConversationSort>,
     pub limit: Option<u32>,
     pub offset: Option<u64>,
 }
@@ -244,6 +258,16 @@ pub struct UsageConversationPage {
     pub total: i64,
     pub limit: u32,
     pub offset: u64,
+}
+
+/// 单个对话详情里的模型／速度拆分行；列布局与 `UsageSummaryRow` 一致。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageConversationBreakdown {
+    /// 按模型聚合。
+    pub models: Vec<UsageSummaryRow>,
+    /// 按速度档位聚合。
+    pub speeds: Vec<UsageSummaryRow>,
 }
 
 /// 额度历史中的单个事件点。`remaining_percent` 是当时该窗口的整数剩余值。

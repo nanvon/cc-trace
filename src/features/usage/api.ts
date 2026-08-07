@@ -4,6 +4,10 @@ import type {
   PricingCatalogRefreshStatus,
   QuotaHistory,
   QuotaHistoryQuery,
+  UsageConversation,
+  UsageConversationBreakdown,
+  UsageConversationPage,
+  UsageConversationQuery,
   UsageScanStatus,
   UsageSummary,
   UsageSummaryQuery,
@@ -27,6 +31,22 @@ export function getUsageSummary(query: UsageSummaryQuery): Promise<UsageSummary>
 
 export function getQuotaHistory(query: QuotaHistoryQuery): Promise<QuotaHistory> {
   return invoke<QuotaHistory>("usage_get_quota_history", { query });
+}
+
+export function listConversations(query: UsageConversationQuery): Promise<UsageConversationPage> {
+  return invoke<UsageConversationPage>("usage_list_conversations", { query });
+}
+
+export function getConversation(conversationKey: string): Promise<UsageConversation | null> {
+  return invoke<UsageConversation | null>("usage_get_conversation", { conversationKey });
+}
+
+export function getConversationBreakdown(
+  conversationKey: string,
+): Promise<UsageConversationBreakdown | null> {
+  return invoke<UsageConversationBreakdown | null>("usage_get_conversation_breakdown", {
+    conversationKey,
+  });
 }
 
 export function refreshPricingCatalog(): Promise<PricingCatalogRefreshStatus> {

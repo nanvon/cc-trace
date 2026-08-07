@@ -14,9 +14,10 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 
 use crate::contracts::{
     ProviderId, QuotaHistoryEvent, QuotaSnapshot, QuotaWindowKind, UsageConversation,
-    UsageConversationPage, UsageConversationQuery, UsageCostTotals, UsageFastTotals, UsageGroupBy,
-    UsageRepriceResult, UsageSource, UsageSpeed, UsageSummary, UsageSummaryQuery, UsageSummaryRow,
-    UsageTokenTotals, decimal_nanos_string,
+    UsageConversationBreakdown, UsageConversationPage, UsageConversationQuery,
+    UsageConversationSort, UsageCostTotals, UsageFastTotals, UsageGroupBy, UsageRepriceResult,
+    UsageSource, UsageSpeed, UsageSummary, UsageSummaryQuery, UsageSummaryRow, UsageTokenTotals,
+    decimal_nanos_string,
 };
 use crate::usage::model::{InferenceGeo, RepriceRow, ScanBatch, ScanFileState, TokenFacts};
 use crate::usage::pricing::{PricingCatalog, PricingUsageKey};
@@ -394,12 +395,30 @@ impl UsageDb {
         limit: u32,
         offset: u64,
         search: Option<&str>,
+        project: Option<&str>,
     ) -> Result<UsageConversationPage, UsageDbError> {
         let connection = self.open_read()?;
         let filter = &query.filter;
         let source = filter.source.map(UsageSource::as_db);
         let speed = filter.speed.map(UsageSpeed::as_db);
         let escaped_search = search.map(escape_like);
+        let order = match query.sort.unwrap_or(UsageConversationSort::Recent) {
+            UsageConversationSort::Recent => {
+                "ORDER BY c.last_at DESC, c.conversation_key ASC".to_owned()
+            }
+            UsageConversationSort::Tokens => "ORDER BY (COALESCE(SUM(e.uncached_input_tokens), 0)
+                     + COALESCE(SUM(e.output_tokens), 0)
+                     + COALESCE(SUM(e.cache_read_input_tokens), 0)
+                     + COALESCE(SUM(e.cache_write_5m_input_tokens), 0)
+                     + COALESCE(SUM(e.cache_write_1h_input_tokens), 0)) DESC,
+                     c.conversation_key ASC"
+                .to_owned(),
+            UsageConversationSort::Cost => {
+                "ORDER BY COALESCE(SUM(e.api_equivalent_cost_nanos), 0) DESC,
+                     c.conversation_key ASC"
+                    .to_owned()
+            }
+        };
 
         let count = connection.query_row(
             "SELECT COUNT(DISTINCT c.conversation_key)
@@ -410,6 +429,7 @@ impl UsageDb {
                 AND (?3 IS NULL OR e.source = ?3)
                 AND (?4 IS NULL OR e.model = ?4)
                 AND (?5 IS NULL OR e.speed = ?5)
+                AND (?7 IS NULL OR c.project_hint = ?7)
                 AND (?6 IS NULL
                      OR COALESCE(c.title, '') LIKE '%' || ?6 || '%' ESCAPE '\'
                      OR COALESCE(c.project_hint, '') LIKE '%' || ?6 || '%' ESCAPE '\')",
@@ -420,11 +440,12 @@ impl UsageDb {
                 filter.model.as_deref(),
                 speed,
                 escaped_search.as_deref(),
+                project,
             ],
             |row| row.get(0),
         )?;
 
-        let mut statement = connection.prepare(
+        let mut statement = connection.prepare(&format!(
             "SELECT c.conversation_key, c.source, c.title, c.project_hint,
                     c.is_sidechain, c.first_at, c.last_at, COUNT(*),
                     COALESCE(SUM(e.uncached_input_tokens), 0),
@@ -457,13 +478,14 @@ impl UsageDb {
                 AND (?3 IS NULL OR e.source = ?3)
                 AND (?4 IS NULL OR e.model = ?4)
                 AND (?5 IS NULL OR e.speed = ?5)
+                AND (?7 IS NULL OR c.project_hint = ?7)
                 AND (?6 IS NULL
                      OR COALESCE(c.title, '') LIKE '%' || ?6 || '%' ESCAPE '\'
                      OR COALESCE(c.project_hint, '') LIKE '%' || ?6 || '%' ESCAPE '\')
               GROUP BY c.conversation_key
-              ORDER BY c.last_at DESC, c.conversation_key ASC
-              LIMIT ?7 OFFSET ?8",
-        )?;
+              {order}
+              LIMIT ?8 OFFSET ?9"
+        ))?;
         let mapped = statement.query_map(
             params![
                 filter.from.as_deref(),
@@ -472,6 +494,7 @@ impl UsageDb {
                 filter.model.as_deref(),
                 speed,
                 escaped_search.as_deref(),
+                project,
                 i64::from(limit),
                 i64::try_from(offset).map_err(|_| UsageDbError::Sql)?,
             ],
@@ -485,6 +508,56 @@ impl UsageDb {
             limit,
             offset,
         })
+    }
+
+    /// 单个对话的模型／速度拆分行，列布局与 `summary_row` 完全一致。
+    pub fn conversation_breakdown(
+        &self,
+        conversation_key: &str,
+    ) -> Result<UsageConversationBreakdown, UsageDbError> {
+        let connection = self.open_read()?;
+        let select = "SELECT COALESCE({group}, ''), COUNT(*),
+                    COALESCE(SUM(uncached_input_tokens), 0),
+                    COALESCE(SUM(output_tokens), 0),
+                    COALESCE(SUM(reasoning_output_tokens), 0),
+                    COALESCE(SUM(cache_read_input_tokens), 0),
+                    COALESCE(SUM(cache_write_5m_input_tokens), 0),
+                    COALESCE(SUM(cache_write_1h_input_tokens), 0),
+                    COALESCE(SUM(CASE WHEN speed = 'fast' THEN
+                        uncached_input_tokens + output_tokens + cache_read_input_tokens
+                        + cache_write_5m_input_tokens + cache_write_1h_input_tokens
+                    ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN speed = 'fast'
+                        THEN billing_equivalent_tokens_nanos ELSE 0 END), 0),
+                    MIN(CASE WHEN speed = 'fast' THEN fast_multiplier_nanos END),
+                    MAX(CASE WHEN speed = 'fast' THEN fast_multiplier_nanos END),
+                    SUM(CASE WHEN speed = 'fast'
+                             AND billing_equivalent_tokens_nanos IS NULL THEN 1 ELSE 0 END),
+                    COALESCE(SUM(api_equivalent_cost_nanos), 0),
+                    SUM(CASE WHEN api_equivalent_cost_nanos IS NOT NULL THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN api_equivalent_cost_nanos IS NULL THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN source = 'claude' AND inference_geo = 'unknown'
+                             AND api_equivalent_cost_nanos IS NOT NULL THEN 1 ELSE 0 END),
+                    CASE WHEN COUNT(DISTINCT pricing_fingerprint) = 1
+                         THEN MAX(pricing_fingerprint) END
+               FROM usage_entries
+              WHERE conversation_key = ?1
+              GROUP BY {group}
+              ORDER BY {group}";
+
+        let models_sql = select.replace("{group}", "COALESCE(model, '')");
+        let mut models_statement = connection.prepare(&models_sql)?;
+        let models = models_statement
+            .query_map([conversation_key], summary_row)?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let speeds_sql = select.replace("{group}", "speed");
+        let mut speeds_statement = connection.prepare(&speeds_sql)?;
+        let speeds = speeds_statement
+            .query_map([conversation_key], summary_row)?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(UsageConversationBreakdown { models, speeds })
     }
 
     pub fn conversation(
@@ -1684,6 +1757,234 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM quota_events", [], |row| row.get(0))
             .expect("count");
         assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn conversation_list_supports_project_filter_and_token_cost_sort() {
+        let (_dir, database) = database();
+        #[allow(clippy::too_many_arguments)]
+        fn entry_batch(
+            key: &str,
+            title: Option<&str>,
+            project: Option<&str>,
+            model: &str,
+            speed: UsageSpeed,
+            occurred_at: &str,
+            tokens: TokenFacts,
+            cost: Option<i64>,
+        ) -> ScanBatch {
+            ScanBatch {
+                entries: vec![UsageEntry {
+                    source: UsageSource::Codex,
+                    dedup_key: format!("{key}-{model}-{occurred_at}"),
+                    conversation_key: key.to_owned(),
+                    model: Some(model.to_owned()),
+                    speed,
+                    inference_geo: InferenceGeo::Global,
+                    occurred_at: occurred_at.to_owned(),
+                    day_local: occurred_at[..10].to_owned(),
+                    tokens,
+                    api_equivalent_cost_nanos: cost,
+                    billing_equivalent_tokens_nanos: None,
+                    fast_multiplier_nanos: None,
+                    pricing_fingerprint: Some("price".to_owned()),
+                }],
+                conversations: vec![ConversationFact {
+                    conversation_key: key.to_owned(),
+                    source: UsageSource::Codex,
+                    title: title.map(str::to_owned),
+                    project_hint: project.map(str::to_owned),
+                    is_sidechain: false,
+                    occurred_at: occurred_at.to_owned(),
+                }],
+                ..ScanBatch::default()
+            }
+        }
+        let small_tokens = TokenFacts {
+            uncached_input_tokens: 100,
+            output_tokens: 50,
+            ..TokenFacts::default()
+        };
+        let big_tokens = TokenFacts {
+            uncached_input_tokens: 1_000,
+            output_tokens: 500,
+            ..TokenFacts::default()
+        };
+
+        database
+            .commit_scan_batch(
+                "file-big",
+                UsageSource::Codex,
+                1,
+                1,
+                1,
+                "p",
+                None,
+                false,
+                &entry_batch(
+                    "big",
+                    Some("Big title"),
+                    Some("proj-a"),
+                    "gpt-5.6-sol",
+                    UsageSpeed::Standard,
+                    "2026-07-30T00:00:00Z",
+                    big_tokens,
+                    Some(900),
+                ),
+            )
+            .expect("big");
+        database
+            .commit_scan_batch(
+                "file-small",
+                UsageSource::Codex,
+                1,
+                1,
+                1,
+                "p",
+                None,
+                false,
+                &entry_batch(
+                    "small",
+                    Some("Small title"),
+                    Some("proj-b"),
+                    "gpt-5.6-sol",
+                    UsageSpeed::Standard,
+                    "2026-07-31T00:00:00Z",
+                    small_tokens,
+                    Some(100),
+                ),
+            )
+            .expect("small");
+
+        let list = |query: &UsageConversationQuery| {
+            database
+                .conversations(query, 50, 0, None, query.project.as_deref())
+                .expect("list")
+        };
+        let by_tokens = list(&UsageConversationQuery {
+            sort: Some(UsageConversationSort::Tokens),
+            ..UsageConversationQuery::default()
+        });
+        assert_eq!(
+            by_tokens.items[0].conversation_key, "big",
+            "bigger conversation sorts first by tokens"
+        );
+        let by_cost = list(&UsageConversationQuery {
+            sort: Some(UsageConversationSort::Cost),
+            ..UsageConversationQuery::default()
+        });
+        assert_eq!(by_cost.items[0].conversation_key, "big");
+        let by_recent = list(&UsageConversationQuery {
+            sort: Some(UsageConversationSort::Recent),
+            ..UsageConversationQuery::default()
+        });
+        assert_eq!(by_recent.items[0].conversation_key, "small");
+
+        let filtered = list(&UsageConversationQuery {
+            project: Some("proj-a".to_owned()),
+            ..UsageConversationQuery::default()
+        });
+        assert_eq!(filtered.total, 1);
+        assert_eq!(filtered.items[0].conversation_key, "big");
+    }
+
+    #[test]
+    fn conversation_breakdown_groups_by_model_and_speed() {
+        let (_dir, database) = database();
+        let standard = TokenFacts {
+            uncached_input_tokens: 10,
+            output_tokens: 5,
+            ..TokenFacts::default()
+        };
+        let fast = TokenFacts {
+            uncached_input_tokens: 20,
+            output_tokens: 10,
+            ..TokenFacts::default()
+        };
+
+        let batch = ScanBatch {
+            entries: vec![
+                UsageEntry {
+                    source: UsageSource::Codex,
+                    dedup_key: "a-1".to_owned(),
+                    conversation_key: "conv".to_owned(),
+                    model: Some("model-a".to_owned()),
+                    speed: UsageSpeed::Standard,
+                    inference_geo: InferenceGeo::Global,
+                    occurred_at: "2026-07-30T00:00:00Z".to_owned(),
+                    day_local: "2026-07-30".to_owned(),
+                    tokens: standard,
+                    api_equivalent_cost_nanos: Some(100),
+                    billing_equivalent_tokens_nanos: None,
+                    fast_multiplier_nanos: None,
+                    pricing_fingerprint: Some("price".to_owned()),
+                },
+                UsageEntry {
+                    source: UsageSource::Codex,
+                    dedup_key: "b-1".to_owned(),
+                    conversation_key: "conv".to_owned(),
+                    model: Some("model-b".to_owned()),
+                    speed: UsageSpeed::Fast,
+                    inference_geo: InferenceGeo::Global,
+                    occurred_at: "2026-07-30T01:00:00Z".to_owned(),
+                    day_local: "2026-07-30".to_owned(),
+                    tokens: fast,
+                    api_equivalent_cost_nanos: Some(300),
+                    billing_equivalent_tokens_nanos: Some(2_000_000_000),
+                    fast_multiplier_nanos: Some(1_500_000_000),
+                    pricing_fingerprint: Some("price".to_owned()),
+                },
+            ],
+            conversations: vec![ConversationFact {
+                conversation_key: "conv".to_owned(),
+                source: UsageSource::Codex,
+                title: None,
+                project_hint: None,
+                is_sidechain: false,
+                occurred_at: "2026-07-30T00:00:00Z".to_owned(),
+            }],
+            ..ScanBatch::default()
+        };
+        database
+            .commit_scan_batch(
+                "file",
+                UsageSource::Codex,
+                1,
+                1,
+                1,
+                "p",
+                None,
+                false,
+                &batch,
+            )
+            .expect("commit");
+
+        let breakdown = database.conversation_breakdown("conv").expect("breakdown");
+        assert_eq!(breakdown.models.len(), 2);
+        let model_b = breakdown
+            .models
+            .iter()
+            .find(|row| row.key == "model-b")
+            .expect("model-b");
+        assert_eq!(model_b.tokens.total_tokens, 30);
+        assert_eq!(model_b.cost.api_equivalent_cost_nanos, 300);
+        assert_eq!(model_b.fast.billing_equivalent_tokens, "2");
+        assert_eq!(model_b.fast.raw_tokens, 30);
+
+        let speeds = &breakdown.speeds;
+        assert_eq!(speeds.len(), 2);
+        let fast_speed = speeds
+            .iter()
+            .find(|row| row.key == "fast")
+            .expect("fast speed");
+        assert_eq!(fast_speed.fast.raw_tokens, 30);
+        assert_eq!(fast_speed.fast.minimum_multiplier.as_deref(), Some("1.5"));
+        assert_eq!(fast_speed.fast.maximum_multiplier.as_deref(), Some("1.5"));
+        let standard_speed = speeds
+            .iter()
+            .find(|row| row.key == "standard")
+            .expect("standard speed");
+        assert_eq!(standard_speed.fast.raw_tokens, 0);
     }
 
     #[test]

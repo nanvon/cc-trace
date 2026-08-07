@@ -146,3 +146,42 @@ export interface QuotaHistoryQuery {
 export interface QuotaHistory {
   events: QuotaHistoryEvent[];
 }
+
+export type UsageConversationSort = "recent" | "tokens" | "cost";
+
+export interface UsageConversationQuery {
+  filter: UsageFilter;
+  search: string | null;
+  /** 精确匹配脱敏项目提示。 */
+  project: string | null;
+  sort: UsageConversationSort | null;
+  limit: number | null;
+  offset: number | null;
+}
+
+export interface UsageConversation {
+  conversationKey: string;
+  source: UsageSource;
+  title: string | null;
+  projectHint: string | null;
+  isSidechain: boolean;
+  firstAt: string;
+  lastAt: string;
+  entryCount: number;
+  tokens: UsageTokenTotals;
+  fast: UsageFastTotals;
+  cost: UsageCostTotals;
+}
+
+export interface UsageConversationPage {
+  items: UsageConversation[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+/** 单个对话详情里的模型／速度拆分行；列布局与 `UsageSummaryRow` 一致。 */
+export interface UsageConversationBreakdown {
+  models: UsageSummaryRow[];
+  speeds: UsageSummaryRow[];
+}
