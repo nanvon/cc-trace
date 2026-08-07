@@ -4,6 +4,7 @@
 //! 查询参数，不接收路径；测试通过显式临时根目录覆盖，避免触碰真实用户数据。
 
 pub(crate) mod model;
+mod opencode;
 mod parser;
 pub mod pricing;
 mod pricing_remote;
@@ -292,6 +293,16 @@ impl UsageService {
                 .expect("usage scan status")
                 .completed_files += 1;
         }
+
+        if let Some(db_path) = roots.opencode_db.as_deref() {
+            let outcome = opencode::scan_opencode(&self.db, db_path)?;
+            {
+                let mut status = self.status.lock().expect("usage scan status");
+                status.inserted_entries = status.inserted_entries.saturating_add(outcome.inserted);
+                status.duplicate_entries =
+                    status.duplicate_entries.saturating_add(outcome.duplicates);
+            }
+        }
         Ok(())
     }
 
@@ -392,6 +403,8 @@ impl UsageService {
                 decode_cursor::<ClaudeCursor>(state.cursor_json.as_deref()).is_some()
             }
             UsageSource::Pi => decode_cursor::<PiCursor>(state.cursor_json.as_deref()).is_some(),
+            // OpenCode 是库级扫描，不产生文件级 cursor。
+            UsageSource::Opencode => true,
         });
 
         let previous_prefix = match &previous {
@@ -513,6 +526,8 @@ impl UsageService {
                     UsageSource::Codex => parse_codex_line(&line, &mut codex_cursor, catalog),
                     UsageSource::Claude => parse_claude_line(&line, &mut claude_cursor, catalog),
                     UsageSource::Pi => parse_pi_line(&line, &mut pi_cursor, &pi_filename_key),
+                    // OpenCode 走库级扫描，不经过文件解析。
+                    UsageSource::Opencode => ParsedLine::Ignored,
                 };
                 match parsed {
                     ParsedLine::Ignored => {}
@@ -584,6 +599,7 @@ impl UsageService {
             UsageSource::Codex => encode_cursor(codex_cursor),
             UsageSource::Claude => encode_cursor(claude_cursor),
             UsageSource::Pi => encode_cursor(pi_cursor),
+            UsageSource::Opencode => encode_cursor(&PiCursor::default()),
         }
         .map_err(|_| UsageError::Unavailable)?;
         let consumed = batch.consumed_bytes;
@@ -619,6 +635,7 @@ struct ScanRoots {
     codex_archived: Option<PathBuf>,
     claude_projects: Option<PathBuf>,
     pi_sessions: Option<PathBuf>,
+    opencode_db: Option<PathBuf>,
 }
 
 impl ScanRoots {
@@ -633,6 +650,9 @@ impl ScanRoots {
                 .map(|path| path.join(".codex/archived_sessions")),
             claude_projects: home.as_ref().map(|path| path.join(".claude/projects")),
             pi_sessions: home.as_ref().map(|path| path.join(".pi/agent/sessions")),
+            opencode_db: home
+                .as_ref()
+                .map(|path| path.join(".local/share/opencode/opencode.db")),
         }
     }
 }
@@ -791,6 +811,10 @@ fn source_file(source: UsageSource, path: PathBuf, source_root: Option<&Path>) -
                 hasher.update(component.as_bytes());
             }
         }
+        UsageSource::Opencode => {
+            hasher.update(b"opencode-sqlite-v1");
+            hasher.update(path.as_os_str().as_encoded_bytes());
+        }
     }
     SourceFile {
         source,
@@ -926,6 +950,7 @@ mod tests {
             codex_archived: Some(base.join("codex/archived")),
             claude_projects: Some(base.join("claude/projects")),
             pi_sessions: Some(base.join("pi/sessions")),
+            opencode_db: Some(base.join("opencode/opencode.db")),
         }
     }
 

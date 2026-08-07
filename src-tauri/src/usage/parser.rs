@@ -646,7 +646,7 @@ fn normalize_speed(value: Option<&str>) -> UsageSpeed {
     }
 }
 
-fn project_hint(value: &str) -> Option<String> {
+pub(crate) fn project_hint(value: &str) -> Option<String> {
     Path::new(value)
         .file_name()
         .and_then(|value| value.to_str())

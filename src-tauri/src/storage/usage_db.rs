@@ -19,11 +19,13 @@ use crate::contracts::{
     UsageSource, UsageSpeed, UsageSummary, UsageSummaryQuery, UsageSummaryRow, UsageTokenTotals,
     decimal_nanos_string,
 };
-use crate::usage::model::{InferenceGeo, RepriceRow, ScanBatch, ScanFileState, TokenFacts};
+use crate::usage::model::{
+    InferenceGeo, OpencodeScanState, RepriceRow, ScanBatch, ScanFileState, TokenFacts,
+};
 use crate::usage::pricing::{PricingCatalog, PricingUsageKey};
 
 const DATABASE_FILE: &str = "usage.db";
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 
 #[derive(Debug)]
 pub enum UsageDbError {
@@ -778,6 +780,42 @@ impl UsageDb {
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
+    /// 读取 OpenCode 增量扫描状态；无记录时返回默认值。
+    pub fn opencode_state(&self) -> Result<OpencodeScanState, UsageDbError> {
+        self.initialize()?;
+        let connection = self.open_read()?;
+        connection
+            .query_row(
+                "SELECT watermark_ms, seen_ids FROM opencode_state WHERE id = 1",
+                [],
+                |row| {
+                    Ok(OpencodeScanState {
+                        watermark_ms: row.get(0)?,
+                        seen_ids: serde_json::from_str(&row.get::<_, String>(1)?)
+                            .unwrap_or_default(),
+                    })
+                },
+            )
+            .optional()
+            .map(|value| value.unwrap_or_default())
+            .map_err(Into::into)
+    }
+
+    pub fn save_opencode_state(&self, state: &OpencodeScanState) -> Result<(), UsageDbError> {
+        let _guard = self.write_lock.lock().expect("usage db write lock");
+        let connection = self.open_write()?;
+        connection.execute(
+            "INSERT INTO opencode_state (id, watermark_ms, seen_ids) VALUES (1, ?1, ?2)
+             ON CONFLICT(id) DO UPDATE SET watermark_ms = excluded.watermark_ms,
+                                            seen_ids = excluded.seen_ids",
+            params![
+                state.watermark_ms,
+                serde_json::to_string(&state.seen_ids).unwrap_or_else(|_| "[]".to_owned())
+            ],
+        )?;
+        Ok(())
+    }
+
     pub fn record_quota_snapshot(
         &self,
         provider: ProviderId,
@@ -914,7 +952,7 @@ impl UsageDb {
 }
 
 fn migrate(connection: &mut Connection, from: i64) -> Result<(), UsageDbError> {
-    if !matches!(from, 0 | 1) {
+    if !matches!(from, 0..=3) {
         return Err(UsageDbError::UnsupportedSchema);
     }
     let transaction = connection.transaction()?;
@@ -922,7 +960,7 @@ fn migrate(connection: &mut Connection, from: i64) -> Result<(), UsageDbError> {
         transaction.execute_batch(
             "CREATE TABLE scan_files (
            file_key TEXT PRIMARY KEY,
-           source TEXT NOT NULL CHECK(source IN ('codex', 'claude', 'pi')),
+           source TEXT NOT NULL CHECK(source IN ('codex', 'claude', 'pi', 'opencode')),
            mtime_ms INTEGER NOT NULL,
            size_bytes INTEGER NOT NULL,
            offset_bytes INTEGER NOT NULL,
@@ -933,7 +971,7 @@ fn migrate(connection: &mut Connection, from: i64) -> Result<(), UsageDbError> {
          CREATE TABLE usage_entries (
            id INTEGER PRIMARY KEY,
            file_key TEXT NOT NULL,
-           source TEXT NOT NULL CHECK(source IN ('codex', 'claude', 'pi')),
+           source TEXT NOT NULL CHECK(source IN ('codex', 'claude', 'pi', 'opencode')),
            dedup_key TEXT NOT NULL,
            conversation_key TEXT NOT NULL,
            model TEXT,
@@ -971,7 +1009,7 @@ fn migrate(connection: &mut Connection, from: i64) -> Result<(), UsageDbError> {
          );
          CREATE TABLE conversations (
            conversation_key TEXT PRIMARY KEY,
-           source TEXT NOT NULL CHECK(source IN ('codex', 'claude', 'pi')),
+           source TEXT NOT NULL CHECK(source IN ('codex', 'claude', 'pi', 'opencode')),
            title TEXT,
            project_hint TEXT,
            is_sidechain INTEGER NOT NULL DEFAULT 0 CHECK(is_sidechain IN (0, 1)),
@@ -991,9 +1029,14 @@ fn migrate(connection: &mut Connection, from: i64) -> Result<(), UsageDbError> {
            remaining_percent INTEGER NOT NULL CHECK(remaining_percent BETWEEN 0 AND 100),
            observed_at TEXT NOT NULL
          );
-         CREATE INDEX ix_quota_series
-           ON quota_events(provider, identity_key, window_kind, window_id, observed_at);
-         PRAGMA user_version = 3;",
+          CREATE INDEX ix_quota_series
+            ON quota_events(provider, identity_key, window_kind, window_id, observed_at);
+          CREATE TABLE opencode_state (
+            id INTEGER PRIMARY KEY CHECK(id = 1),
+            watermark_ms INTEGER NOT NULL DEFAULT 0,
+            seen_ids TEXT NOT NULL DEFAULT '[]'
+          );
+          PRAGMA user_version = 4;",
         )?;
     } else {
         if from == 1 {
@@ -1008,23 +1051,22 @@ fn migrate(connection: &mut Connection, from: i64) -> Result<(), UsageDbError> {
                  );",
             )?;
         }
-        rebuild_source_constraints_for_pi(&transaction)?;
+        rebuild_source_constraints(&transaction)?;
     }
     transaction.commit()?;
     Ok(())
 }
 
-/// v2 → v3：把 `usage_entries`、`conversations`、`scan_files` 的 `source` CHECK 扩展为含 `pi`。
-/// SQLite 无法直接改 CHECK，采用整表重建；重建保持既有行不变。
-fn rebuild_source_constraints_for_pi(
-    transaction: &rusqlite::Transaction,
-) -> Result<(), UsageDbError> {
+/// v2 → v4（一次到位）：把 `usage_entries`、`conversations`、`scan_files` 的 `source` CHECK
+/// 扩展为含 `pi` 与 `opencode`，并新增 `opencode_state`。SQLite 无法直接改 CHECK，
+/// 采用整表重建；重建保持既有行不变。
+fn rebuild_source_constraints(transaction: &rusqlite::Transaction) -> Result<(), UsageDbError> {
     transaction.execute_batch(
         "ALTER TABLE usage_entries RENAME TO usage_entries_v2;
          CREATE TABLE usage_entries (
            id INTEGER PRIMARY KEY,
            file_key TEXT NOT NULL,
-           source TEXT NOT NULL CHECK(source IN ('codex', 'claude', 'pi')),
+           source TEXT NOT NULL CHECK(source IN ('codex', 'claude', 'pi', 'opencode')),
            dedup_key TEXT NOT NULL,
            conversation_key TEXT NOT NULL,
            model TEXT,
@@ -1073,7 +1115,7 @@ fn rebuild_source_constraints_for_pi(
          ALTER TABLE conversations RENAME TO conversations_v2;
          CREATE TABLE conversations (
            conversation_key TEXT PRIMARY KEY,
-           source TEXT NOT NULL CHECK(source IN ('codex', 'claude', 'pi')),
+           source TEXT NOT NULL CHECK(source IN ('codex', 'claude', 'pi', 'opencode')),
            title TEXT,
            project_hint TEXT,
            is_sidechain INTEGER NOT NULL DEFAULT 0 CHECK(is_sidechain IN (0, 1)),
@@ -1093,7 +1135,7 @@ fn rebuild_source_constraints_for_pi(
          ALTER TABLE scan_files RENAME TO scan_files_v2;
          CREATE TABLE scan_files (
            file_key TEXT PRIMARY KEY,
-           source TEXT NOT NULL CHECK(source IN ('codex', 'claude', 'pi')),
+           source TEXT NOT NULL CHECK(source IN ('codex', 'claude', 'pi', 'opencode')),
            mtime_ms INTEGER NOT NULL,
            size_bytes INTEGER NOT NULL,
            offset_bytes INTEGER NOT NULL,
@@ -1108,8 +1150,13 @@ fn rebuild_source_constraints_for_pi(
          SELECT file_key, source, mtime_ms, size_bytes, offset_bytes, prefix_fingerprint,
                 cursor_json, updated_at
            FROM scan_files_v2;
-         DROP TABLE scan_files_v2;
-         PRAGMA user_version = 3;",
+          DROP TABLE scan_files_v2;
+         CREATE TABLE opencode_state (
+           id INTEGER PRIMARY KEY CHECK(id = 1),
+           watermark_ms INTEGER NOT NULL DEFAULT 0,
+           seen_ids TEXT NOT NULL DEFAULT '[]'
+         );
+         PRAGMA user_version = 4;",
     )?;
     Ok(())
 }
@@ -1215,6 +1262,7 @@ fn source_from_db(value: &str) -> rusqlite::Result<UsageSource> {
         "codex" => Ok(UsageSource::Codex),
         "claude" => Ok(UsageSource::Claude),
         "pi" => Ok(UsageSource::Pi),
+        "opencode" => Ok(UsageSource::Opencode),
         _ => Err(rusqlite::Error::InvalidQuery),
     }
 }
@@ -1420,7 +1468,7 @@ mod tests {
     }
 
     #[test]
-    fn schema_v1_migrates_to_v3_with_fast_pricing_columns_and_pi_source() {
+    fn schema_v1_migrates_to_v4_with_fast_pricing_columns_and_pi_opencode_sources() {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join(DATABASE_FILE);
         let connection = Connection::open(&path).expect("open legacy");
@@ -1494,7 +1542,7 @@ mod tests {
             .collect::<Result<HashSet<_>, _>>()
             .expect("collect columns");
 
-        assert_eq!(version, 3);
+        assert_eq!(version, 4);
         assert!(columns.contains("billing_equivalent_tokens_nanos"));
         assert!(columns.contains("fast_multiplier_nanos"));
         connection

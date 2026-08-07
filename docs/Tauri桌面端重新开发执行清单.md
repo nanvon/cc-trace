@@ -328,6 +328,11 @@
       仅 assistant 消息与根级 compaction 计入，会话自带 cost 不走价格表，entry id@时间戳全局
       去重（由 `(source, dedup_key)` 唯一索引承担）；已补脱敏 Fixture 与解析／扫描测试。
       见 [Pi数据源](Pi数据源.md) §8，自动化通过，浏览器与实机验证待门禁。
+- [x] 接入 OpenCode 用量数据源：schema 升至 v4（source CHECK 含 `'opencode'`，新增
+      `opencode_state` 表存 `watermark_ms`＋`seen_ids`）；只读扫描
+      `~/.local/share/opencode/opencode.db`，官方 `cost` 为费用总额真值、不走价格表，
+      reasoning 已含在 output，零费用跳过，模型缺失写 NULL；已补 SQLite fixture 与扫描测试。
+      见 [OpenCode数据源](OpenCode数据源.md) §8，自动化通过，浏览器与实机验证待门禁。
 
 ## 14. 完成首次初始化
 

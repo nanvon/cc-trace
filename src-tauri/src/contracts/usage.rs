@@ -13,10 +13,11 @@ pub enum UsageSource {
     Codex,
     Claude,
     Pi,
+    Opencode,
 }
 
 impl UsageSource {
-    /// 参与在线定价与 fingerprint 的数据源；Pi 自带 cost，不参与价格目录。
+    /// 参与在线定价与 fingerprint 的数据源；Pi 与 OpenCode 自带 cost，不参与价格目录。
     pub const ALL: [Self; 2] = [Self::Codex, Self::Claude];
 
     pub fn as_db(self) -> &'static str {
@@ -24,6 +25,7 @@ impl UsageSource {
             Self::Codex => "codex",
             Self::Claude => "claude",
             Self::Pi => "pi",
+            Self::Opencode => "opencode",
         }
     }
 }

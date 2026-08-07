@@ -144,6 +144,18 @@ pub struct PiCursor {
     pub filename_key: Option<String>,
 }
 
+/// OpenCode SQLite 会话库的增量扫描状态（非 JSONL，不适用 `scan_files` 字节水位）。
+/// 全局去重由 `usage_entries` 的 `(source, dedup_key)` 唯一索引兜底，这里的水位与 seen
+/// 集合负责增量与「时间戳回跳」的场景。
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpencodeScanState {
+    /// 已处理消息的最大 `time_created`（Unix 毫秒）。
+    pub watermark_ms: i64,
+    /// 已见 `message.id`，用于同一水位窗口内重扫去重；按最近 20000 条保留。
+    pub seen_ids: Vec<String>,
+}
+
 pub enum ParsedLine {
     Ignored,
     Invalid,
