@@ -130,6 +130,20 @@ pub struct ClaudeCursor {
     pub conversation_key: Option<String>,
 }
 
+#[derive(Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PiCursor {
+    pub conversation_key: Option<String>,
+    /// 最近一条 assistant 的 provider/model 标签，供根级 compaction 计入时沿用。
+    pub model: Option<String>,
+    /// 会话 cwd 的脱敏项目提示（惰性解析后缓存，避免逐行重复解析）。
+    pub project_hint: Option<String>,
+    /// 首个 user 消息的标题兜底；消费一次后清空，避免后续批次覆盖既有标题。
+    pub pending_title: Option<String>,
+    /// 文件名末尾 UUID 兜底会话键；session entry 出现后覆盖。
+    pub filename_key: Option<String>,
+}
+
 pub enum ParsedLine {
     Ignored,
     Invalid,

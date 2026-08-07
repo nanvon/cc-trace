@@ -523,6 +523,8 @@ impl PricingCatalog {
             UsageSource::Codex => codex_fast_multiplier_nanos(&model),
             UsageSource::Claude => claude_fast_multiplier_nanos(&model)
                 .or_else(|| self.derived_claude_fast_multiplier_nanos(&model)),
+            // Pi 无 Fast 概念，且不进价格目录；此路径只在断言失败时到达。
+            UsageSource::Pi => None,
         };
         let Some(multiplier_nanos) = multiplier_nanos else {
             return (None, None);

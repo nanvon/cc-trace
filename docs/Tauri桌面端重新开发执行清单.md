@@ -323,6 +323,11 @@
       `sort`（Recent／Tokens／Cost），新增 `usage_get_conversation_breakdown`（模型／速度拆分）；
       列表支持搜索、Provider 筛选、排序与分页，详情展示全生命周期、Token 构成、费用、速度档位
       与按模型明细。参考 cc-bar F-17，自动化通过，浏览器与实机验证待门禁。
+- [x] 接入 Pi 用量数据源：schema 升至 v3（`usage_entries`／`conversations`／`scan_files`
+      `source` CHECK 含 `'pi'`，`quota_events` 不变）；增量扫描 `~/.pi/agent/sessions/`，
+      仅 assistant 消息与根级 compaction 计入，会话自带 cost 不走价格表，entry id@时间戳全局
+      去重（由 `(source, dedup_key)` 唯一索引承担）；已补脱敏 Fixture 与解析／扫描测试。
+      见 [Pi数据源](Pi数据源.md) §8，自动化通过，浏览器与实机验证待门禁。
 
 ## 14. 完成首次初始化
 

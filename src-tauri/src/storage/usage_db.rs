@@ -23,7 +23,7 @@ use crate::usage::model::{InferenceGeo, RepriceRow, ScanBatch, ScanFileState, To
 use crate::usage::pricing::{PricingCatalog, PricingUsageKey};
 
 const DATABASE_FILE: &str = "usage.db";
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 
 #[derive(Debug)]
 pub enum UsageDbError {
@@ -922,7 +922,7 @@ fn migrate(connection: &mut Connection, from: i64) -> Result<(), UsageDbError> {
         transaction.execute_batch(
             "CREATE TABLE scan_files (
            file_key TEXT PRIMARY KEY,
-           source TEXT NOT NULL CHECK(source IN ('codex', 'claude')),
+           source TEXT NOT NULL CHECK(source IN ('codex', 'claude', 'pi')),
            mtime_ms INTEGER NOT NULL,
            size_bytes INTEGER NOT NULL,
            offset_bytes INTEGER NOT NULL,
@@ -933,7 +933,7 @@ fn migrate(connection: &mut Connection, from: i64) -> Result<(), UsageDbError> {
          CREATE TABLE usage_entries (
            id INTEGER PRIMARY KEY,
            file_key TEXT NOT NULL,
-           source TEXT NOT NULL CHECK(source IN ('codex', 'claude')),
+           source TEXT NOT NULL CHECK(source IN ('codex', 'claude', 'pi')),
            dedup_key TEXT NOT NULL,
            conversation_key TEXT NOT NULL,
            model TEXT,
@@ -971,7 +971,7 @@ fn migrate(connection: &mut Connection, from: i64) -> Result<(), UsageDbError> {
          );
          CREATE TABLE conversations (
            conversation_key TEXT PRIMARY KEY,
-           source TEXT NOT NULL CHECK(source IN ('codex', 'claude')),
+           source TEXT NOT NULL CHECK(source IN ('codex', 'claude', 'pi')),
            title TEXT,
            project_hint TEXT,
            is_sidechain INTEGER NOT NULL DEFAULT 0 CHECK(is_sidechain IN (0, 1)),
@@ -993,22 +993,124 @@ fn migrate(connection: &mut Connection, from: i64) -> Result<(), UsageDbError> {
          );
          CREATE INDEX ix_quota_series
            ON quota_events(provider, identity_key, window_kind, window_id, observed_at);
-         PRAGMA user_version = 2;",
+         PRAGMA user_version = 3;",
         )?;
     } else {
-        transaction.execute_batch(
-            "ALTER TABLE usage_entries
-               ADD COLUMN billing_equivalent_tokens_nanos INTEGER;
-             ALTER TABLE usage_entries
-               ADD COLUMN fast_multiplier_nanos INTEGER;
-             CREATE TABLE pricing_state (
-               id INTEGER PRIMARY KEY CHECK(id = 1),
-               fingerprint TEXT NOT NULL
-             );
-             PRAGMA user_version = 2;",
-        )?;
+        if from == 1 {
+            transaction.execute_batch(
+                "ALTER TABLE usage_entries
+                   ADD COLUMN billing_equivalent_tokens_nanos INTEGER;
+                 ALTER TABLE usage_entries
+                   ADD COLUMN fast_multiplier_nanos INTEGER;
+                 CREATE TABLE pricing_state (
+                   id INTEGER PRIMARY KEY CHECK(id = 1),
+                   fingerprint TEXT NOT NULL
+                 );",
+            )?;
+        }
+        rebuild_source_constraints_for_pi(&transaction)?;
     }
     transaction.commit()?;
+    Ok(())
+}
+
+/// v2 → v3：把 `usage_entries`、`conversations`、`scan_files` 的 `source` CHECK 扩展为含 `pi`。
+/// SQLite 无法直接改 CHECK，采用整表重建；重建保持既有行不变。
+fn rebuild_source_constraints_for_pi(
+    transaction: &rusqlite::Transaction,
+) -> Result<(), UsageDbError> {
+    transaction.execute_batch(
+        "ALTER TABLE usage_entries RENAME TO usage_entries_v2;
+         CREATE TABLE usage_entries (
+           id INTEGER PRIMARY KEY,
+           file_key TEXT NOT NULL,
+           source TEXT NOT NULL CHECK(source IN ('codex', 'claude', 'pi')),
+           dedup_key TEXT NOT NULL,
+           conversation_key TEXT NOT NULL,
+           model TEXT,
+           speed TEXT NOT NULL CHECK(speed IN ('standard', 'fast', 'unknown')),
+           inference_geo TEXT NOT NULL CHECK(inference_geo IN ('global', 'us', 'unknown')),
+           occurred_at TEXT NOT NULL,
+           day_local TEXT NOT NULL,
+           uncached_input_tokens INTEGER NOT NULL CHECK(uncached_input_tokens >= 0),
+           output_tokens INTEGER NOT NULL CHECK(output_tokens >= 0),
+           reasoning_output_tokens INTEGER NOT NULL CHECK(reasoning_output_tokens >= 0),
+           cache_read_input_tokens INTEGER NOT NULL CHECK(cache_read_input_tokens >= 0),
+           cache_write_5m_input_tokens INTEGER NOT NULL CHECK(cache_write_5m_input_tokens >= 0),
+           cache_write_1h_input_tokens INTEGER NOT NULL CHECK(cache_write_1h_input_tokens >= 0),
+           api_equivalent_cost_nanos INTEGER,
+           billing_equivalent_tokens_nanos INTEGER,
+           fast_multiplier_nanos INTEGER,
+           pricing_fingerprint TEXT,
+           CHECK(reasoning_output_tokens <= output_tokens)
+         );
+         INSERT INTO usage_entries (
+           id, file_key, source, dedup_key, conversation_key, model, speed, inference_geo,
+           occurred_at, day_local, uncached_input_tokens, output_tokens, reasoning_output_tokens,
+           cache_read_input_tokens, cache_write_5m_input_tokens, cache_write_1h_input_tokens,
+           api_equivalent_cost_nanos, billing_equivalent_tokens_nanos, fast_multiplier_nanos,
+           pricing_fingerprint
+         )
+         SELECT id, file_key, source, dedup_key, conversation_key, model, speed, inference_geo,
+                occurred_at, day_local, uncached_input_tokens, output_tokens,
+                reasoning_output_tokens, cache_read_input_tokens, cache_write_5m_input_tokens,
+                cache_write_1h_input_tokens, api_equivalent_cost_nanos,
+                billing_equivalent_tokens_nanos, fast_multiplier_nanos, pricing_fingerprint
+           FROM usage_entries_v2;
+         DROP TABLE usage_entries_v2;
+         CREATE UNIQUE INDEX ux_entries_dedup
+           ON usage_entries(source, dedup_key);
+         CREATE INDEX ix_entries_file
+           ON usage_entries(file_key);
+         CREATE INDEX ix_entries_time
+           ON usage_entries(occurred_at, source);
+         CREATE INDEX ix_entries_day
+           ON usage_entries(day_local, source, model, speed);
+         CREATE INDEX ix_entries_conversation
+           ON usage_entries(conversation_key, occurred_at);
+         CREATE INDEX ix_entries_repricing
+           ON usage_entries(pricing_fingerprint);
+         ALTER TABLE conversations RENAME TO conversations_v2;
+         CREATE TABLE conversations (
+           conversation_key TEXT PRIMARY KEY,
+           source TEXT NOT NULL CHECK(source IN ('codex', 'claude', 'pi')),
+           title TEXT,
+           project_hint TEXT,
+           is_sidechain INTEGER NOT NULL DEFAULT 0 CHECK(is_sidechain IN (0, 1)),
+           first_at TEXT NOT NULL,
+           last_at TEXT NOT NULL
+         );
+         INSERT INTO conversations (
+           conversation_key, source, title, project_hint, is_sidechain, first_at, last_at
+         )
+         SELECT conversation_key, source, title, project_hint, is_sidechain, first_at, last_at
+           FROM conversations_v2;
+         DROP TABLE conversations_v2;
+         CREATE INDEX ix_conversations_recent
+           ON conversations(last_at DESC);
+         CREATE INDEX ix_conversations_source_recent
+           ON conversations(source, last_at DESC);
+         ALTER TABLE scan_files RENAME TO scan_files_v2;
+         CREATE TABLE scan_files (
+           file_key TEXT PRIMARY KEY,
+           source TEXT NOT NULL CHECK(source IN ('codex', 'claude', 'pi')),
+           mtime_ms INTEGER NOT NULL,
+           size_bytes INTEGER NOT NULL,
+           offset_bytes INTEGER NOT NULL,
+           prefix_fingerprint TEXT NOT NULL,
+           cursor_json TEXT,
+           updated_at TEXT NOT NULL
+         );
+         INSERT INTO scan_files (
+           file_key, source, mtime_ms, size_bytes, offset_bytes, prefix_fingerprint,
+           cursor_json, updated_at
+         )
+         SELECT file_key, source, mtime_ms, size_bytes, offset_bytes, prefix_fingerprint,
+                cursor_json, updated_at
+           FROM scan_files_v2;
+         DROP TABLE scan_files_v2;
+         PRAGMA user_version = 3;",
+    )?;
     Ok(())
 }
 
@@ -1112,6 +1214,7 @@ fn source_from_db(value: &str) -> rusqlite::Result<UsageSource> {
     match value {
         "codex" => Ok(UsageSource::Codex),
         "claude" => Ok(UsageSource::Claude),
+        "pi" => Ok(UsageSource::Pi),
         _ => Err(rusqlite::Error::InvalidQuery),
     }
 }
@@ -1317,13 +1420,60 @@ mod tests {
     }
 
     #[test]
-    fn schema_v1_migrates_fast_pricing_columns_transactionally() {
+    fn schema_v1_migrates_to_v3_with_fast_pricing_columns_and_pi_source() {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join(DATABASE_FILE);
         let connection = Connection::open(&path).expect("open legacy");
         connection
             .execute_batch(
-                "CREATE TABLE usage_entries (id INTEGER PRIMARY KEY);
+                "CREATE TABLE usage_entries (
+                   id INTEGER PRIMARY KEY,
+                   file_key TEXT NOT NULL,
+                   source TEXT NOT NULL CHECK(source IN ('codex', 'claude')),
+                   dedup_key TEXT NOT NULL,
+                   conversation_key TEXT NOT NULL,
+                   model TEXT,
+                   speed TEXT NOT NULL CHECK(speed IN ('standard', 'fast', 'unknown')),
+                   inference_geo TEXT NOT NULL CHECK(inference_geo IN ('global', 'us', 'unknown')),
+                   occurred_at TEXT NOT NULL,
+                   day_local TEXT NOT NULL,
+                   uncached_input_tokens INTEGER NOT NULL CHECK(uncached_input_tokens >= 0),
+                   output_tokens INTEGER NOT NULL CHECK(output_tokens >= 0),
+                   reasoning_output_tokens INTEGER NOT NULL CHECK(reasoning_output_tokens >= 0),
+                   cache_read_input_tokens INTEGER NOT NULL CHECK(cache_read_input_tokens >= 0),
+                   cache_write_5m_input_tokens INTEGER NOT NULL CHECK(cache_write_5m_input_tokens >= 0),
+                   cache_write_1h_input_tokens INTEGER NOT NULL CHECK(cache_write_1h_input_tokens >= 0),
+                   api_equivalent_cost_nanos INTEGER,
+                   pricing_fingerprint TEXT
+                 );
+                 CREATE TABLE scan_files (
+                   file_key TEXT PRIMARY KEY,
+                   source TEXT NOT NULL CHECK(source IN ('codex', 'claude')),
+                   mtime_ms INTEGER NOT NULL,
+                   size_bytes INTEGER NOT NULL,
+                   offset_bytes INTEGER NOT NULL,
+                   prefix_fingerprint TEXT NOT NULL,
+                   cursor_json TEXT,
+                   updated_at TEXT NOT NULL
+                 );
+                 CREATE TABLE conversations (
+                   conversation_key TEXT PRIMARY KEY,
+                   source TEXT NOT NULL CHECK(source IN ('codex', 'claude')),
+                   title TEXT,
+                   project_hint TEXT,
+                   is_sidechain INTEGER NOT NULL DEFAULT 0 CHECK(is_sidechain IN (0, 1)),
+                   first_at TEXT NOT NULL,
+                   last_at TEXT NOT NULL
+                 );
+                 CREATE TABLE quota_events (
+                   id INTEGER PRIMARY KEY,
+                   provider TEXT NOT NULL CHECK(provider IN ('codex', 'claude')),
+                   identity_key TEXT NOT NULL,
+                   window_kind TEXT NOT NULL,
+                   window_id TEXT,
+                   remaining_percent INTEGER NOT NULL CHECK(remaining_percent BETWEEN 0 AND 100),
+                   observed_at TEXT NOT NULL
+                 );
                  PRAGMA user_version = 1;",
             )
             .expect("seed v1");
@@ -1344,9 +1494,24 @@ mod tests {
             .collect::<Result<HashSet<_>, _>>()
             .expect("collect columns");
 
-        assert_eq!(version, 2);
+        assert_eq!(version, 3);
         assert!(columns.contains("billing_equivalent_tokens_nanos"));
         assert!(columns.contains("fast_multiplier_nanos"));
+        connection
+            .execute(
+                "INSERT INTO usage_entries (
+                   file_key, source, dedup_key, conversation_key, model, speed, inference_geo,
+                   occurred_at, day_local, uncached_input_tokens, output_tokens,
+                   reasoning_output_tokens, cache_read_input_tokens, cache_write_5m_input_tokens,
+                   cache_write_1h_input_tokens, api_equivalent_cost_nanos,
+                   billing_equivalent_tokens_nanos, fast_multiplier_nanos, pricing_fingerprint
+                 ) VALUES (
+                   'f', 'pi', 'd', 'c', NULL, 'standard', 'global', '2026-07-30T00:00:00Z',
+                   '2026-07-30', 1, 1, 0, 0, 0, 0, 0, NULL, NULL, NULL
+                 )",
+                [],
+            )
+            .expect("pi source accepted after migration");
     }
 
     #[test]

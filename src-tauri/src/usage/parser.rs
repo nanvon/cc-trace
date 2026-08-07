@@ -7,7 +7,8 @@ use sha2::{Digest, Sha256};
 use crate::contracts::{UsageSource, UsageSpeed};
 
 use super::model::{
-    ClaudeCursor, CodexCursor, ConversationFact, InferenceGeo, ParsedLine, TokenFacts, UsageEntry,
+    ClaudeCursor, CodexCursor, ConversationFact, InferenceGeo, ParsedLine, PiCursor, TokenFacts,
+    UsageEntry,
 };
 use super::pricing::PricingCatalog;
 
@@ -245,6 +246,245 @@ pub fn parse_claude_line(
     }
 }
 
+/// 解析 Pi 会话 JSONL 的一行。pi 的 usage 与 cost 都随消息自带，不走价格表。
+///
+/// 规则按 `docs/Pi数据源.md`：仅 assistant 消息与根级带 usage 的 compaction／branch_summary
+/// 计入；`toolResult` 嵌套 usage 不计；会话键 `pi:<session id>`（缺失时用文件名 UUID 兜底）；
+/// 全局去重由 `usage_entries` 的 `(source, dedup_key)` 唯一索引承担，键为 entry id@entry 时间戳。
+pub fn parse_pi_line(line: &[u8], cursor: &mut PiCursor, filename_key: &str) -> ParsedLine {
+    let Ok(value) = serde_json::from_slice::<Value>(line) else {
+        return ParsedLine::Invalid;
+    };
+    let Some(entry_id) = value
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+    else {
+        return ParsedLine::Invalid;
+    };
+    let entry_timestamp = value.get("timestamp").and_then(Value::as_str);
+    let kind = value.get("type").and_then(Value::as_str);
+
+    match kind {
+        Some("session") => {
+            if let Some(id) = value.get("id").and_then(Value::as_str) {
+                cursor.conversation_key = Some(opaque_key("pi-conversation", id));
+            }
+            if let Some(cwd) = value.get("cwd").and_then(Value::as_str) {
+                cursor.project_hint = project_hint(cwd);
+            }
+            ParsedLine::Ignored
+        }
+        Some("message") => {
+            let Some(message) = value.get("message") else {
+                return ParsedLine::Ignored;
+            };
+            match message.get("role").and_then(Value::as_str) {
+                Some("user") => {
+                    if cursor.pending_title.is_none() {
+                        cursor.pending_title = user_message_title(message);
+                    }
+                    ParsedLine::Ignored
+                }
+                Some("assistant") => {
+                    let provider = message
+                        .get("provider")
+                        .and_then(Value::as_str)
+                        .and_then(normalized_optional);
+                    let model = message
+                        .get("model")
+                        .and_then(Value::as_str)
+                        .and_then(normalized_optional);
+                    if model.is_some() {
+                        cursor.model = model.clone();
+                    }
+                    pi_usage_fact(
+                        message,
+                        provider,
+                        model,
+                        cursor,
+                        entry_id,
+                        entry_timestamp,
+                        filename_key,
+                    )
+                }
+                _ => ParsedLine::Ignored,
+            }
+        }
+        Some("compaction") | Some("branch_summary") => {
+            if value.get("usage").is_none() {
+                return ParsedLine::Ignored;
+            }
+            // 生成摘要的 LLM 开销：模型沿用文件内最近一条 assistant 的标签。
+            let model = cursor.model.clone();
+            pi_usage_fact(
+                &value,
+                None,
+                model,
+                cursor,
+                entry_id,
+                entry_timestamp,
+                filename_key,
+            )
+        }
+        _ => ParsedLine::Ignored,
+    }
+}
+
+/// 从 pi 的 usage 对象构造用量事实。`usage_holder` 是携带 `usage` 的 JSON 节点
+/// （message 或根级 compaction）；`usage_holder` 为根级时 `provider` 为 `None`。
+fn pi_usage_fact(
+    usage_holder: &Value,
+    provider: Option<String>,
+    model: Option<String>,
+    cursor: &mut PiCursor,
+    entry_id: &str,
+    entry_timestamp: Option<&str>,
+    filename_key: &str,
+) -> ParsedLine {
+    let Some(usage) = usage_holder.get("usage") else {
+        return ParsedLine::Invalid;
+    };
+    let Some(tokens) = pi_tokens(usage) else {
+        return ParsedLine::Invalid;
+    };
+    let cost_nanos = pi_cost_nanos(usage);
+    if tokens.total_tokens() <= 0 && cost_nanos.is_none() {
+        return ParsedLine::Invalid;
+    }
+    let Some((occurred_at, day_local)) = pi_time(usage_holder, entry_timestamp) else {
+        return ParsedLine::Invalid;
+    };
+    let conversation_key = cursor
+        .conversation_key
+        .clone()
+        .unwrap_or_else(|| filename_conversation_key(filename_key));
+    let model = pi_model_label(provider, model);
+    let dedup_key = hash_parts(&[
+        "pi-entry",
+        entry_id,
+        entry_timestamp.unwrap_or(&occurred_at),
+    ]);
+
+    let fact_entry = UsageEntry {
+        source: UsageSource::Pi,
+        dedup_key,
+        conversation_key: conversation_key.clone(),
+        model,
+        speed: UsageSpeed::Standard,
+        inference_geo: InferenceGeo::Global,
+        occurred_at: occurred_at.clone(),
+        day_local,
+        tokens,
+        api_equivalent_cost_nanos: cost_nanos,
+        billing_equivalent_tokens_nanos: None,
+        fast_multiplier_nanos: None,
+        pricing_fingerprint: None,
+    };
+
+    let project_hint = cursor.project_hint.clone();
+    let title = cursor.pending_title.take();
+    ParsedLine::Fact {
+        entry: Box::new(fact_entry),
+        conversation: Box::new(ConversationFact {
+            conversation_key,
+            source: UsageSource::Pi,
+            title,
+            project_hint,
+            is_sidechain: false,
+            occurred_at,
+        }),
+    }
+}
+
+/// 模型标签：`provider/model`，provider 缺失时只有模型名；均缺失时为 `None`。
+fn pi_model_label(provider: Option<String>, model: Option<String>) -> Option<String> {
+    match (provider, model) {
+        (Some(provider), Some(model)) => Some(format!("{provider}/{model}")),
+        (Some(provider), None) => Some(provider),
+        (None, Some(model)) => Some(model),
+        (None, None) => None,
+    }
+}
+
+fn pi_tokens(usage: &Value) -> Option<TokenFacts> {
+    let input = integer_or_zero(usage, "input")?;
+    let output = integer_or_zero(usage, "output")?;
+    let cache_read = integer_or_zero(usage, "cacheRead")?;
+    let cache_write = integer_or_zero(usage, "cacheWrite")?;
+    let reasoning = integer_or_zero(usage, "reasoning")?;
+    let total = integer_or_zero(usage, "totalTokens")?;
+    if total
+        != input
+            .saturating_add(output)
+            .saturating_add(cache_read)
+            .saturating_add(cache_write)
+    {
+        return None;
+    }
+    if reasoning > output {
+        return None;
+    }
+    let facts = TokenFacts {
+        uncached_input_tokens: input,
+        output_tokens: output,
+        reasoning_output_tokens: reasoning,
+        cache_read_input_tokens: cache_read,
+        cache_write_5m_input_tokens: cache_write,
+        cache_write_1h_input_tokens: 0,
+    };
+    facts.is_valid().then_some(facts)
+}
+
+/// `usage.cost.total`（美元小数）换算为整数 USD nanos。缺失或非数值返回 `None`（未定价）；
+/// `0` 是 pi 明确算出的真实零值，保留为 `Some(0)`。
+fn pi_cost_nanos(usage: &Value) -> Option<i64> {
+    let total = usage
+        .get("cost")
+        .and_then(|cost| cost.get("total"))
+        .and_then(Value::as_f64)?;
+    Some((total * 1_000_000_000.0).round() as i64)
+}
+
+/// 消息时间优先 `message.timestamp`（Unix 毫秒），缺失时退回 entry 的 ISO 时间戳。
+fn pi_time(usage_holder: &Value, entry_timestamp: Option<&str>) -> Option<(String, String)> {
+    if let Some(ts) = usage_holder.get("timestamp").and_then(Value::as_u64) {
+        let utc = DateTime::from_timestamp_millis(i64::try_from(ts).ok()?)?;
+        let local = utc.with_timezone(&Local);
+        return Some((
+            utc.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            local.format("%Y-%m-%d").to_string(),
+        ));
+    }
+    normalized_time(entry_timestamp)
+}
+
+fn filename_conversation_key(filename_key: &str) -> String {
+    opaque_key("pi-conversation", filename_key)
+}
+
+/// 首条 user 消息的纯文本标题兜底：空白折叠、去掉 `<` 前缀、截 80 字符。
+fn user_message_title(message: &Value) -> Option<String> {
+    let content = message.get("content");
+    let text = content
+        .and_then(Value::as_str)
+        .or_else(|| {
+            content.and_then(Value::as_array).and_then(|items| {
+                items
+                    .iter()
+                    .find_map(|item| item.get("text").and_then(Value::as_str))
+            })
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let without_prefix = collapsed.strip_prefix('<').unwrap_or(&collapsed).trim();
+    if without_prefix.is_empty() {
+        return None;
+    }
+    Some(without_prefix.chars().take(80).collect())
+}
+
 fn codex_tokens(value: &Value) -> Option<TokenFacts> {
     let input = integer(value, "input_tokens")?;
     let output = integer(value, "output_tokens")?;
@@ -447,6 +687,145 @@ fn apply_price(entry: &mut UsageEntry, catalog: &PricingCatalog) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn line(value: &str) -> Vec<u8> {
+        value.as_bytes().to_vec()
+    }
+
+    #[test]
+    fn pi_counts_assistant_only_with_own_cost_and_provider_model_label() {
+        let mut cursor = PiCursor {
+            conversation_key: Some("pi-key".to_owned()),
+            model: None,
+            project_hint: Some("project".to_owned()),
+            pending_title: None,
+            filename_key: None,
+        };
+        let parsed = parse_pi_line(
+            &line(
+                r#"{"id":"a1","type":"message","timestamp":"2026-08-01T01:00:00Z","message":{"role":"assistant","provider":"deepseek","model":"deepseek-v4-flash","usage":{"input":100,"output":20,"cacheRead":0,"cacheWrite":0,"reasoning":5,"totalTokens":120,"cost":{"total":0.0000196}}}}"#,
+            ),
+            &mut cursor,
+            "20260801-abc",
+        );
+
+        let ParsedLine::Fact {
+            entry,
+            conversation,
+        } = parsed
+        else {
+            panic!("expected fact");
+        };
+        assert_eq!(entry.source, UsageSource::Pi);
+        assert_eq!(entry.tokens.uncached_input_tokens, 100);
+        assert_eq!(entry.tokens.output_tokens, 20);
+        assert_eq!(entry.tokens.reasoning_output_tokens, 5);
+        assert_eq!(entry.tokens.total_tokens(), 120);
+        assert_eq!(entry.api_equivalent_cost_nanos, Some(19_600));
+        assert_eq!(entry.model.as_deref(), Some("deepseek/deepseek-v4-flash"));
+        assert_eq!(entry.speed, UsageSpeed::Standard);
+        assert_eq!(entry.pricing_fingerprint, None);
+        assert_eq!(conversation.conversation_key, "pi-key");
+        assert_eq!(conversation.project_hint.as_deref(), Some("project"));
+    }
+
+    #[test]
+    fn pi_ignores_tool_result_user_and_label_entries() {
+        let mut cursor = PiCursor::default();
+        let tool_result = parse_pi_line(
+            &line(
+                r#"{"id":"t1","type":"message","timestamp":"2026-08-01T01:00:00Z","message":{"role":"toolResult","tool_use_id":"x","usage":{"input":999,"output":999,"cacheRead":0,"cacheWrite":0,"totalTokens":1998,"cost":{"total":0.5}}}}"#,
+            ),
+            &mut cursor,
+            "file",
+        );
+        assert!(matches!(tool_result, ParsedLine::Ignored));
+
+        let user = parse_pi_line(
+            &line(
+                r#"{"id":"u1","type":"message","timestamp":"2026-08-01T01:00:00Z","message":{"role":"user","content":"hello"}}"#,
+            ),
+            &mut cursor,
+            "file",
+        );
+        assert!(matches!(user, ParsedLine::Ignored));
+        assert_eq!(cursor.pending_title.as_deref(), Some("hello"));
+
+        let label = parse_pi_line(
+            &line(r#"{"id":"l1","type":"label","timestamp":"2026-08-01T01:00:00Z","content":"x"}"#),
+            &mut cursor,
+            "file",
+        );
+        assert!(matches!(label, ParsedLine::Ignored));
+    }
+
+    #[test]
+    fn pi_compaction_uses_cursor_model_and_entry_timestamp() {
+        let mut cursor = PiCursor {
+            conversation_key: Some("pi-key".to_owned()),
+            model: Some("deepseek/deepseek-v4-flash".to_owned()),
+            project_hint: None,
+            pending_title: None,
+            filename_key: None,
+        };
+        let parsed = parse_pi_line(
+            &line(
+                r#"{"id":"c1","type":"compaction","timestamp":"2026-08-01T03:00:00Z","usage":{"input":200,"output":50,"cacheRead":0,"cacheWrite":0,"totalTokens":250,"cost":{"total":0.000042}}}"#,
+            ),
+            &mut cursor,
+            "file",
+        );
+
+        let ParsedLine::Fact { entry, .. } = parsed else {
+            panic!("expected fact");
+        };
+        assert_eq!(entry.tokens.total_tokens(), 250);
+        assert_eq!(entry.api_equivalent_cost_nanos, Some(42_000));
+        assert_eq!(entry.model.as_deref(), Some("deepseek/deepseek-v4-flash"));
+        assert_eq!(entry.occurred_at, "2026-08-01T03:00:00.000Z");
+    }
+
+    #[test]
+    fn pi_rejects_inconsistent_total_and_absent_cost_with_zero_tokens() {
+        let mut cursor = PiCursor::default();
+        let inconsistent = parse_pi_line(
+            &line(
+                r#"{"id":"i1","type":"message","timestamp":"2026-08-01T01:00:00Z","message":{"role":"assistant","model":"m","usage":{"input":1,"output":1,"cacheRead":0,"cacheWrite":0,"totalTokens":5,"cost":{"total":0.001}}}}"#,
+            ),
+            &mut cursor,
+            "file",
+        );
+        assert!(matches!(inconsistent, ParsedLine::Invalid));
+
+        let zero_without_cost = parse_pi_line(
+            &line(
+                r#"{"id":"z1","type":"message","timestamp":"2026-08-01T01:00:00Z","message":{"role":"assistant","model":"m","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0}}}"#,
+            ),
+            &mut cursor,
+            "file",
+        );
+        assert!(matches!(zero_without_cost, ParsedLine::Invalid));
+    }
+
+    #[test]
+    fn pi_falls_back_to_filename_conversation_key_when_session_entry_is_missing() {
+        let mut cursor = PiCursor::default();
+        let parsed = parse_pi_line(
+            &line(
+                r#"{"id":"m1","type":"message","timestamp":"2026-08-01T01:00:00Z","message":{"role":"assistant","model":"m","usage":{"input":1,"output":1,"cacheRead":0,"cacheWrite":0,"totalTokens":2,"cost":{"total":0.000001}}}}"#,
+            ),
+            &mut cursor,
+            "20260801-abc123",
+        );
+
+        let ParsedLine::Fact { entry, .. } = parsed else {
+            panic!("expected fact");
+        };
+        assert_eq!(
+            entry.conversation_key,
+            opaque_key("pi-conversation", "20260801-abc123")
+        );
+    }
 
     #[test]
     fn codex_subtracts_cache_facts_and_does_not_double_reasoning() {

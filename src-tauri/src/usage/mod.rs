@@ -28,8 +28,8 @@ use crate::contracts::{
 };
 use crate::storage::{UsageDb, UsageDbError};
 
-use model::{ClaudeCursor, CodexCursor, ParsedLine, ScanBatch};
-use parser::{parse_claude_line, parse_codex_line};
+use model::{ClaudeCursor, CodexCursor, ParsedLine, PiCursor, ScanBatch};
+use parser::{parse_claude_line, parse_codex_line, parse_pi_line};
 use pricing::{
     PricingCatalog, PricingCatalogStore, PricingRefreshMode, PricingRefreshOutcome, PricingUsageKey,
 };
@@ -391,6 +391,7 @@ impl UsageService {
             UsageSource::Claude => {
                 decode_cursor::<ClaudeCursor>(state.cursor_json.as_deref()).is_some()
             }
+            UsageSource::Pi => decode_cursor::<PiCursor>(state.cursor_json.as_deref()).is_some(),
         });
 
         let previous_prefix = match &previous {
@@ -455,6 +456,31 @@ impl UsageService {
         } else {
             ClaudeCursor::default()
         };
+        let mut pi_cursor = if file.source == UsageSource::Pi {
+            let mut cursor = if !must_reset {
+                decode_cursor(
+                    previous
+                        .as_ref()
+                        .and_then(|state| state.cursor_json.as_deref()),
+                )
+                .unwrap_or_default()
+            } else {
+                PiCursor::default()
+            };
+            if cursor.filename_key.is_none() {
+                cursor.filename_key = Some(
+                    file.path
+                        .file_stem()
+                        .and_then(|value| value.to_str())
+                        .unwrap_or_default()
+                        .to_owned(),
+                );
+            }
+            cursor
+        } else {
+            PiCursor::default()
+        };
+        let pi_filename_key = pi_cursor.filename_key.clone().unwrap_or_default();
 
         let mut handle = fs::File::open(&file.path).map_err(|_| UsageError::Unavailable)?;
         handle
@@ -486,6 +512,7 @@ impl UsageService {
                 let parsed = match file.source {
                     UsageSource::Codex => parse_codex_line(&line, &mut codex_cursor, catalog),
                     UsageSource::Claude => parse_claude_line(&line, &mut claude_cursor, catalog),
+                    UsageSource::Pi => parse_pi_line(&line, &mut pi_cursor, &pi_filename_key),
                 };
                 match parsed {
                     ParsedLine::Ignored => {}
@@ -512,6 +539,7 @@ impl UsageService {
                     &prefix,
                     &codex_cursor,
                     &claude_cursor,
+                    &pi_cursor,
                     &mut reset_pending,
                     &mut batch,
                 )?;
@@ -530,6 +558,7 @@ impl UsageService {
                 &prefix,
                 &codex_cursor,
                 &claude_cursor,
+                &pi_cursor,
                 &mut reset_pending,
                 &mut batch,
             )?;
@@ -547,12 +576,14 @@ impl UsageService {
         prefix: &str,
         codex_cursor: &CodexCursor,
         claude_cursor: &ClaudeCursor,
+        pi_cursor: &PiCursor,
         reset_pending: &mut bool,
         batch: &mut ScanBatch,
     ) -> Result<(), UsageError> {
         let cursor = match file.source {
             UsageSource::Codex => encode_cursor(codex_cursor),
             UsageSource::Claude => encode_cursor(claude_cursor),
+            UsageSource::Pi => encode_cursor(pi_cursor),
         }
         .map_err(|_| UsageError::Unavailable)?;
         let consumed = batch.consumed_bytes;
@@ -587,6 +618,7 @@ struct ScanRoots {
     codex_sessions: Option<PathBuf>,
     codex_archived: Option<PathBuf>,
     claude_projects: Option<PathBuf>,
+    pi_sessions: Option<PathBuf>,
 }
 
 impl ScanRoots {
@@ -600,6 +632,7 @@ impl ScanRoots {
                 .as_ref()
                 .map(|path| path.join(".codex/archived_sessions")),
             claude_projects: home.as_ref().map(|path| path.join(".claude/projects")),
+            pi_sessions: home.as_ref().map(|path| path.join(".pi/agent/sessions")),
         }
     }
 }
@@ -653,6 +686,14 @@ fn discover_files(roots: &ScanRoots) -> Discovery {
             claude
                 .into_iter()
                 .map(|path| source_file(UsageSource::Claude, path, Some(root))),
+        );
+    }
+    if let Some(root) = &roots.pi_sessions {
+        let mut pi = Vec::new();
+        collect_jsonl(root, &mut pi, &mut failures);
+        files.extend(
+            pi.into_iter()
+                .map(|path| source_file(UsageSource::Pi, path, Some(root))),
         );
     }
     files.sort_by(|left, right| {
@@ -730,6 +771,17 @@ fn source_file(source: UsageSource, path: PathBuf, source_root: Option<&Path>) -
         }
         UsageSource::Claude => {
             hasher.update(b"physical-relative-path-v1");
+            let identity = source_root
+                .and_then(|root| path.strip_prefix(root).ok())
+                .unwrap_or(&path);
+            for component in identity.components() {
+                let component = component.as_os_str().to_string_lossy();
+                hasher.update((component.len() as u64).to_le_bytes());
+                hasher.update(component.as_bytes());
+            }
+        }
+        UsageSource::Pi => {
+            hasher.update(b"pi-relative-path-v1");
             let identity = source_root
                 .and_then(|root| path.strip_prefix(root).ok())
                 .unwrap_or(&path);
@@ -866,12 +918,14 @@ mod tests {
 
     const CODEX_FIXTURE: &[u8] = include_bytes!("../../../fixtures/usage/codex/session.jsonl");
     const CLAUDE_FIXTURE: &[u8] = include_bytes!("../../../fixtures/usage/claude/project.jsonl");
+    const PI_FIXTURE: &[u8] = include_bytes!("../../../fixtures/usage/pi/session.jsonl");
 
     fn fixture_roots(base: &Path) -> ScanRoots {
         ScanRoots {
             codex_sessions: Some(base.join("codex/sessions")),
             codex_archived: Some(base.join("codex/archived")),
             claude_projects: Some(base.join("claude/projects")),
+            pi_sessions: Some(base.join("pi/sessions")),
         }
     }
 
@@ -884,6 +938,12 @@ mod tests {
         fs::write(codex.join("fixture-codex-session.jsonl"), CODEX_FIXTURE).expect("codex fixture");
         fs::write(claude.join("fixture-claude-session.jsonl"), CLAUDE_FIXTURE)
             .expect("claude fixture");
+    }
+
+    fn seed_pi_root(base: &Path) {
+        let pi = fixture_roots(base).pi_sessions.expect("pi root");
+        fs::create_dir_all(&pi).expect("pi dir");
+        fs::write(pi.join("fixture-pi-session.jsonl"), PI_FIXTURE).expect("pi fixture");
     }
 
     #[test]
@@ -1228,5 +1288,59 @@ mod tests {
             }),
             Err(UsageError::InvalidQuery)
         ));
+    }
+
+    #[test]
+    fn pi_fixture_scan_counts_own_cost_and_deduplicates_entry_keys() {
+        let config = tempfile::tempdir().expect("config");
+        let sources = tempfile::tempdir().expect("sources");
+        seed_pi_root(sources.path());
+        let service = UsageService::new(config.path().to_path_buf());
+
+        service
+            .run_scan_inner(fixture_roots(sources.path()))
+            .expect("scan pi fixture");
+
+        let summary = service
+            .summary(UsageSummaryQuery {
+                filter: UsageFilter::default(),
+                group_by: crate::contracts::UsageGroupBy::Source,
+            })
+            .expect("summary");
+        // assistant×3 + compaction×1；重复 assistant-msg-1 被全局去重键拦截。
+        assert_eq!(summary.entry_count, 4);
+        assert_eq!(summary.tokens.total_tokens, 485);
+        assert_eq!(summary.tokens.reasoning_output_tokens, 8);
+        // 19600 + 8540 + 2800 + 42000
+        assert_eq!(summary.cost.api_equivalent_cost_nanos, 72_940);
+        assert_eq!(summary.cost.priced_entries, 4);
+        assert_eq!(summary.fast.raw_tokens, 0);
+        assert_eq!(summary.tokens.cache_write_5m_input_tokens, 50);
+
+        let pi_row = summary
+            .rows
+            .iter()
+            .find(|row| row.key == "pi")
+            .expect("pi row");
+        assert_eq!(pi_row.cost.api_equivalent_cost_nanos, 72_940);
+
+        let page = service
+            .conversations(UsageConversationQuery {
+                filter: UsageFilter::default(),
+                search: None,
+                limit: Some(10),
+                offset: Some(0),
+                ..UsageConversationQuery::default()
+            })
+            .expect("conversations");
+        assert_eq!(page.total, 1);
+        let pi_conversation = &page.items[0];
+        assert_eq!(pi_conversation.source, UsageSource::Pi);
+        assert_eq!(pi_conversation.project_hint.as_deref(), Some("cc-trace"));
+        assert_eq!(
+            pi_conversation.title.as_deref(),
+            Some("system>说明 实现一个函数")
+        );
+        assert_eq!(pi_conversation.entry_count, 4);
     }
 }

@@ -12,15 +12,18 @@ use super::quota::{ProviderId, QuotaWindowKind};
 pub enum UsageSource {
     Codex,
     Claude,
+    Pi,
 }
 
 impl UsageSource {
+    /// 参与在线定价与 fingerprint 的数据源；Pi 自带 cost，不参与价格目录。
     pub const ALL: [Self; 2] = [Self::Codex, Self::Claude];
 
     pub fn as_db(self) -> &'static str {
         match self {
             Self::Codex => "codex",
             Self::Claude => "claude",
+            Self::Pi => "pi",
         }
     }
 }

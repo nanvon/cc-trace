@@ -1,6 +1,7 @@
 # Pi 数据源（用量）
 
-> 状态：事实文档；Pi 用量功能属于[产品范围](产品范围.md)的「后续版本评估」，尚未进入首版实现。
+> 状态：事实文档；Pi 用量功能已于 2026-08-08 按本文件进入首版实现（Rust 扫描＋测试，见
+> [产品范围](产品范围.md)「本地用量与历史」）。
 >
 > 本文件拥有：**Pi coding agent 会话 JSONL 的读取协议、entry 类型与字段语义、增量与去重规则、价格口径、会话元数据与时间规则**。
 >
@@ -89,14 +90,14 @@
 
 | 项 | cc-bar 行为 | cc-trace 规则 | 处置 |
 |---|---|---|---|
-| 六维 Token 映射 | input/output/cacheRead/cacheWrite 四维 | uncached_input / output / reasoning_output / cache_read / cache_write_5m / cache_write_1h | input→uncached_input；output→output；reasoning→reasoning_output（子集不重复加总量）；cacheWrite 归属 5m 还是 1h **待确认** |
-| totalTokens 校验 | 无显式校验（抽样全一致） | Codex 有 `total == input + output` 校验 | 建议复用：不一致则丢弃该行；**待确认**是否含 reasoning（reasoning ⊆ output，不影响和） |
-| 模型缺失 | 写字符串 `"unknown/unknown"` | 模型缺失写 `NULL`，禁止伪装 unknown | 需决策：按 cc-trace 规则写 NULL |
-| 缺 cost | 按 0 计入 + hasUnpricedUsage 标记 | 未定价费用为 `NULL`，不得按 0 | **需决策**：倾向按 cc-trace 规则（未定价），与 cc-bar 行为不同 |
-| 价格目录 | 完全不参与 | 不参与 fingerprint、缺价刷新、重计价 | 保持不参与 |
-| 来源标识 | `UsageApp.pi` | `usage_entries` 需扩展 pi 来源列（现仅 codex/claude） | 实现时扩展 |
-| 扫描水位 | `ScanState` v10 增加 `pi` / `piSeenEntryIds` | SQLite `scan_files` 水位表 | 实现时扩展水位行 |
-| 对话元数据 | `ConversationSeed` key `pi:<id>` | `conversations` 表 | 实现时扩展 |
+| 六维 Token 映射 | input/output/cacheRead/cacheWrite 四维 | uncached_input / output / reasoning_output / cache_read / cache_write_5m / cache_write_1h | input→uncached_input；output→output；reasoning→reasoning_output（子集不重复加总量）；**cacheWrite→cache_write_5m**（2026-08-08 已决策，与 Codex 顶层 cache_write 同槽；pi 无 1h 语义） |
+| totalTokens 校验 | 无显式校验（抽样全一致） | Codex 有 `total == input + output` 校验 | **已应用**（2026-08-08）：`total == input + output + cacheRead + cacheWrite` 不一致则丢弃该行；reasoning ⊆ output |
+| 模型缺失 | 写字符串 `"unknown/unknown"` | 模型缺失写 `NULL`，禁止伪装 unknown | **已决策**：按 cc-trace 规则写 NULL |
+| 缺 cost | 按 0 计入 + hasUnpricedUsage 标记 | 未定价费用为 `NULL`，不得按 0 | **已决策**：`usage.cost.total` 缺失或非数值 → `api_equivalent_cost_nanos = NULL`；`0` 是 pi 算出的真实零值，保留 `Some(0)` |
+| 价格目录 | 完全不参与 | 不参与 fingerprint、缺价刷新、重计价 | 保持不参与（`pricing_fingerprint = NULL`） |
+| 来源标识 | `UsageApp.pi` | `usage_entries` 扩展 pi 来源列 | **已实现**（2026-08-08，schema v3）：`usage_entries`／`conversations`／`scan_files` 的 `source` CHECK 含 `'pi'`；`quota_events` 仍只限 codex／claude |
+| 扫描水位 | `ScanState` v10 增加 `pi` / `piSeenEntryIds` | SQLite `scan_files` 水位表 | **已实现**：pi 使用 `(mtime, byteOffset)` 水位；全局去重由 `usage_entries` 唯一索引 `(source, dedup_key)` 承担，dedup_key = hash(`pi-entry` + entry id + entry ISO 时间戳)，无需独立 seen 集合 |
+| 对话元数据 | `ConversationSeed` key `pi:<id>` | `conversations` 表 | **已实现**：会话键 `pi:<session id>`，缺失时用文件名末尾 UUID 兜底；标题来自首条 user 消息（空白折叠、去 `<` 前缀、截 80 字符）；项目来自 session `cwd` 末段脱敏提示 |
 
 ## 9. 证据等级
 
