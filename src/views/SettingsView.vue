@@ -84,6 +84,14 @@ async function commitLaunchAtLogin(event: Event) {
   }
 }
 
+async function commitPrivacyMode(event: Event) {
+  const checkbox = event.target as HTMLInputElement;
+  await settings.update({ privacyMode: checkbox.checked });
+  if (current.value) {
+    checkbox.checked = current.value.privacyMode;
+  }
+}
+
 async function commitStatsService(event: Event, source: StatsServiceSource) {
   const checkbox = event.target as HTMLInputElement;
   const visibility: UsageServiceVisibility = {
@@ -162,6 +170,19 @@ function returnToUsage(): void {
               @change="commitLaunchAtLogin($event)"
             />
             <span>{{ t("settings.launchAtLogin") }}</span>
+          </label>
+
+          <label class="settings__row settings__row--check">
+            <input
+              type="checkbox"
+              name="privacy-mode"
+              :checked="current.privacyMode"
+              @change="commitPrivacyMode($event)"
+            />
+            <span>
+              {{ t("settings.privacyMode") }}
+              <span class="supporting">{{ t("settings.privacyModeDescription") }}</span>
+            </span>
           </label>
         </section>
 

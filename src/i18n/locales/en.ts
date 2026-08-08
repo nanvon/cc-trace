@@ -222,6 +222,9 @@ export default {
     general: "General",
     refreshInterval: "Auto-refresh interval",
     launchAtLogin: "Launch CC Trace at login",
+    privacyMode: "Privacy mode",
+    privacyModeDescription:
+      "Hides account names in the compact panel only. Not a privacy boundary.",
     appearanceAndLanguage: "Appearance & language",
     language: "Language",
     appearance: "Appearance",

@@ -11,6 +11,7 @@
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 
+import { useSettingsStore } from "../features/settings/store";
 import {
   primaryWindow,
   secondaryWindows,
@@ -48,7 +49,11 @@ const plan = computed(() => {
   const value = props.provider.identity?.plan;
   return value ? planLabel(value) : null;
 });
-const account = computed(() => props.provider.identity?.accountHint ?? null);
+/** 隐私模式：仅隐藏紧凑入口的账号标识，不承诺隐私隔离（cc-bar F-24 边界）。 */
+const privacyMode = computed(() => useSettingsStore().settings?.privacyMode ?? false);
+const account = computed(() =>
+  privacyMode.value ? null : (props.provider.identity?.accountHint ?? null),
+);
 
 const primary = computed(() => primaryWindow(props.provider.snapshot));
 

@@ -30,6 +30,7 @@ export interface Settings {
   appearance: AppearancePreference;
   refreshInterval: RefreshIntervalOption;
   launchAtLogin: boolean;
+  privacyMode: boolean;
   onboarding: OnboardingState;
   usageServiceVisibility: UsageServiceVisibility;
 }
@@ -40,6 +41,7 @@ export interface SettingsUpdate {
   appearance?: AppearancePreference;
   refreshInterval?: RefreshIntervalOption;
   launchAtLogin?: boolean;
+  privacyMode?: boolean;
   usageServiceVisibility?: UsageServiceVisibility;
 }
 

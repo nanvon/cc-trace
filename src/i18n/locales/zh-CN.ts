@@ -221,6 +221,8 @@ export default {
     general: "通用",
     refreshInterval: "自动刷新间隔",
     launchAtLogin: "开机时启动 CC Trace",
+    privacyMode: "隐私模式",
+    privacyModeDescription: "仅在紧凑面板隐藏账号标识，不构成隐私隔离。",
     appearanceAndLanguage: "外观与语言",
     language: "语言",
     appearance: "外观",

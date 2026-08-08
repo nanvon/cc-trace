@@ -102,6 +102,8 @@ pub struct Settings {
     pub appearance: AppearancePreference,
     pub refresh_interval: RefreshInterval,
     pub launch_at_login: bool,
+    /// 隐私模式：紧凑入口隐藏账号标识。仅 UI 隐藏，不承诺隐私隔离（cc-bar F-24 边界）。
+    pub privacy_mode: bool,
     pub onboarding: OnboardingState,
     pub usage_service_visibility: UsageServiceVisibility,
 }
@@ -114,6 +116,7 @@ impl Default for Settings {
             appearance: AppearancePreference::default(),
             refresh_interval: RefreshInterval::default(),
             launch_at_login: false,
+            privacy_mode: false,
             onboarding: OnboardingState::default(),
             usage_service_visibility: UsageServiceVisibility::default(),
         }
@@ -128,6 +131,7 @@ pub struct SettingsUpdate {
     pub appearance: Option<AppearancePreference>,
     pub refresh_interval: Option<RefreshInterval>,
     pub launch_at_login: Option<bool>,
+    pub privacy_mode: Option<bool>,
     pub usage_service_visibility: Option<UsageServiceVisibility>,
 }
 
@@ -145,6 +149,9 @@ impl SettingsUpdate {
         }
         if let Some(launch_at_login) = self.launch_at_login {
             settings.launch_at_login = launch_at_login;
+        }
+        if let Some(privacy_mode) = self.privacy_mode {
+            settings.privacy_mode = privacy_mode;
         }
         if let Some(visibility) = self.usage_service_visibility {
             settings.usage_service_visibility = visibility;
