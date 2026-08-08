@@ -363,9 +363,25 @@
 - [x] 若包含用量，使用原始 JSONL Fixture 验证聚合结果。
 - [x] 若包含 Conversations，验证去重和完整生命周期。（重复 message、半行完成、截断／覆盖重扫、稳定分页契约）
 - [x] 若包含 Pricing，验证 Token 和费用口径。（缓存 TTL、Fast／Priority、US 推理、Sol 长上下文、未知价格）
-- [ ] 必要时与旧版结果做只读对照。
-- [ ] 将差异区分为“新产品决策 / 新实现缺陷 / 旧版遗留行为”。
+- [x] 必要时与旧版结果做只读对照。
+- [x] 将差异区分为“新产品决策 / 新实现缺陷 / 旧版遗留行为”。
 - [ ] 不使用旧缓存文件作为新应用输入。
+
+### 15.1 真实数据对照记录（2026-08-08，macOS）
+
+用 `scripts/compare_usage.py` 以只读方式对照 CC Trace `usage.db`（`~/Library/Application Support/com.nanvon.cctrace/usage.db`，2026-08-03 上次实扫入库）与 Swift 版 cc-bar `usage-rollup.json`（`~/Library/Application Support/CCBar/`，更新于 2026-08-08）。选定对比日：**2026-08-03**（双方数据都存在且已结束的最后一天）。结果存于临时报告 `/tmp/cc_usage_compare.json`（未入库）。
+
+**一致项（5 行 exact）**：claude 全部（含 `claude-opus-5`、`claude-sonnet-5` 等）与 codex 全部已收录模型，token 六维与 `cost_usd` 逐字段一致；按 Source 总量两套完全相等（claude cost 54.1055755、codex 3.118620724 等）。**核心 Codex／Claude 扫描与计价与旧版一致。**
+
+**差异分类**：
+
+| 差异 | 数量 | 分类 | 说明 |
+|---|---|---|---|
+| `codex/codex-auto-review/standard` 106 请求 token 全一致、费用均 `$0`；cc-trace 报 `unpriced_entries=106`，ccbar 只有布尔 `has_unpriced_usage=true` | 1 | 旧版遗留／口径差异 | cc-trace 显式统计未定价行数，ccbar 只存布尔标记；数据无实质差异，费用一致为 `$0` |
+| pi 三行（`anthropic/claude-opus-5`、`deepseek-v4-flash`、`openai-codex/gpt-5.6-luna`）在 cc-trace 中缺失 | 3 | 新产品决策／时间差 | cc-trace 该库为 2026-08-03 扫描，早于 Pi 数据源实现（当日已进入首版，schema v4）；重新实扫后应由新扫描器纳入，非缺陷 |
+| `pricingFingerprint` 不一致（cc-trace `655e45fb…` vs ccbar `096554c7…`） | — | 新产品决策 | 两个目录快照版本不同（cc-trace 库用 08-03 目录）；本对比日 token 与费用全一致，指纹差异未影响该日计价。重新扫描并刷新目录后再复核 |
+
+**未做**：未执行一次全新全量扫描（需在实机启动应用），Pi／OpenCode 数据与 schema v4 的真实对照留待第 16 阶段实机验证。
 
 ## 16. 双平台验收
 
