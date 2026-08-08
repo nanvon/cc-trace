@@ -67,9 +67,6 @@ const showsRails = computed(
  * 异常状态不在卡片内承载：popover 卡片只显示用量，状态信息由总体状态点
  * 的颜色与 tooltip 表达（见 OverallSignal.vue），完整说明不再占卡片空间。
  */
-const showsExplanation = computed(() =>
-  props.variant === "full" ? presentation.value.impactKey !== null : false,
-);
 
 /* ---------- compact 分支（原型评审稿结构） ---------- */
 
@@ -321,7 +318,6 @@ function secondaryValueA11y(window: QuotaWindow): string {
         </p>
       </div>
     </template>
-
   </article>
 </template>
 
