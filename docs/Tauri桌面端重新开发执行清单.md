@@ -333,6 +333,10 @@
       `~/.local/share/opencode/opencode.db`，官方 `cost` 为费用总额真值、不走价格表，
       reasoning 已含在 output，零费用跳过，模型缺失写 NULL；已补 SQLite fixture 与扫描测试。
       见 [OpenCode数据源](OpenCode数据源.md) §8，自动化通过，浏览器与实机验证待门禁。
+- [x] 落地统计服务过滤：设置页「统计服务」组（Codex／Claude Code／Pi／OpenCode 默认全开，
+      写入 `settings.json`）；用量页 KPI 与 Provider 卡、每日柱图、按模型表、对话列表按可见
+      服务统一过滤，总量与占比分母只计可见服务（归一化），全关时显示空态引导；用量页与
+      对话列表同步新增 Pi／OpenCode 四源展示。参考 cc-bar F-28，自动化通过，浏览器与实机验证待门禁。
 
 ## 14. 完成首次初始化
 

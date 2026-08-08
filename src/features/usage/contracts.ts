@@ -7,7 +7,11 @@
 
 import type { ProviderId, QuotaWindowKind } from "../quota/contracts";
 
-export type UsageSource = ProviderId;
+/** 本地用量数据源。Pi 与 OpenCode 无订阅额度，只进本地用量统计。 */
+export type UsageSource = "codex" | "claude" | "pi" | "opencode";
+
+/** 用量页的空间顺序与 Provider 卡／图例／模型分组一致。 */
+export const USAGE_SOURCES: readonly UsageSource[] = ["codex", "claude", "pi", "opencode"] as const;
 export type UsageScanState = "idle" | "running" | "cancelling";
 export type UsageGroupBy = "day" | "source" | "model" | "speed";
 
@@ -155,6 +159,8 @@ export interface UsageConversationQuery {
   /** 精确匹配脱敏项目提示。 */
   project: string | null;
   sort: UsageConversationSort | null;
+  /** 可见服务集合；为空或缺失时不额外过滤。 */
+  sources: UsageSource[] | null;
   limit: number | null;
   offset: number | null;
 }

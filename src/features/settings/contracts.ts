@@ -14,6 +14,16 @@ export interface OnboardingState {
   completedAt: string | null;
 }
 
+/** 统计服务可见性：关闭的服务从本地用量统计统一过滤。默认全开。 */
+export type StatsServiceSource = "codex" | "claude" | "pi" | "opencode";
+
+export interface UsageServiceVisibility {
+  codex: boolean;
+  claude: boolean;
+  pi: boolean;
+  opencode: boolean;
+}
+
 export interface Settings {
   schemaVersion: number;
   language: LanguagePreference;
@@ -21,6 +31,7 @@ export interface Settings {
   refreshInterval: RefreshIntervalOption;
   launchAtLogin: boolean;
   onboarding: OnboardingState;
+  usageServiceVisibility: UsageServiceVisibility;
 }
 
 /** 部分更新。省略的字段保持原值。 */
@@ -29,6 +40,7 @@ export interface SettingsUpdate {
   appearance?: AppearancePreference;
   refreshInterval?: RefreshIntervalOption;
   launchAtLogin?: boolean;
+  usageServiceVisibility?: UsageServiceVisibility;
 }
 
 export const LANGUAGE_OPTIONS: readonly LanguagePreference[] = ["system", "zh-CN", "en"] as const;

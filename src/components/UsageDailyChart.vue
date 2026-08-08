@@ -17,6 +17,7 @@ use([BarChart, GridComponent, TooltipComponent, CanvasRenderer]);
 
 const props = defineProps<{
   day: Record<UsageSource, UsageSummary | null>;
+  sources: readonly UsageSource[];
   range: UsageDashboardRange;
   chartRange: UsageDashboardRange;
   loaded: boolean;
@@ -62,7 +63,7 @@ function daysInRange(range: UsageDashboardRange): string[] {
 
 const rowDates = computed(() => {
   const values = new Set<string>();
-  for (const source of ["codex", "claude"] as const) {
+  for (const source of props.sources) {
     for (const row of props.day[source]?.rows ?? []) values.add(row.key);
   }
   return [...values];
@@ -100,9 +101,10 @@ const option = computed<EChartsOption>(() => {
   const colors = usageChartColors();
   const categories = dates.value.map(formatDay);
 
+  const sourceColors = props.sources.map((source) => colors[source]);
   return {
     animation: false,
-    color: [colors.codex, colors.claude],
+    color: sourceColors,
     grid: { bottom: 24, containLabel: true, left: 8, right: 8, top: 10 },
     textStyle: { color: colors.text, fontFamily: colors.fontFamily },
     tooltip: {
@@ -148,30 +150,20 @@ const option = computed<EChartsOption>(() => {
       splitLine: { lineStyle: { color: colors.border, type: "solid" } },
       type: "value",
     },
-    series: [
-      {
-        barMaxWidth: 28,
-        data: dates.value.map((date) => ({
-          itemStyle: { opacity: barOpacity(date) },
-          value: costFor("codex", date),
-        })),
-        itemStyle: { color: colors.codex, borderRadius: [0, 0, 2, 2] },
-        name: t("provider.codex"),
-        stack: "cost",
-        type: "bar",
+    series: props.sources.map((source, index) => ({
+      barMaxWidth: 28,
+      data: dates.value.map((date) => ({
+        itemStyle: { opacity: barOpacity(date) },
+        value: costFor(source, date),
+      })),
+      itemStyle: {
+        color: colors[source],
+        borderRadius: index === 0 ? [0, 0, 2, 2] : [2, 2, 0, 0],
       },
-      {
-        barMaxWidth: 28,
-        data: dates.value.map((date) => ({
-          itemStyle: { opacity: barOpacity(date) },
-          value: costFor("claude", date),
-        })),
-        itemStyle: { color: colors.claude, borderRadius: [2, 2, 0, 0] },
-        name: t("provider.claude"),
-        stack: "cost",
-        type: "bar",
-      },
-    ],
+      name: t(`provider.${source}`),
+      stack: "cost",
+      type: "bar",
+    })),
   };
 });
 

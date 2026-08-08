@@ -15,6 +15,8 @@ export default {
   provider: {
     codex: "Codex",
     claude: "Claude Code",
+    pi: "Pi",
+    opencode: "OpenCode",
     plan: "{plan} plan",
     account: "Account {hint}",
   },
@@ -128,6 +130,11 @@ export default {
     totalModels: "Total · {count} models",
     unpriced: "Unpriced",
     empty: "No local usage in the selected range",
+    noServices: "No statistics services",
+    allServicesOff:
+      "All statistics services are turned off. Turn on at least one to see local usage.",
+    allServicesOffHint: "Open settings to choose which services count.",
+    openSettings: "Open settings",
     loading: "Reading local usage",
     partial: "Local usage updated, but some data could not be read",
     unavailable: "Local usage is temporarily unavailable",
@@ -179,6 +186,7 @@ export default {
     loading: "Reading conversations",
     unavailable: "Conversations are temporarily unavailable",
     empty: "No conversations in the selected range",
+    allServicesOff: "All statistics services are turned off.",
     missing: "This conversation no longer exists",
     untitled: "Untitled conversation",
     sidechain: "Side task",
@@ -218,6 +226,9 @@ export default {
     language: "Language",
     appearance: "Appearance",
     usageAndPricing: "Usage & pricing",
+    statsServices: "Statistics services",
+    statsServicesDescription:
+      "Turned-off services are hidden from usage totals, charts, models and conversations.",
     pricingCatalog: "Pricing catalog",
     pricingCatalogDescription:
       "Check LiteLLM and models.dev now. Existing prices stay available if the update fails.",

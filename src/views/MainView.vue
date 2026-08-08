@@ -32,7 +32,7 @@ const router = useRouter();
 const usage = useUsageStore();
 
 const presets = usageRangePresets();
-const providerSources = ["codex", "claude"] as const;
+const providerSources = computed(() => usage.visibleSources);
 const currentPreset = ref<UsageDashboardRange["preset"]>("today");
 const initialRange = usageDashboardRanges().today;
 const selectedRange = ref<UsageDashboardRange>(initialRange);
@@ -58,7 +58,8 @@ const chartUsesContextWindow = computed(
     chartRange.value.to !== selectedRange.value.to,
 );
 
-const sourceSummary = computed(() => usage.dashboard.source);
+const sourceSummary = computed(() => usage.visibleSourceSummary);
+const allServicesOff = computed(() => usage.visibleSources.length === 0);
 const dashboardReady = computed(() => usage.dashboardLoaded && !usage.dashboardLoading);
 const tokenUnitSeparator = computed(() => (locale.value.toLowerCase().startsWith("zh") ? "" : " "));
 const totalTokens = computed(() => {
@@ -90,6 +91,7 @@ const scanText = computed(() => {
 });
 
 const liveMessage = computed(() => {
+  if (allServicesOff.value) return t("main.allServicesOff");
   if (usage.dashboardLoading) return t("main.loading");
   if (usage.dashboardUnavailable) return t("main.unavailable");
   if (usage.partial) return t("main.partial");
@@ -239,6 +241,19 @@ onMounted(() => {
         </VDatePicker>
       </div>
 
+      <section
+        v-if="allServicesOff"
+        class="usage-page__empty"
+        aria-labelledby="usage-empty-heading"
+      >
+        <h2 id="usage-empty-heading" class="visually-hidden">{{ t("main.noServices") }}</h2>
+        <p>{{ t("main.allServicesOff") }}</p>
+        <p class="usage-page__empty-hint">{{ t("main.allServicesOffHint") }}</p>
+        <button type="button" class="button button--quiet" @click="openSettings">
+          {{ t("main.openSettings") }}
+        </button>
+      </section>
+
       <section class="usage-page__block" aria-labelledby="usage-provider-heading">
         <div class="usage-page__block-head">
           <h2 id="usage-provider-heading">{{ t("main.byProvider") }}</h2>
@@ -283,19 +298,22 @@ onMounted(() => {
               {{ t("main.chartContext") }}
             </span>
             <div class="usage-page__legend" role="list" :aria-label="t('main.byProvider')">
-              <span class="usage-page__legend-item" data-provider="codex" role="listitem">
+              <span
+                v-for="source in providerSources"
+                :key="source"
+                class="usage-page__legend-item"
+                :data-provider="source"
+                role="listitem"
+              >
                 <span class="usage-page__legend-dot" aria-hidden="true"></span>
-                {{ t("provider.codex") }}
-              </span>
-              <span class="usage-page__legend-item" data-provider="claude" role="listitem">
-                <span class="usage-page__legend-dot" aria-hidden="true"></span>
-                {{ t("provider.claude") }}
+                {{ t(`provider.${source}`) }}
               </span>
             </div>
           </div>
         </div>
         <UsageDailyChart
           :day="usage.dashboard.day"
+          :sources="providerSources"
           :range="selectedRange"
           :chart-range="chartRange"
           :loaded="dashboardReady"
@@ -312,6 +330,7 @@ onMounted(() => {
         </div>
         <UsageModelTable
           :model="usage.dashboard.model"
+          :sources="providerSources"
           :source-summary="sourceSummary"
           :loaded="dashboardReady"
           :unavailable="usage.dashboardUnavailable"
@@ -401,6 +420,24 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 0.375rem;
+}
+
+.usage-page__empty {
+  padding: 2.5rem 1rem;
+  border: 1px dashed var(--border-subtle);
+  border-radius: 0.625rem;
+  margin-block-end: 1.25rem;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  text-align: center;
+}
+
+.usage-page__empty p {
+  margin: 0 0 0.5rem;
+}
+
+.usage-page__empty-hint {
+  font-size: 0.6875rem;
 }
 
 .usage-page__filters {
@@ -579,6 +616,14 @@ onMounted(() => {
 
 .usage-page__legend-item[data-provider="claude"] {
   --provider-color: var(--cat-claude);
+}
+
+.usage-page__legend-item[data-provider="pi"] {
+  --provider-color: var(--cat-pi);
+}
+
+.usage-page__legend-item[data-provider="opencode"] {
+  --provider-color: var(--cat-opencode);
 }
 
 .usage-page__legend-dot {

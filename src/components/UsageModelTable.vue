@@ -22,6 +22,7 @@ type SortDirection = "ascending" | "descending";
 
 const props = defineProps<{
   model: Record<UsageSource, UsageSummary | null>;
+  sources: readonly UsageSource[];
   sourceSummary: UsageSummary | null;
   loaded: boolean;
   unavailable: boolean;
@@ -54,7 +55,7 @@ const columns: Array<{ key: SortKey; label: string }> = [
 ];
 
 const groups = computed(() =>
-  (["codex", "claude"] as const).map((source) => ({
+  props.sources.map((source) => ({
     source,
     summary: props.model[source],
     rows: sortRows(props.model[source]?.rows ?? []),
@@ -341,6 +342,14 @@ function totalModelCount(): number {
 
 tbody[data-provider="claude"] .usage-table__dot {
   background: var(--cat-claude);
+}
+
+tbody[data-provider="pi"] .usage-table__dot {
+  background: var(--cat-pi);
+}
+
+tbody[data-provider="opencode"] .usage-table__dot {
+  background: var(--cat-opencode);
 }
 
 .usage-table__model {

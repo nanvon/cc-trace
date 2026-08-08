@@ -5,6 +5,8 @@
 export interface UsageChartColors {
   codex: string;
   claude: string;
+  pi: string;
+  opencode: string;
   fontFamily: string;
   text: string;
   muted: string;
@@ -21,6 +23,8 @@ export function usageChartColors(): UsageChartColors {
   return {
     codex: cssVariable("--cat-codex", "#6c6c70"),
     claude: cssVariable("--cat-claude", "#d97757"),
+    pi: cssVariable("--cat-pi", "#2f5f8a"),
+    opencode: cssVariable("--cat-opencode", "#0f766e"),
     fontFamily: cssVariable(
       "--font-ui",
       '-apple-system, BlinkMacSystemFont, "Segoe UI Variable", "Segoe UI", sans-serif',

@@ -195,6 +195,8 @@ pub struct UsageConversationQuery {
     /// 精确匹配脱敏项目提示。
     pub project: Option<String>,
     pub sort: Option<UsageConversationSort>,
+    /// 可见服务集合；为空或缺失时不额外过滤（由前端保证传可见集合以统一服务过滤）。
+    pub sources: Option<Vec<UsageSource>>,
     pub limit: Option<u32>,
     pub offset: Option<u64>,
 }

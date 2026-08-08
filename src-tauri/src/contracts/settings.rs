@@ -71,6 +71,28 @@ pub struct OnboardingState {
     pub completed_at: Option<String>,
 }
 
+/// 统计服务可见性：关闭的服务从 KPI、Token 拆分、每日用量、按服务／按模型与对话页统一过滤。
+/// 默认全开。Pi 与 OpenCode 进入本地用量统计的开关由此字段承担。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageServiceVisibility {
+    pub codex: bool,
+    pub claude: bool,
+    pub pi: bool,
+    pub opencode: bool,
+}
+
+impl Default for UsageServiceVisibility {
+    fn default() -> Self {
+        Self {
+            codex: true,
+            claude: true,
+            pi: true,
+            opencode: true,
+        }
+    }
+}
+
 /// CC Trace 自己的偏好。不读取、不迁移任何外部或 Swift 版 cc-bar 的标记。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -81,6 +103,7 @@ pub struct Settings {
     pub refresh_interval: RefreshInterval,
     pub launch_at_login: bool,
     pub onboarding: OnboardingState,
+    pub usage_service_visibility: UsageServiceVisibility,
 }
 
 impl Default for Settings {
@@ -92,6 +115,7 @@ impl Default for Settings {
             refresh_interval: RefreshInterval::default(),
             launch_at_login: false,
             onboarding: OnboardingState::default(),
+            usage_service_visibility: UsageServiceVisibility::default(),
         }
     }
 }
@@ -104,6 +128,7 @@ pub struct SettingsUpdate {
     pub appearance: Option<AppearancePreference>,
     pub refresh_interval: Option<RefreshInterval>,
     pub launch_at_login: Option<bool>,
+    pub usage_service_visibility: Option<UsageServiceVisibility>,
 }
 
 impl SettingsUpdate {
@@ -120,6 +145,9 @@ impl SettingsUpdate {
         }
         if let Some(launch_at_login) = self.launch_at_login {
             settings.launch_at_login = launch_at_login;
+        }
+        if let Some(visibility) = self.usage_service_visibility {
+            settings.usage_service_visibility = visibility;
         }
     }
 }
@@ -138,6 +166,10 @@ mod tests {
         assert_eq!(settings.appearance, AppearancePreference::System);
         assert!(!settings.launch_at_login);
         assert!(!settings.onboarding.completed);
+        assert!(settings.usage_service_visibility.codex);
+        assert!(settings.usage_service_visibility.claude);
+        assert!(settings.usage_service_visibility.pi);
+        assert!(settings.usage_service_visibility.opencode);
     }
 
     #[test]

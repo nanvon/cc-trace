@@ -404,6 +404,15 @@ impl UsageDb {
         let source = filter.source.map(UsageSource::as_db);
         let speed = filter.speed.map(UsageSpeed::as_db);
         let escaped_search = search.map(escape_like);
+        let sources_json = query.sources.as_ref().map(|sources| {
+            serde_json::to_string(
+                &sources
+                    .iter()
+                    .map(|source| source.as_db())
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap_or_else(|_| "[]".to_owned())
+        });
         let order = match query.sort.unwrap_or(UsageConversationSort::Recent) {
             UsageConversationSort::Recent => {
                 "ORDER BY c.last_at DESC, c.conversation_key ASC".to_owned()
@@ -432,6 +441,7 @@ impl UsageDb {
                 AND (?4 IS NULL OR e.model = ?4)
                 AND (?5 IS NULL OR e.speed = ?5)
                 AND (?7 IS NULL OR c.project_hint = ?7)
+                AND (?8 IS NULL OR e.source IN (SELECT value FROM json_each(?8)))
                 AND (?6 IS NULL
                      OR COALESCE(c.title, '') LIKE '%' || ?6 || '%' ESCAPE '\'
                      OR COALESCE(c.project_hint, '') LIKE '%' || ?6 || '%' ESCAPE '\')",
@@ -443,6 +453,7 @@ impl UsageDb {
                 speed,
                 escaped_search.as_deref(),
                 project,
+                sources_json,
             ],
             |row| row.get(0),
         )?;
@@ -481,12 +492,13 @@ impl UsageDb {
                 AND (?4 IS NULL OR e.model = ?4)
                 AND (?5 IS NULL OR e.speed = ?5)
                 AND (?7 IS NULL OR c.project_hint = ?7)
+                AND (?8 IS NULL OR e.source IN (SELECT value FROM json_each(?8)))
                 AND (?6 IS NULL
                      OR COALESCE(c.title, '') LIKE '%' || ?6 || '%' ESCAPE '\'
                      OR COALESCE(c.project_hint, '') LIKE '%' || ?6 || '%' ESCAPE '\')
               GROUP BY c.conversation_key
               {order}
-              LIMIT ?8 OFFSET ?9"
+              LIMIT ?9 OFFSET ?10"
         ))?;
         let mapped = statement.query_map(
             params![
@@ -497,6 +509,7 @@ impl UsageDb {
                 speed,
                 escaped_search.as_deref(),
                 project,
+                sources_json,
                 i64::from(limit),
                 i64::try_from(offset).map_err(|_| UsageDbError::Sql)?,
             ],

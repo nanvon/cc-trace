@@ -139,6 +139,11 @@ impl UsageService {
         if i64::try_from(offset).is_err() {
             return Err(UsageError::InvalidQuery);
         }
+        if let Some(sources) = &query.sources
+            && sources.len() > 8
+        {
+            return Err(UsageError::InvalidQuery);
+        }
         self.db
             .conversations(&query, limit, offset, search.as_deref(), project.as_deref())
             .map_err(Into::into)

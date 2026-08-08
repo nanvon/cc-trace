@@ -2,6 +2,7 @@ import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 
 import type { ProviderId } from "../quota/contracts";
+import { useSettingsStore } from "../settings/store";
 import { getUsageScanStatus, getUsageSummary } from "./api";
 import type {
   UsageDashboardData,
@@ -13,6 +14,7 @@ import type {
   UsageSummary,
   UsageSummaryQuery,
 } from "./contracts";
+import { USAGE_SOURCES } from "./contracts";
 import { buildProviderCosts } from "./presentation";
 import { usageChartRange, usageCostRanges, usageDashboardRanges } from "./ranges";
 
@@ -36,12 +38,23 @@ function summaryQuery(
 function emptyDashboard(): UsageDashboardData {
   return {
     source: null,
-    day: { codex: null, claude: null },
-    model: { codex: null, claude: null },
+    day: {
+      codex: null,
+      claude: null,
+      pi: null,
+      opencode: null,
+    },
+    model: {
+      codex: null,
+      claude: null,
+      pi: null,
+      opencode: null,
+    },
   };
 }
 
 export const useUsageStore = defineStore("usage", () => {
+  const settings = useSettingsStore();
   const status = ref<UsageScanStatus | null>(null);
   const today = ref<UsageSummary | null>(null);
   const week = ref<UsageSummary | null>(null);
@@ -55,6 +68,74 @@ export const useUsageStore = defineStore("usage", () => {
   const dashboardLoading = ref(false);
   const dashboardUnavailable = ref(false);
   let dashboardRequest = 0;
+
+  /** 统计服务过滤：设置页关闭的服务从用量页、图表与对话列表统一剔除。 */
+  const visibleSources = computed<UsageSource[]>(() => {
+    const visibility = settings.settings?.usageServiceVisibility;
+    if (!visibility) return [...USAGE_SOURCES];
+    return USAGE_SOURCES.filter((source) => visibility[source]);
+  });
+
+  /** 可见服务的源级汇总：从全量 source 查询中按可见集合归并，占比与总量只计可见服务。 */
+  const visibleSourceSummary = computed<UsageSummary | null>(() => {
+    const raw = dashboard.value.source;
+    if (!raw) return null;
+    const visible = new Set(visibleSources.value);
+    const rows = raw.rows.filter((row) => visible.has(row.key as UsageSource));
+    if (rows.length === 0) return null;
+
+    const tokens: UsageSummary["tokens"] = {
+      uncachedInputTokens: 0,
+      outputTokens: 0,
+      reasoningOutputTokens: 0,
+      cacheReadInputTokens: 0,
+      cacheWrite5mInputTokens: 0,
+      cacheWrite1hInputTokens: 0,
+      inputTokens: 0,
+      totalTokens: 0,
+    };
+    const fast: UsageSummary["fast"] = {
+      rawTokens: 0,
+      billingEquivalentTokens: "0",
+      minimumMultiplier: null,
+      maximumMultiplier: null,
+      hasUnpricedEquivalent: false,
+    };
+    const cost: UsageSummary["cost"] = {
+      apiEquivalentCostNanos: 0,
+      pricedEntries: 0,
+      unpricedEntries: 0,
+      assumedGeoEntries: 0,
+      pricingFingerprint: null,
+    };
+    let entryCount = 0;
+    for (const row of rows) {
+      entryCount += row.entryCount;
+      tokens.uncachedInputTokens += row.tokens.uncachedInputTokens;
+      tokens.outputTokens += row.tokens.outputTokens;
+      tokens.reasoningOutputTokens += row.tokens.reasoningOutputTokens;
+      tokens.cacheReadInputTokens += row.tokens.cacheReadInputTokens;
+      tokens.cacheWrite5mInputTokens += row.tokens.cacheWrite5mInputTokens;
+      tokens.cacheWrite1hInputTokens += row.tokens.cacheWrite1hInputTokens;
+      tokens.inputTokens += row.tokens.inputTokens;
+      tokens.totalTokens += row.tokens.totalTokens;
+      fast.rawTokens += row.fast.rawTokens;
+      fast.billingEquivalentTokens = String(
+        (Number(fast.billingEquivalentTokens) || 0) +
+          (Number(row.fast.billingEquivalentTokens) || 0),
+      );
+      fast.minimumMultiplier ??= row.fast.minimumMultiplier;
+      fast.maximumMultiplier ??= row.fast.maximumMultiplier;
+      fast.hasUnpricedEquivalent ||= row.fast.hasUnpricedEquivalent;
+      cost.apiEquivalentCostNanos += row.cost.apiEquivalentCostNanos;
+      cost.pricedEntries += row.cost.pricedEntries;
+      cost.unpricedEntries += row.cost.unpricedEntries;
+      cost.assumedGeoEntries += row.cost.assumedGeoEntries;
+      cost.pricingFingerprint ??= row.cost.pricingFingerprint;
+    }
+
+    return { rows, entryCount, tokens, fast, cost };
+  });
 
   const scanning = computed(
     () => status.value?.state === "running" || status.value?.state === "cancelling",
@@ -121,13 +202,13 @@ export const useUsageStore = defineStore("usage", () => {
 
     await readStatus();
 
-    const results = await Promise.allSettled([
+    const sources = visibleSources.value;
+    const queries = [
       getUsageSummary(summaryQuery(range, "source")),
-      getUsageSummary(summaryQuery(chartRange, "day", "codex")),
-      getUsageSummary(summaryQuery(chartRange, "day", "claude")),
-      getUsageSummary(summaryQuery(range, "model", "codex")),
-      getUsageSummary(summaryQuery(range, "model", "claude")),
-    ]);
+      ...sources.map((source) => getUsageSummary(summaryQuery(chartRange, "day", source))),
+      ...sources.map((source) => getUsageSummary(summaryQuery(range, "model", source))),
+    ];
+    const results = await Promise.allSettled(queries);
 
     if (request !== dashboardRequest) {
       return;
@@ -139,10 +220,17 @@ export const useUsageStore = defineStore("usage", () => {
       return result.value;
     };
 
+    const day: UsageDashboardData["day"] = emptyDashboard().day;
+    const model: UsageDashboardData["model"] = emptyDashboard().model;
+    sources.forEach((source, index) => {
+      day[source] = value(1 + index);
+      model[source] = value(1 + sources.length + index);
+    });
+
     dashboard.value = {
       source: value(0),
-      day: { codex: value(1), claude: value(2) },
-      model: { codex: value(3), claude: value(4) },
+      day,
+      model,
     };
     dashboardUnavailable.value = results.some((result) => result.status === "rejected");
     dashboardLoaded.value = true;
@@ -176,6 +264,8 @@ export const useUsageStore = defineStore("usage", () => {
     unavailable,
     costs,
     dashboard,
+    visibleSources,
+    visibleSourceSummary,
     dashboardRange,
     dashboardLoaded,
     dashboardLoading,

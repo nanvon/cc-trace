@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { getUsageScanStatus, getUsageSummary } from "./api";
 import type { UsageScanStatus, UsageSummary } from "./contracts";
+import { useSettingsStore } from "../settings/store";
 import { usageChartRange, usageDashboardRanges } from "./ranges";
 import { useUsageStore } from "./store";
 
@@ -86,7 +87,7 @@ describe("usage store", () => {
     expect(getUsageSummary).toHaveBeenCalledTimes(4);
   });
 
-  it("loads source, daily, and model summaries for the main usage page", async () => {
+  it("loads source, daily, and model summaries for the visible services", async () => {
     vi.mocked(getUsageScanStatus).mockResolvedValue(idleStatus("2026-07-30T10:00:00Z"));
     const store = useUsageStore();
 
@@ -96,12 +97,40 @@ describe("usage store", () => {
       "source",
       "day",
       "day",
+      "day",
+      "day",
+      "model",
+      "model",
       "model",
       "model",
     ]);
     expect(store.dashboardLoaded).toBe(true);
     expect(store.dashboardLoading).toBe(false);
     expect(store.dashboardUnavailable).toBe(false);
+  });
+
+  it("filters visible services from the dashboard queries", async () => {
+    vi.mocked(getUsageScanStatus).mockResolvedValue(idleStatus("2026-07-30T10:00:00Z"));
+    const settings = useSettingsStore();
+    settings.adopt({
+      schemaVersion: 1,
+      language: "zh-CN",
+      appearance: "system",
+      refreshInterval: "2m",
+      launchAtLogin: false,
+      onboarding: { completed: true, completedAt: null },
+      usageServiceVisibility: { codex: true, claude: true, pi: false, opencode: false },
+    });
+    const store = useUsageStore();
+
+    await store.loadDashboard(usageDashboardRanges(new Date(2026, 6, 30)).thisMonth);
+
+    expect(store.visibleSources).toEqual(["codex", "claude"]);
+    const sources = vi
+      .mocked(getUsageSummary)
+      .mock.calls.slice(1)
+      .map(([query]) => query.filter.source);
+    expect(sources).toEqual(["codex", "claude", "codex", "claude"]);
   });
 
   it("uses the wider context only for daily summaries in a single-day range", async () => {
@@ -115,7 +144,11 @@ describe("usage store", () => {
     expect(queries[0]?.filter.from).toBe(today.from);
     expect(queries[1]?.filter.from).toBe(usageChartRange(today).from);
     expect(queries[2]?.filter.from).toBe(usageChartRange(today).from);
-    expect(queries[3]?.filter.from).toBe(today.from);
-    expect(queries[4]?.filter.from).toBe(today.from);
+    expect(queries[3]?.filter.from).toBe(usageChartRange(today).from);
+    expect(queries[4]?.filter.from).toBe(usageChartRange(today).from);
+    expect(queries[5]?.filter.from).toBe(today.from);
+    expect(queries[6]?.filter.from).toBe(today.from);
+    expect(queries[7]?.filter.from).toBe(today.from);
+    expect(queries[8]?.filter.from).toBe(today.from);
   });
 });

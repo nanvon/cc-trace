@@ -40,6 +40,7 @@ function render() {
     refreshInterval: "2m",
     launchAtLogin: false,
     onboarding: { completed: true, completedAt: null },
+    usageServiceVisibility: { codex: true, claude: true, pi: true, opencode: true },
   });
   return wrapper;
 }

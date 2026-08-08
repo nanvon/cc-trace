@@ -19,8 +19,17 @@ import {
   type LanguagePreference,
   type RefreshIntervalOption,
   type SettingsUpdate,
+  type StatsServiceSource,
+  type UsageServiceVisibility,
 } from "../features/settings/contracts";
 import { useSettingsStore } from "../features/settings/store";
+
+const STATS_SERVICE_SOURCES: readonly StatsServiceSource[] = [
+  "codex",
+  "claude",
+  "pi",
+  "opencode",
+] as const;
 
 const { t } = useI18n();
 const route = useRoute();
@@ -72,6 +81,22 @@ async function commitLaunchAtLogin(event: Event) {
   await settings.update({ launchAtLogin: checkbox.checked });
   if (current.value) {
     checkbox.checked = current.value.launchAtLogin;
+  }
+}
+
+async function commitStatsService(event: Event, source: StatsServiceSource) {
+  const checkbox = event.target as HTMLInputElement;
+  const visibility: UsageServiceVisibility = {
+    codex: true,
+    claude: true,
+    pi: true,
+    opencode: true,
+    ...(current.value?.usageServiceVisibility ?? {}),
+  };
+  visibility[source] = checkbox.checked;
+  await settings.update({ usageServiceVisibility: visibility });
+  if (current.value) {
+    checkbox.checked = current.value.usageServiceVisibility[source];
   }
 }
 
@@ -175,6 +200,27 @@ function returnToUsage(): void {
                   : t("settings.pricingCatalogUpdateFailed")
             }}
           </p>
+        </section>
+
+        <section class="settings__group">
+          <h2>{{ t("settings.statsServices") }}</h2>
+          <p class="supporting settings__group-description">
+            {{ t("settings.statsServicesDescription") }}
+          </p>
+
+          <label
+            v-for="source in STATS_SERVICE_SOURCES"
+            :key="source"
+            class="settings__row settings__row--check"
+          >
+            <input
+              type="checkbox"
+              :name="`stats-service-${source}`"
+              :checked="current.usageServiceVisibility[source]"
+              @change="commitStatsService($event, source)"
+            />
+            <span>{{ t(`provider.${source}`) }}</span>
+          </label>
         </section>
 
         <section class="settings__group">

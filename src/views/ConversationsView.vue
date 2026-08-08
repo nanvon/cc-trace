@@ -10,11 +10,14 @@ import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
 
 import { navigateMain } from "../features/app/navigation";
+import { useSettingsStore } from "../features/settings/store";
 import type {
   UsageConversation,
   UsageConversationPage,
   UsageConversationSort,
+  UsageSource,
 } from "../features/usage/contracts";
+import { USAGE_SOURCES } from "../features/usage/contracts";
 import { listConversations } from "../features/usage/api";
 import { formatUsageCost, presentUsageTokens } from "../features/usage/presentation";
 
@@ -22,12 +25,13 @@ const PAGE_SIZE = 20;
 
 const { t, locale } = useI18n();
 const router = useRouter();
+const settings = useSettingsStore();
 
 const loading = ref(true);
 const unavailable = ref(false);
 const page = ref<UsageConversationPage | null>(null);
 const search = ref("");
-const source = ref<"all" | "codex" | "claude">("all");
+const source = ref<"all" | UsageSource>("all");
 const sort = ref<UsageConversationSort>("recent");
 const offset = ref(0);
 const pendingSearch = ref("");
@@ -38,12 +42,21 @@ const SORT_OPTIONS: Array<{ value: UsageConversationSort; label: string }> = [
   { value: "cost", label: "conversations.sort.cost" },
 ];
 
-const SOURCE_OPTIONS: Array<{ value: "all" | "codex" | "claude"; label: string }> = [
-  { value: "all", label: "conversations.sourceAll" },
-  { value: "codex", label: "provider.codex" },
-  { value: "claude", label: "provider.claude" },
-];
+const visibleSources = computed(() => {
+  const visibility = settings.settings?.usageServiceVisibility;
+  if (!visibility) return [...USAGE_SOURCES];
+  return USAGE_SOURCES.filter((source) => visibility[source]);
+});
 
+const SOURCE_OPTIONS = computed(() => [
+  { value: "all" as const, label: "conversations.sourceAll" },
+  ...visibleSources.value.map((source) => ({
+    value: source as UsageSource,
+    label: `provider.${source}`,
+  })),
+]);
+
+const allServicesOff = computed(() => visibleSources.value.length === 0);
 const total = computed(() => page.value?.total ?? 0);
 const hasNext = computed(() => (offset.value + 1) * PAGE_SIZE < total.value);
 const hasPrevious = computed(() => offset.value > 0);
@@ -63,6 +76,8 @@ async function load(): Promise<void> {
       search: pendingSearch.value || null,
       project: null,
       sort: sort.value,
+      sources:
+        source.value === "all" && visibleSources.value.length > 0 ? visibleSources.value : null,
       limit: PAGE_SIZE,
       offset: offset.value,
     });
@@ -188,7 +203,12 @@ onMounted(() => {
         </label>
       </div>
 
-      <p v-if="unavailable" class="conversations__notice">{{ t("conversations.unavailable") }}</p>
+      <p v-if="allServicesOff" class="conversations__notice">
+        {{ t("conversations.allServicesOff") }}
+      </p>
+      <p v-else-if="unavailable" class="conversations__notice">
+        {{ t("conversations.unavailable") }}
+      </p>
       <p v-else-if="loading" class="conversations__notice">{{ t("conversations.loading") }}</p>
       <p v-else-if="total === 0" class="conversations__notice">{{ t("conversations.empty") }}</p>
 

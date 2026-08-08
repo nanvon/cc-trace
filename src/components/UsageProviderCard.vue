@@ -129,6 +129,16 @@ function valueOrDash(value: number): string {
   --provider-tint: var(--cat-claude-dim);
 }
 
+.usage-provider[data-provider="pi"] {
+  --provider-color: var(--cat-pi);
+  --provider-tint: var(--cat-pi-dim);
+}
+
+.usage-provider[data-provider="opencode"] {
+  --provider-color: var(--cat-opencode);
+  --provider-tint: var(--cat-opencode-dim);
+}
+
 .usage-provider__header {
   display: flex;
   align-items: center;

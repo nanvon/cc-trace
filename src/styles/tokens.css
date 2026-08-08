@@ -37,8 +37,12 @@
   /* Provider 品牌识别是分类维度；Codex 与 cc-bar 对齐为石墨灰，不表达可用性、风险或交互状态。 */
   --cat-codex: #6c6c70;
   --cat-claude: #d97757;
+  --cat-pi: #2f5f8a;
+  --cat-opencode: #0f766e;
   --cat-codex-dim: rgb(108 108 112 / 12%);
   --cat-claude-dim: rgb(217 119 87 / 11%);
+  --cat-pi-dim: rgb(47 95 138 / 12%);
+  --cat-opencode-dim: rgb(15 118 110 / 12%);
 
   /* 紧凑面板是悬浮层，阴影比主窗口里的卡片更明显（原型评审稿 🚩 加档） */
   --shadow-panel: 0 24px 56px -18px rgb(16 16 20 / 26%), 0 4px 12px rgb(16 16 20 / 7%);
@@ -93,8 +97,12 @@
 
     --cat-codex: #98989d;
     --cat-claude: #f0a080;
+    --cat-pi: #5082b4;
+    --cat-opencode: #2dd4bf;
     --cat-codex-dim: rgb(152 152 157 / 14%);
     --cat-claude-dim: rgb(240 160 128 / 14%);
+    --cat-pi-dim: rgb(80 130 180 / 14%);
+    --cat-opencode-dim: rgb(45 212 191 / 14%);
 
     --shadow-panel: 0 24px 56px -18px rgb(0 0 0 / 65%), 0 4px 12px rgb(0 0 0 / 40%);
     --ring-panel: rgb(255 255 255 / 9%);
@@ -118,8 +126,12 @@
 
   --cat-codex: #98989d;
   --cat-claude: #f0a080;
+  --cat-pi: #5082b4;
+  --cat-opencode: #2dd4bf;
   --cat-codex-dim: rgb(152 152 157 / 14%);
   --cat-claude-dim: rgb(240 160 128 / 14%);
+  --cat-pi-dim: rgb(80 130 180 / 14%);
+  --cat-opencode-dim: rgb(45 212 191 / 14%);
 
   --shadow-panel: 0 24px 56px -18px rgb(0 0 0 / 65%), 0 4px 12px rgb(0 0 0 / 40%);
   --ring-panel: rgb(255 255 255 / 9%);
