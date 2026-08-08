@@ -6,9 +6,9 @@
  * 不切换成完全不同的错误卡片；无凭据时保持相同骨架，用说明替换额度区域。
  *
  * 层级靠阴影表达，不用左侧色条。百分比读数的颜色来自余量分档（ADR-0017），
- * 状态由提示条承担——两者是独立的两个维度。
+ * 状态由总体状态点（Overall Signal）承担——两者是独立的两个维度，卡片内不再出现状态提示条。
  */
-import { computed, ref } from "vue";
+import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 
 import { useSettingsStore } from "../features/settings/store";
@@ -25,7 +25,6 @@ import { displayQuotaTone, type QuotaTone } from "../lib/quotaTone";
 import { hasQuotaValues, presentProvider } from "../lib/status";
 import { useTimeText } from "../lib/useTimeText";
 import QuotaProgress from "./QuotaProgress.vue";
-import StatusExplanation from "./StatusExplanation.vue";
 import UsageCostReadout from "./UsageCostReadout.vue";
 const props = defineProps<{
   provider: ProviderSnapshot;
@@ -64,24 +63,13 @@ const showsRails = computed(
   () => hasQuotaValues(props.provider) || presentation.value.rail === "loading",
 );
 
-/** 紧凑面板：有数值时状态词已经说明一切，不再叠加一行解释。 */
-const showsExplanation = computed(() =>
-  props.variant === "full"
-    ? presentation.value.impactKey !== null
-    : !showsRails.value || presentation.value.tone !== "neutral",
-);
-
 /**
- * 异常解释的落脚点（ADR-0020「未解决问题」）：主窗口不再显示额度后，完整
- * 「影响／下一步」由紧凑面板的异常 lane 展开承载——正常时保持紧凑形态，
- * 出错时该条 lane 可展开出三级详情。窗口高度由 CompactView 的 ResizeObserver 跟随。
+ * 异常状态不在卡片内承载：popover 卡片只显示用量，状态信息由总体状态点
+ * 的颜色与 tooltip 表达（见 OverallSignal.vue），完整说明不再占卡片空间。
  */
-const explanationExpanded = ref(false);
-const canExpandExplanation = computed(() => props.variant === "compact" && showsExplanation.value);
-
-function toggleExplanation(): void {
-  explanationExpanded.value = !explanationExpanded.value;
-}
+const showsExplanation = computed(() =>
+  props.variant === "full" ? presentation.value.impactKey !== null : false,
+);
 
 /* ---------- compact 分支（原型评审稿结构） ---------- */
 
@@ -334,22 +322,6 @@ function secondaryValueA11y(window: QuotaWindow): string {
       </div>
     </template>
 
-    <div v-if="showsExplanation" class="lane__explain">
-      <StatusExplanation
-        :provider="provider"
-        :presentation="presentation"
-        :variant="canExpandExplanation && explanationExpanded ? 'full' : variant"
-      />
-      <button
-        v-if="canExpandExplanation"
-        type="button"
-        class="lane__details-toggle"
-        :aria-expanded="explanationExpanded"
-        @click="toggleExplanation"
-      >
-        {{ t(explanationExpanded ? "common.hideDetails" : "common.details") }}
-      </button>
-    </div>
   </article>
 </template>
 
@@ -496,27 +468,6 @@ function secondaryValueA11y(window: QuotaWindow): string {
 
 .lane--compact > .usage-cost {
   margin-block-start: 10px;
-}
-
-.lane__explain {
-  display: grid;
-  gap: 0.5rem;
-  justify-items: start;
-}
-
-.lane__details-toggle {
-  min-block-size: 1.5rem;
-  padding: 0 0.375rem;
-  border: 0;
-  border-radius: var(--radius-control);
-  color: var(--text-secondary);
-  background: transparent;
-  font-size: 0.6875rem;
-}
-
-.lane__details-toggle:hover {
-  color: var(--text-primary);
-  background: color-mix(in srgb, var(--text-secondary) 10%, transparent);
 }
 
 /* ---------- 身份行 ---------- */

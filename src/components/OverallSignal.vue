@@ -10,11 +10,12 @@
  *
  * 状态点有可访问名称，因此颜色不是状态的唯一载体（第 3.3 节）。
  */
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 
 import type { ProviderSnapshot } from "../features/quota/contracts";
-import { presentOverall } from "../lib/status";
+import { providerLabel } from "../lib/labels";
+import { presentOverall, presentProvider } from "../lib/status";
 import { useTimeText } from "../lib/useTimeText";
 
 const props = defineProps<{
@@ -25,7 +26,7 @@ const props = defineProps<{
 }>();
 
 const { t } = useI18n();
-const { refreshed } = useTimeText();
+const { countdown, refreshed } = useTimeText();
 
 const leader = computed(() => presentOverall(props.providers));
 
@@ -80,6 +81,29 @@ const lastSuccess = computed(() => {
     .sort();
   return refreshed(timestamps.at(-1) ?? null);
 });
+
+/**
+ * 需要给一句说明的 Provider：非中性基调（离线／限流／过期／错误），或中性但
+ * 需要引导的（无凭据、不支持）。卡片内不再承载状态说明，明细全部收在这里。
+ */
+const explainables = computed(() =>
+  props.providers
+    .map((provider) => ({ provider, presentation: presentProvider(provider) }))
+    .filter(
+      ({ provider, presentation }) =>
+        presentation.tone !== "neutral" ||
+        provider.availability === "no_credentials" ||
+        provider.availability === "unsupported",
+    ),
+);
+
+/** 状态点 tooltip：鼠标悬停整行（点＋刷新时间）打开，键盘 focus 状态点打开，Esc 或移开关闭。 */
+const tooltipOpen = ref(false);
+
+function retryText(provider: ProviderSnapshot): string | null {
+  const remaining = countdown(provider.retryAfter);
+  return remaining ? t("quota.retryIn", { time: remaining }) : null;
+}
 </script>
 
 <template>
@@ -93,15 +117,45 @@ const lastSuccess = computed(() => {
       >
         {{ title }}
       </component>
-      <p class="signal__meta numeric supporting">
+      <p
+        class="signal__meta numeric supporting"
+        :class="{ 'signal__meta--hoverable': explainables.length > 0 }"
+        @mouseenter="tooltipOpen = true"
+        @mouseleave="tooltipOpen = false"
+      >
         <span
-          class="signal__dot"
-          :class="`signal__dot--${dot}`"
+          class="signal__dot-wrap"
+          tabindex="0"
           role="img"
           :aria-label="dotText"
           :title="dotText"
-        />
-        {{ lastSuccess }}
+          @focus="tooltipOpen = true"
+          @blur="tooltipOpen = false"
+          @keydown.esc="tooltipOpen = false"
+        >
+          <span class="signal__dot" :class="`signal__dot--${dot}`" aria-hidden="true" />
+          <div v-if="tooltipOpen && explainables.length > 0" class="signal__tooltip" role="tooltip">
+            <ul class="signal__tooltip-list">
+              <li
+                v-for="item in explainables"
+                :key="item.provider.provider"
+                class="signal__tooltip-item"
+              >
+                <p class="signal__tooltip-name" translate="no">
+                  {{ providerLabel(t, item.provider.provider) }}
+                </p>
+                <p class="signal__tooltip-line">{{ t(item.presentation.titleKey) }}</p>
+                <p v-if="item.presentation.nextStepKey" class="signal__tooltip-line">
+                  {{ t(item.presentation.nextStepKey) }}
+                </p>
+                <p v-if="retryText(item.provider)" class="signal__tooltip-line numeric">
+                  {{ retryText(item.provider) }}
+                </p>
+              </li>
+            </ul>
+          </div>
+        </span>
+        <span class="signal__meta-text">{{ lastSuccess }}</span>
       </p>
     </div>
 
@@ -161,23 +215,30 @@ const lastSuccess = computed(() => {
 
 /*
  * 单行且省略：头部右侧的图标按钮组不收缩，副标题一换行就会把面板顶高
- * ——而这一行只是新鲜度，不值得为它多占一行。
+ * ——而这一行只是新鲜度，不值得为它多占一行。省略只落在文本上，
+ * 整行不能 overflow hidden，否则会裁掉状态点下方的 tooltip。
  */
-/* 副标题行：状态点与新鲜度是一句话（原型评审稿「● 刚刚已刷新」） */
 .signal__meta {
   display: flex;
   align-items: center;
   gap: 6px;
   margin: 1px 0 0;
   min-inline-size: 0;
-  overflow: hidden;
   font-size: 0.6875rem;
+  white-space: nowrap;
+}
+
+.signal__meta-text {
+  flex: 1 1 auto;
+  min-inline-size: 0;
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.signal__meta > span {
-  flex: 0 0 auto;
+/* 有异常可看时整行才是 tooltip 热区：help 光标暗示「悬停有说明」，无异常时保持默认 */
+.signal__meta--hoverable {
+  cursor: help;
 }
 
 .signal--full .signal__meta {
@@ -201,6 +262,19 @@ const lastSuccess = computed(() => {
   gap: var(--space-2);
 }
 
+/* 状态点：6px 视觉点外包 14px 热区，margin 抵消使视觉位置不变 */
+.signal__dot-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  inline-size: 14px;
+  block-size: 14px;
+  margin-inline: -4px;
+  border-radius: 50%;
+}
+
 .signal__dot {
   flex: 0 0 auto;
   inline-size: 6px;
@@ -219,5 +293,49 @@ const lastSuccess = computed(() => {
 
 .signal__dot--critical {
   background: var(--status-error);
+}
+
+/* 状态点 tooltip：悬浮说明，列表容纳多个 Provider 同时异常 */
+.signal__tooltip {
+  position: absolute;
+  inset-block-start: calc(100% + 4px);
+  inset-inline-start: 0;
+  z-index: 10;
+  inline-size: max-content;
+  max-inline-size: 15rem;
+  padding: 0.5rem 0.625rem;
+  color: var(--text-primary);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-small);
+  box-shadow: var(--shadow-lane);
+  font-size: 0.78125rem;
+  line-height: 1.5;
+}
+
+.signal__tooltip-list {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.signal__tooltip-item {
+  display: grid;
+  gap: 0.125rem;
+  min-inline-size: 0;
+}
+
+.signal__tooltip-name {
+  margin: 0;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.signal__tooltip-line {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.71875rem;
 }
 </style>

@@ -8,7 +8,6 @@ export default {
     settings: "Settings",
     quit: "Quit",
     details: "View details",
-    hideDetails: "Hide details",
     close: "Close",
     retry: "Retry",
   },

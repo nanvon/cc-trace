@@ -25,8 +25,10 @@ import {
 } from "../features/app/windows";
 import { useUsageStore } from "../features/usage/store";
 import { presentOverall } from "../lib/status";
+import { useTimeText } from "../lib/useTimeText";
 
 const { t } = useI18n();
+const { countdown } = useTimeText();
 const usage = useUsageStore();
 const { quota, settings } = useAppShell("compact");
 
@@ -43,6 +45,20 @@ const origin = computed(() => (settings.status?.platform === "macos" ? "top" : "
 const liveMessage = computed(() => {
   const leader = presentOverall(quota.ordered);
   return leader ? t(leader.presentation.titleKey) : "";
+});
+
+/**
+ * 任一 Provider 仍在退避期内：刷新按钮的 title／可访问名称给出限流提示，
+ * 避免「点了没反应」被误判为按钮损坏。不做常驻倒计时，只在悬停时可见。
+ */
+const refreshHint = computed(() => {
+  for (const provider of quota.ordered) {
+    const remaining = countdown(provider.retryAfter);
+    if (remaining !== null) {
+      return `${t("status.rateLimited")}，${t("quota.retryIn", { time: remaining })}`;
+    }
+  }
+  return null;
 });
 
 /** 用量扫描是独立状态；不能借额度状态点或转圈颜色让辅助技术猜测。 */
@@ -200,8 +216,8 @@ onBeforeUnmount(() => {
           <button
             type="button"
             class="button button--quiet button--icon button--sm"
-            :aria-label="t('a11y.refreshAll')"
-            :title="t('common.refresh')"
+            :aria-label="refreshHint ?? t('a11y.refreshAll')"
+            :title="refreshHint ?? t('common.refresh')"
             @click="quota.refresh()"
           >
             <RefreshIcon :spinning="quota.busy" />
