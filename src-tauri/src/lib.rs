@@ -63,6 +63,11 @@ pub fn run() {
             platform::autostart::apply(&handle, settings.launch_at_login);
             app.manage(Arc::clone(&core));
 
+            // macOS 上未激活应用的窗口不会成为 key window，「失焦关闭」不可靠，
+            // 由全局点击监听复刻 NSPopover 的 transient 行为，见 outside_click.rs。
+            #[cfg(target_os = "macos")]
+            platform::outside_click::install(&handle);
+
             // 缓存里已有快照时，菜单栏在第一次刷新完成前就显示上一份数值。
             core.emit_quota_state(&handle);
 
@@ -82,8 +87,14 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| match event {
-            // 点击面板外部即收起，与「点击外部关闭」的交互约定一致。
+            // 点击面板外部即收起，与「点击外部关闭」的交互约定一致。Windows 的
+            // 失焦事件可靠；macOS 上窗口未必成为 key，真正的关闭由
+            // `outside_click` 的全局监听负责，这里只作为兜底。
             WindowEvent::Focused(false) if window.label() == COMPACT_WINDOW => {
+                hide_compact(window.app_handle());
+            }
+            // 全局监听收不到本应用自己的点击：面板开着时点击主窗口，同样收起。
+            WindowEvent::Focused(true) if window.label() == MAIN_WINDOW => {
                 hide_compact(window.app_handle());
             }
             // 关闭窗口不等于退出应用：进程继续驻留系统区域。

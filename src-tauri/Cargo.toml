@@ -55,6 +55,15 @@ security-framework = "3"
 # tiny-skia + ab_glyph 排版：它能直接渲染现成的 Provider 标识 SVG 并用系统字体
 # 排文字，不需要自己处理字形布局。`tiny_skia` 与 `usvg` 由它 re-export。
 resvg = "0.45"
+# compact 面板「点击外部关闭」的全局监听，见 platform/outside_click.rs。
+# 三个 crate 都已随 tauri 的 macos-private-api 进入依赖树，这里提升为直接依赖：
+# AppKit 的 key window 语义要求未激活应用的窗口不会成为 key，「失焦关闭」因此
+# 不可靠，改由 NSEvent 全局监听复刻 NSPopover 的 transient 行为。
+objc2-app-kit = { version = "0.3", features = ["block2"] }
+objc2-foundation = { version = "0.3", features = ["objc2-core-foundation"] }
+# block2 与 objc2 由上面的 AppKit 绑定带来，直接依赖以便代码引用。
+block2 = "0.6"
+objc2 = "0.6"
 
 [dev-dependencies]
 tempfile = "3"
