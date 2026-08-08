@@ -8,7 +8,7 @@
  * 层级靠阴影表达，不用左侧色条。百分比读数的颜色来自余量分档（ADR-0017），
  * 状态由提示条承担——两者是独立的两个维度。
  */
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 
 import { useSettingsStore } from "../features/settings/store";
@@ -69,6 +69,18 @@ const showsExplanation = computed(() =>
     ? presentation.value.impactKey !== null
     : !showsRails.value || presentation.value.tone !== "neutral",
 );
+
+/**
+ * 异常解释的落脚点（ADR-0020「未解决问题」）：主窗口不再显示额度后，完整
+ * 「影响／下一步」由紧凑面板的异常 lane 展开承载——正常时保持紧凑形态，
+ * 出错时该条 lane 可展开出三级详情。窗口高度由 CompactView 的 ResizeObserver 跟随。
+ */
+const explanationExpanded = ref(false);
+const canExpandExplanation = computed(() => props.variant === "compact" && showsExplanation.value);
+
+function toggleExplanation(): void {
+  explanationExpanded.value = !explanationExpanded.value;
+}
 
 /* ---------- compact 分支（原型评审稿结构） ---------- */
 
@@ -321,12 +333,22 @@ function secondaryValueA11y(window: QuotaWindow): string {
       </div>
     </template>
 
-    <StatusExplanation
-      v-if="showsExplanation"
-      :provider="provider"
-      :presentation="presentation"
-      :variant="variant"
-    />
+    <div v-if="showsExplanation" class="lane__explain">
+      <StatusExplanation
+        :provider="provider"
+        :presentation="presentation"
+        :variant="canExpandExplanation && explanationExpanded ? 'full' : variant"
+      />
+      <button
+        v-if="canExpandExplanation"
+        type="button"
+        class="lane__details-toggle"
+        :aria-expanded="explanationExpanded"
+        @click="toggleExplanation"
+      >
+        {{ t(explanationExpanded ? "common.hideDetails" : "common.details") }}
+      </button>
+    </div>
   </article>
 </template>
 
@@ -475,8 +497,25 @@ function secondaryValueA11y(window: QuotaWindow): string {
   margin-block-start: 10px;
 }
 
-.lane--compact > .alert {
-  margin-block-start: 12px;
+.lane__explain {
+  display: grid;
+  gap: 0.5rem;
+  justify-items: start;
+}
+
+.lane__details-toggle {
+  min-block-size: 1.5rem;
+  padding: 0 0.375rem;
+  border: 0;
+  border-radius: var(--radius-control);
+  color: var(--text-secondary);
+  background: transparent;
+  font-size: 0.6875rem;
+}
+
+.lane__details-toggle:hover {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-secondary) 10%, transparent);
 }
 
 /* ---------- 身份行 ---------- */

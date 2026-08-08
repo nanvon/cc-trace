@@ -10,6 +10,7 @@ export default {
     settings: "设置",
     quit: "退出",
     details: "查看详情",
+    hideDetails: "收起详情",
     close: "关闭",
     retry: "重试",
   },
