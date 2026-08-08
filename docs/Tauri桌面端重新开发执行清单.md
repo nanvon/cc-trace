@@ -28,7 +28,7 @@
 | 14 完成首次初始化 | 未开始 | 依赖第 12 阶段 |
 | 15 业务结果验证 | 进行中 | 用量脱敏 Fixture 已验证；真实全量数据与既有 Provider 其余项待完成 |
 | 16 双平台验收 | 未开始 | 依赖第 13～15 阶段 |
-| 17 独立发布 | 基础设施提前进行中 | 自动打包已配置但尚未推送、实跑；正式公开仍依赖第 16 阶段 |
+| 17 独立发布 | 基础设施已实跑 | `v0.1.12` tag 触发 Release workflow 成功（2026-08-08），5 个分发产物＋`SHA256SUMS.txt`；真机验证待第 16 阶段 |
 
 阶段不是严格串行：第 5 阶段与第 6～11 阶段可以并行，但它是第 12、15 阶段的前置输入。第 5 阶段的事实产物是 [额度领域模型](额度领域模型.md)。
 
@@ -407,11 +407,14 @@
 - [x] 配置 macOS Apple Silicon、Intel 两个独立 DMG 与 ZIP，内含的 `.app` 使用 ad-hoc 签名且不上传个人证书。
 - [x] 配置 Windows x64 未签名 NSIS EXE。
 - [x] 配置自动生成 Release Notes 与 `SHA256SUMS.txt`。
-- [ ] 将新仓库推送到公开 GitHub 仓库，并完成第一次 workflow 实跑。
+- [x] 将新仓库推送到公开 GitHub 仓库，并完成第一次 workflow 实跑。（2026-08-08：`main` 推送
+      `d07c4f0`，`v0.1.12` tag 触发 Release workflow，github-actions 于 00:26–00:30 创建公开 Release：
+      macOS Apple Silicon／Intel 各 DMG＋ZIP（ad-hoc 签名）与 Windows x64 NSIS EXE（未签名），
+      共 5 个分发产物加 `SHA256SUMS.txt`（522 B）。发布页含 GitHub 自动 Release Notes。）
 - [ ] 在 Apple Silicon、Intel、Windows x64 真机分别验证 Release 产物。
 - [ ] 验证 macOS Gatekeeper 放行、版本更新后的钥匙串授权，以及 Windows SmartScreen。
-- [ ] 在新仓库创建独立 Release。
-- [ ] 明确说明新应用不是 Swift 版无损升级。
+- [x] 在新仓库创建独立 Release。（见上，公开 Release；是否为 Draft 由发布策略决定，当前 workflow 配置为直接公开）
+- [x] 明确说明新应用不是 Swift 版无损升级。（发布说明已写明 ad-hoc 签名与未签名提示）
 - [ ] 明确说明不迁移旧设置、缓存和账号。
 - [ ] 明确说明旧应用不会被自动卸载或清理。
 - [ ] 验证新应用未来版本之间的升级基础。
