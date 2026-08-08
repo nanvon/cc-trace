@@ -270,11 +270,13 @@ fn opencode_model_label(value: Option<&Value>) -> Option<String> {
     }
 }
 
-/// OpenCode `tokens` → 六维事实：reasoning 已包含在 output 中，只取 output（与 cc-bar 口径一致）。
+/// OpenCode `tokens` → 六维事实：`output` 字段不含 reasoning（`total = input + output + reasoning + cache`），
+/// 与 cc-bar 一致把 reasoning 并入 output，并单独记录 reasoning 明细（与 pi 口径一致）。
 fn opencode_tokens(tokens: Option<&Value>) -> Option<TokenFacts> {
     let tokens = tokens?;
     let input = non_negative(tokens.get("input"))?;
     let output = non_negative(tokens.get("output"))?;
+    let reasoning = non_negative(tokens.get("reasoning")).unwrap_or(0);
     let cache_read = tokens
         .get("cache")
         .and_then(|cache| non_negative(cache.get("read")).or(Some(0)))
@@ -285,8 +287,8 @@ fn opencode_tokens(tokens: Option<&Value>) -> Option<TokenFacts> {
         .unwrap_or(0);
     let facts = TokenFacts {
         uncached_input_tokens: input,
-        output_tokens: output,
-        reasoning_output_tokens: 0,
+        output_tokens: output.saturating_add(reasoning),
+        reasoning_output_tokens: reasoning,
         cache_read_input_tokens: cache_read,
         cache_write_5m_input_tokens: cache_write,
         cache_write_1h_input_tokens: 0,
@@ -397,7 +399,7 @@ mod tests {
                     "m2",
                     "sess-a",
                     1750000001000i64,
-                    r#"{"role":"assistant","providerID":"opencode-go","modelID":"deepseek-v4-flash","tokens":{"input":100,"output":20,"reasoning":5,"cache":{"read":10,"write":2},"total":132},"cost":"0.000456"}"#
+                    r#"{"role":"assistant","providerID":"opencode-go","modelID":"deepseek-v4-flash","tokens":{"input":100,"output":20,"reasoning":5,"cache":{"read":10,"write":2},"total":137},"cost":"0.000456"}"#
                 ],
             )
             .expect("insert assistant");
@@ -463,9 +465,9 @@ mod tests {
             .find(|row| row.key == "opencode")
             .expect("row");
         assert_eq!(row.entry_count, 2);
-        // m2: (100 + 10 + 2) + 20 = 132; m4: 4 + 2 = 6
-        assert_eq!(row.tokens.total_tokens, 138);
-        assert_eq!(row.tokens.reasoning_output_tokens, 0);
+        // m2: (100 + 10 + 2) + (20 + 5) = 137; m4: 4 + 2 = 6 → 143
+        assert_eq!(row.tokens.total_tokens, 143);
+        assert_eq!(row.tokens.reasoning_output_tokens, 5);
         assert_eq!(row.tokens.cache_read_input_tokens, 10);
         assert_eq!(row.tokens.cache_write_5m_input_tokens, 2);
         // 0.000456 * 1e9 + 0.000001 * 1e9

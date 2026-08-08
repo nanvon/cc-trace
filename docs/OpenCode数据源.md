@@ -34,8 +34,8 @@
 | 其余 | 不参与 |
 
 - 模型标签格式 `providerID/modelID`（如 `opencode-go/deepseek-v4-flash`），**variant 不拼入**；assistant 自身顶层字段优先，读不到时回退会话内最近一条 user 消息继承的模型，再兜底 `"unknown/unknown"`（避免增量扫描只追加 assistant 时标签丢失）。
-- `tokens` 结构：`input`、`output`、`reasoning`、`cache{read, write}`、`total`。
-- **`reasoning` 并入 `output`**（与 cc-bar 的 Claude／Codex「output 含 thinking」口径一致）。
+- `tokens` 结构：`input`、`output`、`reasoning`、`cache{read, write}`、`total`；**`total = input + output + reasoning + cache{read, write}`，`output` 字段不含 `reasoning`**。
+- **`reasoning` 并入 `output` 并单独记录 reasoning 明细**（总量与 cc-bar 一致：`output + reasoning`；与 pi 的口径一致）。
 - 零费用跳过：`tokens.total <= 0` 且 `cost` 为 `nil` 或 `0` 的消息（工具调用收尾等）不产生用量。
 - `cost` 是**美元小数**（Decimal），不是整数 nanos；经 String 中转避免 Double → Decimal 二进制浮点误差。
 
@@ -78,7 +78,7 @@
 
 | 项 | cc-bar 行为 | cc-trace 规则 | 处置 |
 |---|---|---|---|
-| 六维 Token 映射 | input/output/reasoning+cache{read,write} | uncached_input / output / reasoning_output / cache_read / cache_write_5m / cache_write_1h | input→uncached_input；output→output；**reasoning 已含在 output 中，reasoning_output=0**（2026-08-08 已决策，与 cc-bar 一致）；cache.write→cache_write_5m |
+| 六维 Token 映射 | input/output/reasoning+cache{read,write}（**output 不含 reasoning**，cc-bar 计为 `output + reasoning`） | uncached_input / output / reasoning_output / cache_read / cache_write_5m / cache_write_1h | input→uncached_input；output→**output + reasoning**，reasoning_output 单独记录明细（2026-08-08 修正，与 cc-bar 总量一致）；cache.write→cache_write_5m |
 | 零费用跳过 | total<=0 且 cost 为 nil/0 跳过 | 无 total 一致性校验 | **已应用**（2026-08-08）：沿用 cc-bar 跳过规则 |
 | 模型缺失 | 写字符串 `"unknown/unknown"` | 模型缺失写 `NULL`，禁止伪装 unknown | **已决策**：assistant 顶层 `providerID/modelID` → user 继承 → NULL |
 | 缺 cost | `costUSD = nil`、breakdown=nil，总额不降级 | 未定价费用为 `NULL`，不得按 0 | 一致，无冲突 |
