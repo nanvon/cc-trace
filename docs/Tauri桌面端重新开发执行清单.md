@@ -413,7 +413,7 @@
       共 5 个分发产物加 `SHA256SUMS.txt`（522 B）。发布页含 GitHub 自动 Release Notes。）
 - [ ] 在 Apple Silicon、Intel、Windows x64 真机分别验证 Release 产物。
 - [ ] 验证 macOS Gatekeeper 放行、版本更新后的钥匙串授权，以及 Windows SmartScreen。
-- [x] 在新仓库创建独立 Release。（见上，公开 Release；是否为 Draft 由发布策略决定，当前 workflow 配置为直接公开）
+- [x] 在新仓库创建独立 Release。（见上；2026-08-08 已按目标要求把 v0.1.12 Release 转为 **Draft**（`draft: true`），6 个资产保留：5 个分发产物＋`SHA256SUMS.txt`；正式公开时再点 Publish）
 - [x] 明确说明新应用不是 Swift 版无损升级。（发布说明已写明 ad-hoc 签名与未签名提示）
 - [ ] 明确说明不迁移旧设置、缓存和账号。
 - [ ] 明确说明旧应用不会被自动卸载或清理。
