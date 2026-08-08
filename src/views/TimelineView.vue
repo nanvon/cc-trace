@@ -19,7 +19,7 @@ import VChart from "vue-echarts";
 use([LineChart, GridComponent, TooltipComponent, CanvasRenderer]);
 
 import { navigateMain } from "../features/app/navigation";
-import { PROVIDER_ORDER, type QuotaWindowKind } from "../features/quota/contracts";
+import { PROVIDER_ORDER, type ProviderId, type QuotaWindowKind } from "../features/quota/contracts";
 import {
   activeSeriesByProvider,
   latestEvent,
@@ -80,13 +80,14 @@ function deltaText(series: QuotaSeries, now: Date): string {
   return `${sign}${delta}%`;
 }
 
-function chartOption(series: QuotaSeries): EChartsOption {
+function chartOption(series: QuotaSeries, provider: ProviderId): EChartsOption {
   void themeVersion.value;
   const colors = usageChartColors();
   const points = series.points;
+  const providerColor = colors[provider];
   return {
     animation: false,
-    color: [colors.codex],
+    color: [providerColor],
     grid: { bottom: 26, containLabel: true, left: 8, right: 8, top: 8 },
     textStyle: { color: colors.text, fontFamily: colors.fontFamily },
     tooltip: {
@@ -134,8 +135,8 @@ function chartOption(series: QuotaSeries): EChartsOption {
     series: [
       {
         data: points.map((point) => [formatTime(point.observedAt), point.remainingPercent]),
-        itemStyle: { color: colors.codex },
-        lineStyle: { color: colors.codex, width: 2 },
+        itemStyle: { color: providerColor },
+        lineStyle: { color: providerColor, width: 2 },
         name: t("timeline.remaining"),
         showSymbol: points.length <= 40,
         type: "line",
@@ -230,7 +231,11 @@ onBeforeUnmount(() => {
             role="img"
             :aria-label="t('a11y.timelineChart', { provider: t(`provider.${section.provider}`) })"
           >
-            <VChart class="timeline__canvas" :option="chartOption(section.series)" autoresize />
+            <VChart
+              class="timeline__canvas"
+              :option="chartOption(section.series, section.provider)"
+              autoresize
+            />
           </div>
 
           <div class="timeline__table-wrap">

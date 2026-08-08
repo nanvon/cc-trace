@@ -628,7 +628,8 @@ impl UsageDb {
                         uncached_input_tokens, output_tokens, reasoning_output_tokens,
                         cache_read_input_tokens, cache_write_5m_input_tokens,
                         cache_write_1h_input_tokens
-                   FROM usage_entries",
+                   FROM usage_entries
+                  WHERE source IN ('codex', 'claude')",
             )?;
             let rows = statement.query_map([], reprice_row)?;
             rows.collect::<Result<Vec<_>, _>>()?
@@ -711,7 +712,8 @@ impl UsageDb {
         let mut statement = connection.prepare(
             "SELECT DISTINCT source, model, speed
                FROM usage_entries
-              WHERE api_equivalent_cost_nanos IS NULL
+              WHERE source IN ('codex', 'claude')
+                AND api_equivalent_cost_nanos IS NULL
                 AND model IS NOT NULL
                 AND TRIM(model) <> ''
                 AND speed <> 'unknown'",
@@ -734,7 +736,8 @@ impl UsageDb {
         let mut statement = connection.prepare(
             "SELECT DISTINCT source, model, speed
                FROM usage_entries
-              WHERE model IS NOT NULL
+              WHERE source IN ('codex', 'claude')
+                AND model IS NOT NULL
                 AND TRIM(model) <> ''
                 AND speed <> 'unknown'",
         )?;
@@ -2390,5 +2393,66 @@ mod tests {
         assert_eq!(result.updated_entries, 1);
         assert_eq!(result.priced_entries, 1);
         assert_eq!(result.unpriced_entries, 0);
+    }
+
+    #[test]
+    fn repricing_never_touches_pi_or_opencode_cost() {
+        let (_dir, database) = database();
+
+        let mut codex_batch = sample_batch("codex-reprice");
+        codex_batch.entries[0].api_equivalent_cost_nanos = None;
+        codex_batch.entries[0].pricing_fingerprint = None;
+        database
+            .commit_scan_batch(
+                "file-codex",
+                UsageSource::Codex,
+                1,
+                1,
+                1,
+                "prefix",
+                None,
+                false,
+                &codex_batch,
+            )
+            .expect("codex");
+
+        // Pi 行：自带真实 cost，必须原样保留。
+        let mut pi_batch = sample_batch("pi-reprice");
+        pi_batch.entries[0].source = UsageSource::Pi;
+        pi_batch.entries[0].api_equivalent_cost_nanos = Some(42_000);
+        pi_batch.entries[0].pricing_fingerprint = None;
+        database
+            .commit_scan_batch(
+                "file-pi",
+                UsageSource::Pi,
+                1,
+                1,
+                1,
+                "prefix",
+                None,
+                false,
+                &pi_batch,
+            )
+            .expect("pi");
+
+        let result = database
+            .reprice(&PricingCatalog::bundled())
+            .expect("reprice");
+
+        // 只有 codex 行被重算；pi 行不参与。
+        assert_eq!(result.updated_entries, 1);
+        assert_eq!(result.priced_entries, 1);
+        assert_eq!(result.unpriced_entries, 0);
+
+        let pi_cost: Option<i64> = database
+            .open_read()
+            .expect("read")
+            .query_row(
+                "SELECT api_equivalent_cost_nanos FROM usage_entries WHERE source = 'pi'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("pi cost");
+        assert_eq!(pi_cost, Some(42_000), "pi 的真实 cost 不得被重计价覆盖");
     }
 }

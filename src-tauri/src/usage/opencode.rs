@@ -187,13 +187,16 @@ pub fn scan_opencode(db: &UsageDb, db_path: &Path) -> Result<OpencodeScanOutcome
 fn load_part_titles(connection: &Connection) -> HashMap<String, Option<String>> {
     let mut titles = HashMap::new();
     let Ok(mut statement) = connection.prepare(
-        "SELECT p.session_id, p.data
-           FROM part p
-           JOIN (
-             SELECT session_id, MIN(time_created) AS mt, MIN(id) AS mid
+        "SELECT session_id, data
+           FROM (
+             SELECT session_id, data,
+                    ROW_NUMBER() OVER (
+                      PARTITION BY session_id
+                      ORDER BY time_created, id
+                    ) AS row_num
                FROM part
-              GROUP BY session_id
-           ) x ON p.session_id = x.session_id AND p.time_created = x.mt AND p.id = x.mid",
+           )
+          WHERE row_num = 1",
     ) else {
         return titles;
     };

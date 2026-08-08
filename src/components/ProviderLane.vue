@@ -35,6 +35,7 @@ const props = defineProps<{
 }>();
 
 const { t, locale } = useI18n();
+const settingsStore = useSettingsStore();
 const { reset } = useTimeText();
 const presentation = computed(() => presentProvider(props.provider));
 const name = computed(() => providerLabel(t, props.provider.provider));
@@ -50,7 +51,7 @@ const plan = computed(() => {
   return value ? planLabel(value) : null;
 });
 /** 隐私模式：仅隐藏紧凑入口的账号标识，不承诺隐私隔离（cc-bar F-24 边界）。 */
-const privacyMode = computed(() => useSettingsStore().settings?.privacyMode ?? false);
+const privacyMode = computed(() => settingsStore.settings?.privacyMode ?? false);
 const account = computed(() =>
   privacyMode.value ? null : (props.provider.identity?.accountHint ?? null),
 );

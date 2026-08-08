@@ -60,12 +60,14 @@ const allServicesOff = computed(() => visibleSources.value.length === 0);
 const total = computed(() => page.value?.total ?? 0);
 const hasNext = computed(() => (offset.value + 1) * PAGE_SIZE < total.value);
 const hasPrevious = computed(() => offset.value > 0);
+let loadRequest = 0;
 
 async function load(): Promise<void> {
+  const request = ++loadRequest;
   loading.value = true;
   unavailable.value = false;
   try {
-    page.value = await listConversations({
+    const result = await listConversations({
       filter: {
         from: null,
         to: null,
@@ -81,10 +83,17 @@ async function load(): Promise<void> {
       limit: PAGE_SIZE,
       offset: offset.value,
     });
+    if (request === loadRequest) {
+      page.value = result;
+    }
   } catch {
-    unavailable.value = true;
+    if (request === loadRequest) {
+      unavailable.value = true;
+    }
   } finally {
-    loading.value = false;
+    if (request === loadRequest) {
+      loading.value = false;
+    }
   }
 }
 
@@ -94,12 +103,14 @@ function submitSearch(): void {
   void load();
 }
 
-function changeSource(): void {
+function changeSource(event: Event): void {
+  source.value = (event.target as HTMLSelectElement).value as "all" | UsageSource;
   offset.value = 0;
   void load();
 }
 
-function changeSort(): void {
+function changeSort(event: Event): void {
+  sort.value = (event.target as HTMLSelectElement).value as UsageConversationSort;
   offset.value = 0;
   void load();
 }
@@ -157,7 +168,9 @@ function pageLabel(): string {
 }
 
 onMounted(() => {
-  void load();
+  if (visibleSources.value.length > 0) {
+    void load();
+  }
 });
 </script>
 

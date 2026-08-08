@@ -112,15 +112,17 @@ onMounted(async () => {
     return;
   }
   try {
-    const [detail, parts] = await Promise.all([
-      getConversation(key),
-      getConversationBreakdown(key),
-    ]);
+    const detail = await getConversation(key);
     if (!detail) {
       missing.value = true;
     } else {
       conversation.value = detail;
-      breakdown.value = parts;
+      // 拆分表失败只降级为空表，不让整页不可用。
+      try {
+        breakdown.value = await getConversationBreakdown(key);
+      } catch {
+        breakdown.value = null;
+      }
     }
   } catch {
     unavailable.value = true;
