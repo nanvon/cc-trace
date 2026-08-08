@@ -75,11 +75,12 @@ function compactNumber(
   value: number,
   unit: string,
   scale: number,
+  maximumFractionDigits = 0,
 ): UsageTokenDisplay {
   const scaled = Math.max(0, value) / scale;
   return {
     value: new Intl.NumberFormat(locale, {
-      maximumFractionDigits: 0,
+      maximumFractionDigits,
       minimumFractionDigits: 0,
     }).format(scaled),
     unit,
@@ -87,17 +88,17 @@ function compactNumber(
   };
 }
 
-/** 主窗口用量页的 Token 读数：中文使用万／亿，英文使用 K／M／B，紧凑值不显示小数。 */
+/** 主窗口用量页的 Token 读数：中文使用万／亿，英文使用 K／M／B，紧凑值保留两位小数（去尾零）。 */
 export function presentUsageTokens(locale: string, value: number): UsageTokenDisplay {
   if (locale.toLowerCase().startsWith("zh")) {
-    if (value >= 100_000_000) return compactNumber(locale, value, "亿", 100_000_000);
-    if (value >= 10_000) return compactNumber(locale, value, "万", 10_000);
+    if (value >= 100_000_000) return compactNumber(locale, value, "亿", 100_000_000, 2);
+    if (value >= 10_000) return compactNumber(locale, value, "万", 10_000, 2);
     return compactNumber(locale, value, "", 1);
   }
 
-  if (value >= 1_000_000_000) return compactNumber(locale, value, "B", 1_000_000_000);
-  if (value >= 1_000_000) return compactNumber(locale, value, "M", 1_000_000);
-  if (value >= 1_000) return compactNumber(locale, value, "K", 1_000);
+  if (value >= 1_000_000_000) return compactNumber(locale, value, "B", 1_000_000_000, 2);
+  if (value >= 1_000_000) return compactNumber(locale, value, "M", 1_000_000, 2);
+  if (value >= 1_000) return compactNumber(locale, value, "K", 1_000, 2);
   return compactNumber(locale, value, "", 1);
 }
 

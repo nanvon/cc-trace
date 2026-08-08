@@ -110,7 +110,7 @@ describe("presentUsageCost", () => {
 });
 
 describe("main usage presentation", () => {
-  it("keeps compact token units as integers and the cache-hit denominator", () => {
+  it("keeps compact token units with up to two fraction digits and the cache-hit denominator", () => {
     const tokens = {
       ...EMPTY_TOKENS,
       inputTokens: 1_000,
@@ -119,11 +119,15 @@ describe("main usage presentation", () => {
     };
 
     expect(presentUsageTokens("zh-CN", 595_000_000)).toMatchObject({
-      value: "6",
+      value: "5.95",
+      unit: "亿",
+    });
+    expect(presentUsageTokens("zh-CN", 400_000_000)).toMatchObject({
+      value: "4",
       unit: "亿",
     });
     expect(presentUsageTokens("en", 1_200_000)).toMatchObject({
-      value: "1",
+      value: "1.2",
       unit: "M",
     });
     expect(usageCacheHitRate(tokens)).toBe(84);

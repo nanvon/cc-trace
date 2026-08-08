@@ -4,12 +4,11 @@
  *
  * 不承载额度详情、账号操作或 Provider 登录，见 `docs/信息架构与核心流程.md` 第 7 节。
  * 保存成功立即生效；写入失败时**保留原值**并明确提示。
+ * 导航由侧边栏承担（ADR-0024）：本视图不再提供「返回用量」按钮。
  */
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { useRoute, useRouter } from "vue-router";
 
-import { navigateMain } from "../features/app/navigation";
 import { refreshPricingCatalog } from "../features/usage/api";
 import {
   APPEARANCE_OPTIONS,
@@ -32,8 +31,6 @@ const STATS_SERVICE_SOURCES: readonly StatsServiceSource[] = [
 ] as const;
 
 const { t } = useI18n();
-const route = useRoute();
-const router = useRouter();
 const settings = useSettingsStore();
 const pricingRefreshState = ref<"idle" | "success" | "partial" | "failure">("idle");
 const pricingRefreshPending = ref(false);
@@ -68,32 +65,20 @@ const APPEARANCE_LABEL: Record<AppearancePreference, string> = {
 /**
  * 写入失败时 store 保持原值，这里把控件也拉回去——否则用户会以为已经改成功了。
  */
-async function commit(event: Event, key: "refreshInterval" | "language" | "appearance") {
-  const select = event.target as HTMLSelectElement;
-  await settings.update({ [key]: select.value } as SettingsUpdate);
-  if (current.value) {
-    select.value = current.value[key];
-  }
+async function commitSelect(
+  key: "refreshInterval" | "language" | "appearance",
+  value: string,
+): Promise<void> {
+  await settings.update({ [key]: value } as SettingsUpdate);
 }
 
-async function commitLaunchAtLogin(event: Event) {
-  const checkbox = event.target as HTMLInputElement;
-  await settings.update({ launchAtLogin: checkbox.checked });
-  if (current.value) {
-    checkbox.checked = current.value.launchAtLogin;
-  }
+async function commitToggle(key: "launchAtLogin" | "privacyMode", checked: boolean): Promise<void> {
+  await settings.update({ [key]: checked });
+  if (!current.value) return;
+  // 写入失败时 store 保持原值，控件由 :checked 绑定自然回到原值。
 }
 
-async function commitPrivacyMode(event: Event) {
-  const checkbox = event.target as HTMLInputElement;
-  await settings.update({ privacyMode: checkbox.checked });
-  if (current.value) {
-    checkbox.checked = current.value.privacyMode;
-  }
-}
-
-async function commitStatsService(event: Event, source: StatsServiceSource) {
-  const checkbox = event.target as HTMLInputElement;
+async function commitStatsService(source: StatsServiceSource, checked: boolean): Promise<void> {
   const visibility: UsageServiceVisibility = {
     codex: true,
     claude: true,
@@ -101,11 +86,8 @@ async function commitStatsService(event: Event, source: StatsServiceSource) {
     opencode: true,
     ...(current.value?.usageServiceVisibility ?? {}),
   };
-  visibility[source] = checkbox.checked;
+  visibility[source] = checked;
   await settings.update({ usageServiceVisibility: visibility });
-  if (current.value) {
-    checkbox.checked = current.value.usageServiceVisibility[source];
-  }
 }
 
 async function updatePricingCatalog(): Promise<void> {
@@ -121,21 +103,12 @@ async function updatePricingCatalog(): Promise<void> {
     pricingRefreshPending.value = false;
   }
 }
-
-function returnToUsage(): void {
-  const focusTarget = route.query.origin === "quota" ? "settings-trigger" : "usage-title";
-  void navigateMain(router, "quota", focusTarget);
-}
 </script>
 
 <template>
-  <main class="settings">
+  <main class="settings" :aria-label="t('a11y.settingsRegion')">
     <div class="settings__inner">
       <header class="settings__header">
-        <button type="button" class="button button--quiet settings__back" @click="returnToUsage">
-          <span aria-hidden="true">←</span>
-          {{ t("settings.backToUsage") }}
-        </button>
         <h1 id="main-settings-title" tabindex="-1">{{ t("settings.title") }}</h1>
       </header>
 
@@ -145,143 +118,167 @@ function returnToUsage(): void {
           <span>{{ t("error.settingsWriteFailed.nextStep") }}</span>
         </p>
 
-        <section class="settings__group">
+        <section class="sw-group">
           <h2>{{ t("settings.general") }}</h2>
+          <div class="card sw-card">
+            <div class="sw-row">
+              <span class="sw-label">{{ t("settings.refreshInterval") }}</span>
+              <select
+                name="refresh-interval"
+                :value="current.refreshInterval"
+                autocomplete="off"
+                @change="
+                  commitSelect('refreshInterval', ($event.target as HTMLSelectElement).value)
+                "
+              >
+                <option v-for="option in REFRESH_INTERVAL_OPTIONS" :key="option" :value="option">
+                  {{ t(INTERVAL_LABEL[option]) }}
+                </option>
+              </select>
+            </div>
 
-          <label class="settings__row">
-            <span>{{ t("settings.refreshInterval") }}</span>
-            <select
-              name="refresh-interval"
-              :value="current.refreshInterval"
-              autocomplete="off"
-              @change="commit($event, 'refreshInterval')"
-            >
-              <option v-for="option in REFRESH_INTERVAL_OPTIONS" :key="option" :value="option">
-                {{ t(INTERVAL_LABEL[option]) }}
-              </option>
-            </select>
-          </label>
+            <div class="sw-row">
+              <span class="sw-label">{{ t("settings.launchAtLogin") }}</span>
+              <button
+                type="button"
+                class="toggle"
+                :class="{ off: !current.launchAtLogin }"
+                role="switch"
+                :aria-checked="current.launchAtLogin"
+                @click="commitToggle('launchAtLogin', !current.launchAtLogin)"
+              >
+                <span class="visually-hidden">{{ t("settings.launchAtLogin") }}</span>
+              </button>
+            </div>
 
-          <label class="settings__row settings__row--check">
-            <input
-              type="checkbox"
-              name="launch-at-login"
-              :checked="current.launchAtLogin"
-              @change="commitLaunchAtLogin($event)"
-            />
-            <span>{{ t("settings.launchAtLogin") }}</span>
-          </label>
-
-          <label class="settings__row settings__row--check">
-            <input
-              type="checkbox"
-              name="privacy-mode"
-              :checked="current.privacyMode"
-              @change="commitPrivacyMode($event)"
-            />
-            <span>
-              {{ t("settings.privacyMode") }}
-              <span class="supporting">{{ t("settings.privacyModeDescription") }}</span>
-            </span>
-          </label>
+            <div class="sw-row">
+              <span class="sw-label">
+                {{ t("settings.privacyMode") }}
+                <span class="sw-desc">{{ t("settings.privacyModeDescription") }}</span>
+              </span>
+              <button
+                type="button"
+                class="toggle"
+                :class="{ off: !current.privacyMode }"
+                role="switch"
+                :aria-checked="current.privacyMode"
+                @click="commitToggle('privacyMode', !current.privacyMode)"
+              >
+                <span class="visually-hidden">{{ t("settings.privacyMode") }}</span>
+              </button>
+            </div>
+          </div>
         </section>
 
-        <section class="settings__group">
-          <h2>{{ t("settings.usageAndPricing") }}</h2>
+        <section class="sw-group">
+          <h2>{{ t("settings.appearanceAndLanguage") }}</h2>
+          <div class="card sw-card">
+            <div class="sw-row">
+              <span class="sw-label">{{ t("settings.language") }}</span>
+              <div class="segmented" role="group" :aria-label="t('settings.language')">
+                <button
+                  v-for="option in LANGUAGE_OPTIONS"
+                  :key="option"
+                  type="button"
+                  :class="{ on: current.language === option }"
+                  :aria-pressed="current.language === option"
+                  @click="commitSelect('language', option)"
+                >
+                  {{ t(LANGUAGE_LABEL[option]) }}
+                </button>
+              </div>
+            </div>
 
-          <div class="settings__row settings__row--action">
-            <span class="settings__action-copy">
-              <span>{{ t("settings.pricingCatalog") }}</span>
-              <span class="supporting">{{ t("settings.pricingCatalogDescription") }}</span>
-            </span>
-            <button
-              type="button"
-              class="button button--flat"
-              :disabled="pricingRefreshPending"
-              @click="updatePricingCatalog"
+            <div class="sw-row">
+              <span class="sw-label">{{ t("settings.appearance") }}</span>
+              <div class="segmented" role="group" :aria-label="t('settings.appearance')">
+                <button
+                  v-for="option in APPEARANCE_OPTIONS"
+                  :key="option"
+                  type="button"
+                  :class="{ on: current.appearance === option }"
+                  :aria-pressed="current.appearance === option"
+                  @click="commitSelect('appearance', option)"
+                >
+                  {{ t(APPEARANCE_LABEL[option]) }}
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="sw-group">
+          <h2>{{ t("settings.usageAndPricing") }}</h2>
+          <div class="card sw-card">
+            <div class="sw-row sw-row--action">
+              <span class="sw-label">
+                {{ t("settings.pricingCatalog") }}
+                <span class="sw-desc">{{ t("settings.pricingCatalogDescription") }}</span>
+              </span>
+              <button
+                type="button"
+                class="flat-btn"
+                :disabled="pricingRefreshPending"
+                @click="updatePricingCatalog"
+              >
+                {{
+                  pricingRefreshPending
+                    ? t("settings.pricingCatalogUpdating")
+                    : t("settings.pricingCatalogUpdate")
+                }}
+              </button>
+            </div>
+            <p
+              v-if="pricingRefreshState !== 'idle'"
+              class="settings__action-status supporting"
+              :class="{ 'settings__action-status--error': pricingRefreshState === 'failure' }"
+              aria-live="polite"
             >
               {{
-                pricingRefreshPending
-                  ? t("settings.pricingCatalogUpdating")
-                  : t("settings.pricingCatalogUpdate")
+                pricingRefreshState === "success"
+                  ? t("settings.pricingCatalogUpdated")
+                  : pricingRefreshState === "partial"
+                    ? t("settings.pricingCatalogPartiallyUpdated")
+                    : t("settings.pricingCatalogUpdateFailed")
               }}
-            </button>
+            </p>
           </div>
-          <p
-            v-if="pricingRefreshState !== 'idle'"
-            class="settings__action-status supporting"
-            :class="{ 'settings__action-status--error': pricingRefreshState === 'failure' }"
-            aria-live="polite"
-          >
-            {{
-              pricingRefreshState === "success"
-                ? t("settings.pricingCatalogUpdated")
-                : pricingRefreshState === "partial"
-                  ? t("settings.pricingCatalogPartiallyUpdated")
-                  : t("settings.pricingCatalogUpdateFailed")
-            }}
-          </p>
         </section>
 
-        <section class="settings__group">
+        <section class="sw-group">
           <h2>{{ t("settings.statsServices") }}</h2>
           <p class="supporting settings__group-description">
             {{ t("settings.statsServicesDescription") }}
           </p>
-
-          <label
-            v-for="source in STATS_SERVICE_SOURCES"
-            :key="source"
-            class="settings__row settings__row--check"
-          >
-            <input
-              type="checkbox"
-              :name="`stats-service-${source}`"
-              :checked="current.usageServiceVisibility[source]"
-              @change="commitStatsService($event, source)"
-            />
-            <span>{{ t(`provider.${source}`) }}</span>
-          </label>
+          <div class="card sw-card">
+            <div
+              v-for="source in STATS_SERVICE_SOURCES"
+              :key="source"
+              class="sw-row sw-row--toggle"
+            >
+              <span class="sw-label">{{ t(`provider.${source}`) }}</span>
+              <button
+                type="button"
+                class="toggle"
+                :class="{ off: !current.usageServiceVisibility[source] }"
+                role="switch"
+                :aria-checked="current.usageServiceVisibility[source]"
+                @click="commitStatsService(source, !current.usageServiceVisibility[source])"
+              >
+                <span class="visually-hidden">{{ t(`provider.${source}`) }}</span>
+              </button>
+            </div>
+          </div>
         </section>
 
-        <section class="settings__group">
-          <h2>{{ t("settings.appearanceAndLanguage") }}</h2>
-
-          <label class="settings__row">
-            <span>{{ t("settings.language") }}</span>
-            <select
-              name="language"
-              :value="current.language"
-              autocomplete="off"
-              @change="commit($event, 'language')"
-            >
-              <option v-for="option in LANGUAGE_OPTIONS" :key="option" :value="option">
-                {{ t(LANGUAGE_LABEL[option]) }}
-              </option>
-            </select>
-          </label>
-
-          <label class="settings__row">
-            <span>{{ t("settings.appearance") }}</span>
-            <select
-              name="appearance"
-              :value="current.appearance"
-              autocomplete="off"
-              @change="commit($event, 'appearance')"
-            >
-              <option v-for="option in APPEARANCE_OPTIONS" :key="option" :value="option">
-                {{ t(APPEARANCE_LABEL[option]) }}
-              </option>
-            </select>
-          </label>
-        </section>
-
-        <section class="settings__group">
+        <section class="sw-group">
           <h2>{{ t("settings.about") }}</h2>
-          <p class="settings__version numeric">
-            {{ t("settings.version", { version: settings.version }) }}
-          </p>
-          <p class="settings__privacy supporting">{{ t("settings.privacy") }}</p>
+          <div class="card sw-card sw-about">
+            <p class="settings__version numeric">
+              {{ t("settings.version", { version: settings.version }) }}
+            </p>
+            <p class="settings__privacy supporting">{{ t("settings.privacy") }}</p>
+          </div>
         </section>
       </template>
     </div>
@@ -299,7 +296,7 @@ function returnToUsage(): void {
   display: grid;
   align-content: start;
   gap: var(--space-6);
-  inline-size: min(100%, 32.5rem);
+  inline-size: min(100%, 40rem);
   margin-inline: auto;
 }
 
@@ -307,72 +304,75 @@ function returnToUsage(): void {
   display: grid;
   justify-items: start;
   gap: var(--space-4);
-}
-
-.settings__back {
-  margin-inline-start: calc(var(--space-4) * -1);
+  padding-block-end: 0.75rem;
+  margin-block-end: 0.5rem;
+  border-block-end: 1px solid var(--border-subtle);
 }
 
 h1 {
   margin: 0;
-  font-size: 1.5rem;
-  font-weight: 620;
-  letter-spacing: -0.02em;
+  font-size: 1.25rem;
+  font-weight: 680;
+  letter-spacing: -0.025em;
+  line-height: 1.15;
 }
 
-h2 {
-  margin: 0;
-  font-size: 0.875rem;
-  font-weight: 620;
-}
-
-.settings__group {
+.sw-group {
   display: grid;
-  gap: var(--space-4);
-  padding-block-start: var(--space-5);
-  border-block-start: 1px solid var(--border-subtle);
-}
-
-.settings__row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(9rem, auto);
-  align-items: center;
-  gap: var(--space-4);
-  min-block-size: 2.5rem;
-}
-
-.settings__row--check {
-  display: flex;
   gap: var(--space-3);
 }
 
-.settings__row--action {
+.sw-group > h2 {
+  margin: 0 0 0 0.125rem;
+  color: var(--text-secondary);
+  font-size: 0.6875rem;
+  font-weight: 680;
+  letter-spacing: 0.04em;
+}
+
+.sw-card {
+  padding: 0.25rem 0;
+  background: var(--surface-raised);
+  border: 1px solid color-mix(in srgb, var(--border-subtle) 80%, transparent);
+  border-radius: 0.875rem;
+  box-shadow: var(--shadow-lane);
+}
+
+.sw-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem 1rem;
+  min-block-size: 3rem;
+}
+
+.sw-row + .sw-row {
+  border-block-start: 1px solid color-mix(in srgb, var(--border-subtle) 65%, transparent);
+}
+
+.sw-row--action {
   align-items: start;
 }
 
-.settings__action-copy {
+.sw-label {
   display: grid;
-  gap: var(--space-1);
-  min-inline-size: 0;
-}
-
-.settings__action-copy .supporting,
-.settings__action-status {
+  gap: 0.25rem;
   font-size: 0.8125rem;
+  font-weight: 550;
+  line-height: 1.35;
+}
+
+.sw-desc {
+  color: var(--text-secondary);
+  font-size: 0.71875rem;
+  font-weight: 400;
   line-height: 1.5;
-  overflow-wrap: anywhere;
-}
-
-.settings__action-status {
-  margin: calc(var(--space-2) * -1) 0 0;
-}
-
-.settings__action-status--error {
-  color: var(--status-error);
+  max-inline-size: 22.5rem;
 }
 
 select {
-  min-block-size: 2.5rem;
+  min-block-size: 2rem;
   padding: 0 var(--space-2);
   color: var(--text-primary);
   background-color: var(--surface-raised);
@@ -380,10 +380,113 @@ select {
   border-radius: var(--radius-small);
 }
 
-input[type="checkbox"] {
-  inline-size: 1rem;
-  block-size: 1rem;
-  accent-color: var(--action-primary);
+.segmented {
+  display: inline-flex;
+  flex: none;
+  padding: 0.1875rem;
+  border-radius: 0.5625rem;
+  background: var(--track-background);
+}
+
+.segmented button {
+  min-block-size: 1.625rem;
+  padding: 0 0.6875rem;
+  border: 0;
+  border-radius: 0.375rem;
+  color: var(--text-secondary);
+  background: transparent;
+  font-size: 0.6875rem;
+  white-space: nowrap;
+}
+
+.segmented button:hover {
+  color: var(--text-primary);
+}
+
+.segmented button.on {
+  color: var(--text-primary);
+  background: var(--surface-raised);
+  box-shadow: 0 1px 3px rgb(16 16 20 / 12%);
+  font-weight: 570;
+}
+
+/* 40 × 24 开关（产物 toggle），off 态用轨道色 */
+.toggle {
+  position: relative;
+  flex: none;
+  inline-size: 2.5rem;
+  block-size: 1.5rem;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: var(--status-success);
+  cursor: pointer;
+}
+
+.toggle::after {
+  content: "";
+  position: absolute;
+  inset-block-start: 0.125rem;
+  inset-inline-end: 0.125rem;
+  inline-size: 1.25rem;
+  block-size: 1.25rem;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 25%);
+  transition: inset-inline-start var(--motion-fast) var(--ease-out);
+}
+
+.toggle.off {
+  background: var(--track-background);
+}
+
+.toggle.off::after {
+  inset-inline-end: auto;
+  inset-inline-start: 0.125rem;
+}
+
+.toggle:hover {
+  filter: brightness(1.05);
+}
+
+.flat-btn {
+  flex: none;
+  min-block-size: 2.25rem;
+  padding: 0 0.875rem;
+  border: 0;
+  border-radius: 0.5625rem;
+  color: var(--text-primary);
+  background: var(--track-background);
+  font-size: 0.75rem;
+  font-weight: 570;
+  white-space: nowrap;
+}
+
+.flat-btn:hover {
+  background: color-mix(in srgb, var(--text-primary) 12%, var(--track-background));
+}
+
+.flat-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.settings__group-description {
+  margin: 0;
+  font-size: 0.71875rem;
+  line-height: 1.5;
+}
+
+.settings__action-status {
+  margin: 0;
+  padding: 0 1rem 0.75rem;
+  font-size: 0.71875rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.settings__action-status--error {
+  color: var(--status-error);
 }
 
 .settings__error {
@@ -402,6 +505,12 @@ input[type="checkbox"] {
   color: var(--text-secondary);
 }
 
+.sw-about {
+  display: grid;
+  gap: var(--space-2);
+  padding: 0.75rem 1rem;
+}
+
 .settings__version {
   margin: 0;
   font-size: 0.8125rem;
@@ -409,27 +518,25 @@ input[type="checkbox"] {
 
 .settings__privacy {
   margin: 0;
-  font-size: 0.8125rem;
+  font-size: 0.71875rem;
   line-height: 1.6;
 }
 
-@media (max-width: 520px) {
-  .settings__row:not(.settings__row--check) {
-    grid-template-columns: 1fr;
-    gap: var(--space-2);
+@media (prefers-reduced-motion: no-preference) {
+  .segmented button,
+  .toggle,
+  .flat-btn {
+    transition:
+      background-color var(--motion-fast) var(--ease-out),
+      color var(--motion-fast) var(--ease-out),
+      filter var(--motion-fast) var(--ease-out),
+      scale var(--motion-fast) var(--ease-out);
   }
 
-  select {
-    inline-size: 100%;
-  }
-
-  .settings__row--action {
-    grid-template-columns: 1fr;
-    gap: var(--space-3);
-  }
-
-  .settings__row--action .button {
-    inline-size: 100%;
+  .segmented button:active,
+  .toggle:active,
+  .flat-btn:active {
+    scale: 0.96;
   }
 }
 </style>

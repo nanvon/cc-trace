@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Playwright CLI 调试产物（截图 / 页面快照 / 控制台日志）
+.playwright-cli/

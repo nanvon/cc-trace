@@ -134,6 +134,45 @@ describe("usage store", () => {
     expect(sources).toEqual(["codex", "claude", "codex", "claude"]);
   });
 
+  it("narrows dashboard queries to the selected source (global filter, not persisted)", async () => {
+    vi.mocked(getUsageScanStatus).mockResolvedValue(idleStatus("2026-07-30T10:00:00Z"));
+    const store = useUsageStore();
+
+    expect(store.sourceFilter).toBe("all");
+    store.selectSource("claude");
+    expect(store.sourceFilter).toBe("claude");
+    expect(store.dashboardSources).toEqual(["claude"]);
+
+    await store.loadDashboard(usageDashboardRanges(new Date(2026, 6, 30)).thisMonth);
+
+    const sources = vi
+      .mocked(getUsageSummary)
+      .mock.calls.slice(1)
+      .map(([query]) => query.filter.source);
+    expect(sources).toEqual(["claude", "claude"]);
+    expect(store.visibleSourceSummary).toBeNull();
+  });
+
+  it("falls back to all when the selected source is turned off in settings", async () => {
+    vi.mocked(getUsageScanStatus).mockResolvedValue(idleStatus("2026-07-30T10:00:00Z"));
+    const settings = useSettingsStore();
+    settings.adopt({
+      schemaVersion: 1,
+      language: "zh-CN",
+      appearance: "system",
+      refreshInterval: "2m",
+      launchAtLogin: false,
+      privacyMode: false,
+      onboarding: { completed: true, completedAt: null },
+      usageServiceVisibility: { codex: true, claude: false, pi: false, opencode: false },
+    });
+    const store = useUsageStore();
+
+    store.selectSource("claude");
+    expect(store.sourceFilter).toBe("all");
+    expect(store.sourceFilterOptions).toEqual(["all", "codex"]);
+  });
+
   it("uses the wider context only for daily summaries in a single-day range", async () => {
     vi.mocked(getUsageScanStatus).mockResolvedValue(idleStatus("2026-07-30T10:00:00Z"));
     const store = useUsageStore();

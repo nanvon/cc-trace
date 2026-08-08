@@ -2,12 +2,14 @@
 /**
  * 主窗口的持久外壳。
  *
- * 本地用量页与设置共用这一份状态订阅、键盘处理和原生窗口；子路由只替换内容区。
+ * 本地用量页、Timeline、Conversations 与设置共用这一份状态订阅、键盘处理和原生窗口；
+ * 左侧分组侧边栏承担视图切换与数据源过滤（ADR-0024），子路由只替换内容区。
  */
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { onBeforeUnmount, onMounted } from "vue";
 import { RouterView, useRouter } from "vue-router";
 
+import MainSidebar from "../components/MainSidebar.vue";
 import { useAppShell } from "../app/shell";
 import {
   navigateMain,
@@ -51,6 +53,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="main-window">
+    <MainSidebar />
     <RouterView v-slot="{ Component, route }">
       <Transition name="main-view" @before-leave="makeLeavingViewInert">
         <component :is="Component" :key="route.name" />
@@ -62,13 +65,19 @@ onBeforeUnmount(() => {
 <style scoped>
 .main-window {
   display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
   min-block-size: 100vh;
   overflow-x: hidden;
   background: var(--surface-primary);
 }
 
-.main-window > * {
-  grid-area: 1 / 1;
+.main-window > .mw-sidebar {
+  grid-column: 1;
+}
+
+.main-window > :not(.mw-sidebar) {
+  grid-area: 1 / 2;
+  min-inline-size: 0;
 }
 
 @media (prefers-reduced-motion: no-preference) {

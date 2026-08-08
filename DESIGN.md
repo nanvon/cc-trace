@@ -13,7 +13,7 @@ description: A HeroUI-styled adaptive desktop system built around stable provide
 
 ## Overview
 
-**Creative North Star: "HeroUI"** (see [ADR-0012](docs/决策/ADR-0012-视觉方向改为HeroUI风格.md))
+**Creative North Star: "HeroUI"** (see [ADR-0012](docs/决策/ADR-0012-视觉方向改为HeroUI风格.md), fixed values per [ADR-0023](docs/决策/ADR-0023-视觉修复方向定稿.md))
 
 CC Trace adopts the HeroUI visual language: shadow-driven elevation, larger corner radii, and semantic color that appears more often and more saturated than a purely restrained system. Provider lanes still read from identity to remaining capacity to reset endpoint in one path, and Codex/Claude Code keep a stable order — the information grammar is unchanged, only the shape, elevation and color language changed.
 
@@ -30,7 +30,7 @@ macOS and Windows share the same information grammar while their shells, menu be
 
 ## Colors
 
-The palette follows HeroUI's default semantic scale. Background and card surfaces are deliberately close in value; elevation is expressed through shadow rather than color contrast.
+The palette follows HeroUI's default semantic scale. Canvas and card surfaces stay close in value, but not identical — the shipped values deepen the canvas (`#F4F4F5` light / `#0E0E11` dark) and strengthen the resting lane shadow so elevation reads through both shadow and a modest color difference (ADR-0023).
 
 Values are light / dark pairs as shipped in `src/styles/tokens.css`.
 
@@ -40,19 +40,19 @@ Values are light / dark pairs as shipped in `src/styles/tokens.css`.
 
 ### Secondary
 
-- **Success** `--status-success` `#17C964` / `#45D483`: current successful data and completed checks.
+- **Success** `--status-success` `#17C964` / `#45D483`: current successful data, completed checks, and the healthy (>50%) remaining-quota band. The ok band is green permanently — "fresh and healthy" must not collide with the grey of stale data; see ADR-0023.
 - **Warning** `--status-warning` `#F5A524` / `#FBBF24`: stale data, rate limits and quota between 20% and 50% remaining.
 - **Low** `--status-low` `#F3730E` / `#FF8A3D`: under 20% of a quota window remaining. HeroUI has no official band between warning and danger; this value is adopted by ADR-0017.
 - **Danger** `--status-error` `#F31260` / `#F5455C`: unrecoverable or credential/protocol errors, and a fully consumed quota window. It is not used for ordinary absence.
 
 ### Neutral
 
-- **Canvas** `--surface-primary` `#FAFAFA` / `#000000`: application background.
-- **Surface** `--surface-raised` `#FFFFFF` / `#18181B`: provider lanes, fields and quiet grouped content — intentionally close to the canvas value; shadow does the separating.
+- **Canvas** `--surface-primary` `#F4F4F5` / `#0E0E11`: application background. One step darker than the white card so elevation reads from color difference as well as shadow.
+- **Surface** `--surface-raised` `#FFFFFF` / `#1C1C1F`: provider lanes, fields and quiet grouped content — intentionally close to the canvas value; shadow and the modest canvas gap do the separating.
 - **Ink** `--text-primary` `#11181C` / `#ECEDEE`: primary text and high-value numbers.
 - **Muted** `--text-secondary` `#71717A` / `#A1A1AA`: labels, timestamps and supporting explanations.
-- **Hairline** `--border-subtle` `#E4E4E7` / `#27272A`: card borders, list and dense-area structural separators.
-- **Track** `--track-background` `#F4F4F5` / `#27272A`: the unfilled groove of the quota progress bar.
+- **Hairline** `--border-subtle` `#E4E4E7` / `#2E2E33`: card borders, list and dense-area structural separators.
+- **Track** `--track-background` `#EDEDF0` / `#2A2A2E`: the unfilled groove of the quota progress bar.
 
 Appearance is driven by `data-appearance` on the root element: absent or `system` follows `prefers-color-scheme`; `light` and `dark` override it.
 
@@ -91,9 +91,9 @@ Appearance is driven by `data-appearance` on the root element: absent or `system
 
 The core spatial grammar is a stack of stable provider lanes. Each lane reads from identity to remaining capacity to reset endpoint, then to freshness and recovery. Compact surfaces collapse details but preserve that order; larger windows add explanation below the same progress bar instead of changing the model.
 
-Use a four-point spacing rhythm. Dense control groups prefer 8–16 units; major content transitions use 24–32 units. Provider order never changes after refresh. The main window's quota view remains a single page and becomes one column before text or controls collide; settings replaces it as a narrow secondary view rather than appearing beside it.
+Use a four-point spacing rhythm. Dense control groups prefer 8–16 units; major content transitions use 24–32 units. Provider order never changes after refresh. The main window is driven by a 176px grouped sidebar (views group / data source group / settings pinned bottom, ADR-0024): usage, conversations and timeline share the same window and the data source selection is a global in-memory filter across views; settings hides the data source group. Settings content stays a narrow 640px reading column.
 
-Transient surfaces originate from their system trigger. The macOS compact panel is anchored to the Menu Bar icon; the Windows compact panel appears adjacent to the Tray. The main window contains quota and settings views under one platform title bar and focus model; onboarding remains a separate window.
+Transient surfaces originate from their system trigger. The macOS compact panel is anchored to the Menu Bar icon; the Windows compact panel appears adjacent to the Tray. The main window holds usage, timeline, conversations and settings under one platform title bar, navigated by the grouped sidebar; onboarding remains a separate window.
 
 **The Stable Lane Rule.** Risk changes emphasis, never spatial order.
 
@@ -101,7 +101,7 @@ Transient surfaces originate from their system trigger. The macOS compact panel 
 
 ## Elevation & Depth
 
-Depth is expressive, not just structural. Provider lanes carry a soft shadow (`--shadow-lane`) at rest — elevation does not wait for hover or interaction. A hairline border stays on every card for definition, especially where shadow alone is too faint on a dark background. The compact panel may use the operating system's translucent or acrylic material at the outer shell, but its content surfaces remain solid enough for dependable contrast.
+Depth is expressive, not just structural. Provider lanes carry a soft shadow (`--shadow-lane`) at rest — elevation does not wait for hover or interaction. The lane shadow was strengthened in ADR-0023 so it reads at rest, and the canvas was deepened one step so a white card separates from the page even where shadow is subtle. A hairline border stays on every card for definition, especially where shadow alone is too faint on a dark background. The compact panel may use the operating system's translucent or acrylic material at the outer shell, but its content surfaces remain solid enough for dependable contrast.
 
 Transient panels use a stronger layered ambient shadow (`--shadow-panel`) than resting lanes, so the floating compact panel reads as a higher layer than the cards inside the main window. Never stack translucent surfaces.
 
@@ -121,6 +121,7 @@ Quota progress uses a pill-shaped track, not a straight rail. It does not become
 | Overall signal | `src/components/OverallSignal.vue` | Raises the weight of the highest-risk provider without reordering anything. Both surfaces use a stable surface name as the title — never a status sentence; a status dot with an accessible name carries the overall state |
 | Status explanation | `src/components/StatusExplanation.vue` | Tint-background alert with the icon in a same-tint circle, in both the compact panel (one line) and the main window (title / impact / next step) |
 | Refresh icon | `src/components/RefreshIcon.vue` | Spins only during a real refresh; static under reduced motion |
+| Main window sidebar | `src/components/MainSidebar.vue` | 176px grouped sidebar: views group, data source group (all / Codex / Claude Code / Pi / OpenCode) and settings pinned bottom. Data source selection is a global in-memory filter; settings hides the data source group (ADR-0024) |
 | Menu bar badge | `src-tauri/src/platform/menubar_badge.rs` | macOS only: provider marks and five-hour percentages rendered into a single-colour template bitmap (ADR-0017) |
 
 Spacing follows a four-point rhythm (`--space-1` … `--space-8` = 4/8/12/16/20/24/32). Radii are `--radius-control` 8px, `--radius-small` 12px, `--radius-medium` 14px, `--radius-shell` 16px. Motion uses `--motion-fast` 140ms, `--motion-base` 200ms, `--motion-panel` 320ms with a single `--ease-out` curve and no overshoot.
@@ -136,7 +137,7 @@ Desktop controls keep a 40 × 40 minimum target, with one exception: the four ic
 - **Do** keep Codex and Claude Code in stable lanes with the same field order.
 - **Do** show remaining capacity, reset time and freshness as one coherent reading path.
 - **Do** use system typography, tabular numerals and precise optical alignment.
-- **Do** let shadow — not just color or borders — carry elevation for lanes and panels.
+- **Do** let shadow — plus a modest canvas/white gap — carry elevation for lanes and panels.
 - **Do** pair every semantic color with readable status language.
 - **Do** preserve old snapshot values during refresh and visibly mark their freshness.
 

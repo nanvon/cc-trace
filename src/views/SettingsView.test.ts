@@ -9,15 +9,6 @@ import en from "../i18n/locales/en";
 import zhCN from "../i18n/locales/zh-CN";
 import SettingsView from "./SettingsView.vue";
 
-vi.mock("vue-router", () => ({
-  useRoute: () => ({ query: {} }),
-  useRouter: () => ({}),
-}));
-
-vi.mock("../features/app/navigation", () => ({
-  navigateMain: vi.fn(),
-}));
-
 vi.mock("../features/usage/api", () => ({
   refreshPricingCatalog: vi.fn(),
 }));
@@ -60,7 +51,7 @@ describe("SettingsView pricing catalog", () => {
     );
     const wrapper = render();
     await wrapper.vm.$nextTick();
-    const button = wrapper.get("button.button--flat");
+    const button = wrapper.get("button.flat-btn");
 
     await button.trigger("click");
     expect(button.attributes()).toHaveProperty("disabled");
@@ -77,7 +68,7 @@ describe("SettingsView pricing catalog", () => {
     const wrapper = render();
     await wrapper.vm.$nextTick();
 
-    await wrapper.get("button.button--flat").trigger("click");
+    await wrapper.get("button.flat-btn").trigger("click");
     await flushPromises();
 
     expect(wrapper.text()).toContain("当前仍使用原有目录");
@@ -91,7 +82,7 @@ describe("SettingsView pricing catalog", () => {
     const wrapper = render();
     await wrapper.vm.$nextTick();
 
-    await wrapper.get("button.button--flat").trigger("click");
+    await wrapper.get("button.flat-btn").trigger("click");
     await flushPromises();
 
     expect(wrapper.text()).toContain("部分价格已更新");

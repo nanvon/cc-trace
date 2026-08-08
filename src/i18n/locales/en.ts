@@ -13,6 +13,14 @@ export default {
     retry: "Retry",
   },
 
+  sidebar: {
+    views: "Views",
+    sources: "Data sources",
+    allSources: "All",
+    view: "View {name}",
+    filterBy: "Show {name} only",
+  },
+
   provider: {
     codex: "Codex",
     claude: "Claude Code",
@@ -108,12 +116,9 @@ export default {
     neverScanned: "Local usage has not been scanned yet",
     filter: "Time range",
     customRange: "Custom date range",
-    overview: "Overview",
     totalTokens: "Total Token",
     tokenUnit: "Token",
     totalCost: "Total cost",
-    from: "From",
-    to: "To",
     chartContext: "Last 14 days · selected range highlighted",
     byProvider: "By provider",
     dailyCost: "Daily cost",
@@ -154,7 +159,6 @@ export default {
 
   timeline: {
     title: "Quota history",
-    backToUsage: "Back to usage",
     current: "Current",
     todayDelta: "Today change",
     events: "Events",
@@ -168,19 +172,16 @@ export default {
 
   conversations: {
     title: "Conversations",
-    backToUsage: "Back to usage",
     backToList: "Back to conversations",
     filter: "Filter conversations",
     searchPlaceholder: "Search title or project",
     search: "Search",
-    source: "Provider",
     sortLabel: "Sort",
     sort: {
       recent: "Recent",
       tokens: "Tokens",
       cost: "Cost",
     },
-    sourceAll: "All",
     pageRange: "{first}–{last} of {total}",
     previous: "Previous",
     next: "Next",
@@ -219,7 +220,6 @@ export default {
 
   settings: {
     title: "Settings",
-    backToUsage: "Back to usage",
     general: "General",
     refreshInterval: "Auto-refresh interval",
     launchAtLogin: "Launch CC Trace at login",
@@ -304,6 +304,8 @@ export default {
     usageRegion: "Local usage",
     usageChart: "Daily cost by provider",
     usageTable: "Usage details by model",
+    sidebar: "Main window navigation",
+    settingsRegion: "Settings",
     sortColumn: "Sort by {column}",
     timelineRegion: "Quota history",
     timelineChart: "{provider} quota history",

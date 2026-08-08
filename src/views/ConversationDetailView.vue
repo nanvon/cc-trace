@@ -297,7 +297,7 @@ onMounted(async () => {
 
 <style scoped>
 .conversation-detail {
-  --usage-canvas: color-mix(in srgb, var(--surface-primary) 86%, var(--border-subtle) 14%);
+  --usage-canvas: var(--surface-primary);
   --usage-surface: var(--surface-raised);
   --usage-divider: var(--border-subtle);
   min-block-size: 100vh;

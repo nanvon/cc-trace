@@ -13,12 +13,10 @@ import { use } from "echarts/core";
 import { CanvasRenderer } from "echarts/renderers";
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { useRouter } from "vue-router";
 import VChart from "vue-echarts";
 
 use([LineChart, GridComponent, TooltipComponent, CanvasRenderer]);
 
-import { navigateMain } from "../features/app/navigation";
 import { PROVIDER_ORDER, type ProviderId, type QuotaWindowKind } from "../features/quota/contracts";
 import {
   activeSeriesByProvider,
@@ -31,7 +29,6 @@ import type { QuotaHistoryEvent } from "../features/usage/contracts";
 import { usageChartColors } from "../lib/chartTheme";
 
 const { t, locale } = useI18n();
-const router = useRouter();
 
 const loading = ref(true);
 const unavailable = ref(false);
@@ -145,10 +142,6 @@ function chartOption(series: QuotaSeries, provider: ProviderId): EChartsOption {
   };
 }
 
-function backToUsage(): void {
-  void navigateMain(router, "quota", "usage-title");
-}
-
 onMounted(async () => {
   themeObserver = new MutationObserver(() => {
     themeVersion.value += 1;
@@ -183,10 +176,6 @@ onBeforeUnmount(() => {
   <main class="timeline" :aria-label="t('a11y.timelineRegion')">
     <div class="timeline__inner">
       <header class="timeline__header">
-        <button type="button" class="button button--quiet timeline__back" @click="backToUsage">
-          <span aria-hidden="true">←</span>
-          {{ t("timeline.backToUsage") }}
-        </button>
         <h1 id="timeline-title" tabindex="-1">{{ t("timeline.title") }}</h1>
       </header>
 
@@ -270,7 +259,7 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .timeline {
-  --usage-canvas: color-mix(in srgb, var(--surface-primary) 86%, var(--border-subtle) 14%);
+  --usage-canvas: var(--surface-primary);
   --usage-surface: var(--surface-raised);
   --usage-divider: var(--border-subtle);
   --usage-card-shadow: var(--shadow-lane);
@@ -300,14 +289,6 @@ onBeforeUnmount(() => {
   font-weight: 680;
   letter-spacing: -0.025em;
   line-height: 1.15;
-}
-
-.timeline__back {
-  min-inline-size: 3.25rem;
-  min-block-size: 2.5rem;
-  padding-inline: 0.75rem;
-  border-radius: var(--radius-control);
-  font-size: 0.75rem;
 }
 
 .timeline__notice {

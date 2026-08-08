@@ -32,7 +32,7 @@ const router = useRouter();
 const usage = useUsageStore();
 
 const presets = usageRangePresets();
-const providerSources = computed(() => usage.visibleSources);
+const providerSources = computed(() => usage.dashboardSources);
 const currentPreset = ref<UsageDashboardRange["preset"]>("today");
 const initialRange = usageDashboardRanges().today;
 const selectedRange = ref<UsageDashboardRange>(initialRange);
@@ -150,15 +150,7 @@ function handleCustomRange(value: DateRangeInput): void {
 }
 
 function openSettings(): void {
-  void navigateMain(router, "settings", "settings-title", "quota");
-}
-
-function openTimeline(): void {
-  void navigateMain(router, "timeline", "timeline-title");
-}
-
-function openConversations(): void {
-  void navigateMain(router, "conversations", "conversations-title");
+  void navigateMain(router, "settings", "settings-title");
 }
 
 onMounted(() => {
@@ -175,32 +167,6 @@ onMounted(() => {
         <div class="usage-page__heading">
           <h1 id="main-usage-title" tabindex="-1">{{ t("main.title") }}</h1>
           <span class="usage-page__scan">{{ scanText }}</span>
-        </div>
-        <div class="usage-page__top-actions">
-          <button
-            id="main-timeline-trigger"
-            type="button"
-            class="button button--quiet"
-            @click="openTimeline"
-          >
-            {{ t("timeline.title") }}
-          </button>
-          <button
-            id="main-conversations-trigger"
-            type="button"
-            class="button button--quiet"
-            @click="openConversations"
-          >
-            {{ t("conversations.title") }}
-          </button>
-          <button
-            id="main-settings-trigger"
-            type="button"
-            class="button button--quiet"
-            @click="openSettings"
-          >
-            {{ t("common.settings") }}
-          </button>
         </div>
       </header>
 
@@ -228,6 +194,7 @@ onMounted(() => {
         >
           <template #default="{ inputValue, inputEvents }">
             <input
+              class="usage-page__date-input"
               type="text"
               size="26"
               :value="formatDateRangeInput(inputValue.start, inputValue.end)"
@@ -257,36 +224,31 @@ onMounted(() => {
       <section class="usage-page__block" aria-labelledby="usage-provider-heading">
         <div class="usage-page__block-head">
           <h2 id="usage-provider-heading">{{ t("main.byProvider") }}</h2>
+          <span v-if="!allServicesOff" class="usage-page__summary numeric">
+            <span
+              >{{ t("main.totalTokens") }}
+              <b :title="totalTokens?.full"
+                >{{ totalTokens?.value ?? t("main.noValue")
+                }}<small v-if="totalTokens?.unit"
+                  >{{ tokenUnitSeparator }}{{ totalTokens.unit }}</small
+                ></b
+              ></span
+            >
+            <span
+              >{{ t("main.totalCost") }}
+              <b class="usage-page__summary-money">{{ totalCost ?? t("main.noValue") }}</b></span
+            >
+          </span>
         </div>
-        <div class="usage-page__provider-layout">
-          <article class="usage-page__total-card" :aria-label="t('main.overview')">
-            <div class="usage-page__total-row">
-              <strong class="usage-page__total-value numeric" :title="totalTokens?.full">
-                {{ totalTokens?.value ?? t("main.noValue") }}
-                <small v-if="totalTokens?.unit">
-                  {{ tokenUnitSeparator }}{{ totalTokens.unit }}
-                </small>
-              </strong>
-              <span class="usage-page__total-label">{{ t("main.totalTokens") }}</span>
-            </div>
-            <div class="usage-page__total-row">
-              <strong class="usage-page__total-value numeric" :title="totalCost ?? undefined">
-                {{ totalCost ?? t("main.noValue") }}
-              </strong>
-              <span class="usage-page__total-label">{{ t("main.totalCost") }}</span>
-            </div>
-          </article>
-
-          <div class="usage-page__providers">
-            <UsageProviderCard
-              v-for="source in providerSources"
-              :key="source"
-              :source="source"
-              :summary="sourceSummary"
-              :loaded="dashboardReady"
-              :unavailable="usage.dashboardUnavailable"
-            />
-          </div>
+        <div class="usage-page__providers">
+          <UsageProviderCard
+            v-for="source in providerSources"
+            :key="source"
+            :source="source"
+            :summary="sourceSummary"
+            :loaded="dashboardReady"
+            :unavailable="usage.dashboardUnavailable"
+          />
         </div>
       </section>
 
@@ -342,7 +304,7 @@ onMounted(() => {
 
 <style scoped>
 .usage-page {
-  --usage-canvas: color-mix(in srgb, var(--surface-primary) 86%, var(--border-subtle) 14%);
+  --usage-canvas: var(--surface-primary);
   --usage-surface: var(--surface-raised);
   --usage-divider: var(--border-subtle);
   --usage-track: var(--track-background);
@@ -408,20 +370,6 @@ onMounted(() => {
   opacity: 0.5;
 }
 
-.usage-page__top > .button {
-  min-inline-size: 3.25rem;
-  min-block-size: 2.5rem;
-  padding-inline: 0.75rem;
-  border-radius: var(--radius-control);
-  font-size: 0.75rem;
-}
-
-.usage-page__top-actions {
-  display: flex;
-  align-items: center;
-  gap: 0.375rem;
-}
-
 .usage-page__empty {
   padding: 2.5rem 1rem;
   border: 1px dashed var(--border-subtle);
@@ -467,7 +415,7 @@ onMounted(() => {
   border-radius: calc(var(--radius-control) - 0.1875rem);
   color: var(--text-secondary);
   background: transparent;
-  font-size: 0.6875rem;
+  font-size: 0.71875rem;
   white-space: nowrap;
 }
 
@@ -479,79 +427,60 @@ onMounted(() => {
   color: var(--text-primary);
   background: var(--usage-surface);
   box-shadow: 0 1px 2px rgb(24 24 27 / 10%);
-  font-weight: 500;
+  font-weight: 570;
 }
 
-.usage-page__provider-layout {
-  display: grid;
-  grid-template-columns: minmax(12rem, 0.42fr) minmax(0, 2fr);
-  gap: 0.75rem;
-  align-items: stretch;
-}
-
-.usage-page__total-card {
-  display: grid;
-  grid-template-rows: repeat(2, minmax(0, 1fr));
-  min-inline-size: 0;
-  min-block-size: 100%;
-  padding: 0.75rem 1rem;
-  border: 1px solid color-mix(in srgb, var(--usage-divider) 72%, transparent);
-  border-radius: 1rem;
-  background: color-mix(in srgb, var(--usage-surface) 94%, var(--usage-canvas));
-  box-shadow:
-    0 1px 2px rgb(17 17 17 / 5%),
-    0 10px 24px -18px rgb(17 17 17 / 26%);
-}
-
-.usage-page__total-row {
-  display: flex;
-  align-items: flex-end;
-  justify-content: flex-start;
-  gap: 0.625rem;
-  min-inline-size: 0;
-  min-block-size: 0;
-  padding-block: 0.75rem;
-}
-
-.usage-page__total-row + .usage-page__total-row {
-  padding-block-start: 0.875rem;
-  border-block-start: 1px solid color-mix(in srgb, var(--usage-divider) 72%, transparent);
-}
-
-.usage-page__total-label {
-  flex: 0 0 auto;
+/* 日期范围框：产物 date-input（32px 高、1px 边框、9px 圆角、surface-raised 底） */
+.usage-page__date-input {
+  min-block-size: 2rem;
+  padding: 0 0.75rem;
   color: var(--text-secondary);
-  font-size: 0.6875rem;
-  font-weight: 500;
-  line-height: 1.2;
-  letter-spacing: 0.01em;
-  white-space: nowrap;
+  background: var(--usage-surface, var(--surface-raised));
+  border: 1px solid var(--border-subtle);
+  border-radius: 0.5625rem;
+  font-size: 0.71875rem;
+  font-variant-numeric: tabular-nums;
 }
 
-.usage-page__total-value {
+.usage-page__date-input:focus-visible {
+  outline: 2px solid var(--action-primary);
+  outline-offset: 2px;
+}
+
+/* 摘要挂「按 Provider」标题行右侧（ADR-0024）：钱为主、Token 为次 */
+.usage-page__summary {
   display: inline-flex;
   align-items: baseline;
-  gap: 0.0625rem;
-  flex: 0 1 auto;
-  min-inline-size: 0;
-  max-inline-size: 100%;
-  overflow: hidden;
-  color: var(--text-primary);
-  font-size: clamp(1.5rem, 2.5vw, 2rem);
-  font-weight: 650;
-  letter-spacing: -0.035em;
-  line-height: 0.96;
-  text-align: start;
-  text-overflow: ellipsis;
+  gap: 0.875rem;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-weight: 520;
   white-space: nowrap;
 }
 
-.usage-page__total-value small {
+.usage-page__summary b {
+  margin-inline-start: 0.3125rem;
+  color: var(--text-primary);
+  font-size: 0.8125rem;
+  font-weight: 650;
+}
+
+.usage-page__summary b small {
   margin-inline-start: 0.0625rem;
-  color: var(--text-secondary);
-  font-size: 0.48em;
+  font-size: 0.6em;
   font-weight: 550;
-  letter-spacing: -0.02em;
+}
+
+.usage-page__summary-money {
+  font-size: 0.84375rem;
+  font-weight: 700;
+}
+
+.usage-page__providers {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.75rem;
+  align-items: stretch;
 }
 
 .usage-page__block {
@@ -581,8 +510,8 @@ onMounted(() => {
   margin: 0;
   color: var(--text-secondary);
   font-size: 0.6875rem;
-  font-weight: 650;
-  letter-spacing: 0.01em;
+  font-weight: 680;
+  letter-spacing: 0.04em;
 }
 
 .usage-page__legend {
@@ -590,7 +519,7 @@ onMounted(() => {
   align-items: center;
   gap: 0.875rem;
   color: var(--text-secondary);
-  font-size: 0.625rem;
+  font-size: 0.65625rem;
 }
 
 .usage-page__chart-meta {
@@ -602,7 +531,7 @@ onMounted(() => {
 
 .usage-page__chart-note {
   color: var(--text-secondary);
-  font-size: 0.625rem;
+  font-size: 0.65625rem;
   white-space: nowrap;
 }
 
@@ -639,11 +568,7 @@ onMounted(() => {
   gap: 0.75rem;
 }
 
-@media (max-width: 900px) {
-  .usage-page__provider-layout {
-    grid-template-columns: 1fr;
-  }
-
+@media (max-width: 1100px) {
   .usage-page__providers {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -666,6 +591,10 @@ onMounted(() => {
     gap: 0.25rem;
   }
 
+  .usage-page__summary {
+    display: none;
+  }
+
   .usage-page__providers {
     grid-template-columns: 1fr;
   }
@@ -683,5 +612,15 @@ onMounted(() => {
   .usage-page__segmented button:active {
     scale: 0.96;
   }
+}
+
+/*
+ * 修复 v-calendar 顶部导航按钮透出浏览器 UA 默认按钮底色（浅色 #EFEFEF、
+ * 深色 #6B6B6B 的灰块）。组件默认是透明底、hover 才出底色。
+ * 日历 popover 由 popper 挂载到 body（teleport），scoped 选择器够不到，用 :global。
+ */
+:global(.vc-header .vc-arrow),
+:global(.vc-header .vc-title) {
+  background: transparent;
 }
 </style>

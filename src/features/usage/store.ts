@@ -76,11 +76,38 @@ export const useUsageStore = defineStore("usage", () => {
     return USAGE_SOURCES.filter((source) => visibility[source]);
   });
 
-  /** 可见服务的源级汇总：从全量 source 查询中按可见集合归并，占比与总量只计可见服务。 */
+  /**
+   * 侧边栏数据源选中态：全局内存态，跨用量／对话／时间线共享，重启回到「全部」。
+   * 与设置页「统计服务」开关不同维度——开关决定哪些服务参与统计，这里决定当前查看哪一个。
+   * 不持久化（ADR-0024）。
+   */
+  const sourceFilter = ref<"all" | UsageSource>("all");
+
+  /** 侧边栏可选项：从「可见服务」派生，选中的源必须是可见源。 */
+  const sourceFilterOptions = computed<Array<"all" | UsageSource>>(() => [
+    "all",
+    ...visibleSources.value,
+  ]);
+
+  /** 实际参与查询的源集合：选中单个源时收窄到该源。 */
+  const dashboardSources = computed<UsageSource[]>(() => {
+    if (sourceFilter.value === "all") return visibleSources.value;
+    return visibleSources.value.includes(sourceFilter.value) ? [sourceFilter.value] : [];
+  });
+
+  function selectSource(source: "all" | UsageSource): void {
+    if (source !== "all" && !visibleSources.value.includes(source)) {
+      sourceFilter.value = "all";
+      return;
+    }
+    sourceFilter.value = source;
+  }
+
+  /** 可见服务的源级汇总：按当前数据源过滤集合（侧边栏选中单源时只计该源）归并。 */
   const visibleSourceSummary = computed<UsageSummary | null>(() => {
     const raw = dashboard.value.source;
     if (!raw) return null;
-    const visible = new Set(visibleSources.value);
+    const visible = new Set(dashboardSources.value);
     const rows = raw.rows.filter((row) => visible.has(row.key as UsageSource));
     if (rows.length === 0) return null;
 
@@ -202,7 +229,7 @@ export const useUsageStore = defineStore("usage", () => {
 
     await readStatus();
 
-    const sources = visibleSources.value;
+    const sources = dashboardSources.value;
     const queries = [
       getUsageSummary(summaryQuery(range, "source")),
       ...sources.map((source) => getUsageSummary(summaryQuery(chartRange, "day", source))),
@@ -266,6 +293,10 @@ export const useUsageStore = defineStore("usage", () => {
     dashboard,
     visibleSources,
     visibleSourceSummary,
+    sourceFilter,
+    sourceFilterOptions,
+    dashboardSources,
+    selectSource,
     dashboardRange,
     dashboardLoaded,
     dashboardLoading,

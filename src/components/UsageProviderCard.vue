@@ -1,4 +1,10 @@
 <script setup lang="ts">
+/**
+ * Provider 矮宽卡（ADR-0024 第 5 节）：色点＋名称 / 费用＋总 Token / 缓存命中率条。
+ *
+ * 输入／输出／缓存命中／缓存写入细节交还按模型表（表头已有这些列），不在卡上重复。
+ * 命中率条复用余量条形态（4px），染 Provider 品牌色降饱和版，不占用语义色。
+ */
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 
@@ -8,7 +14,6 @@ import {
   formatUsagePercent,
   presentUsageTokens,
   usageCacheHitRate,
-  usageCacheWriteTokens,
 } from "../features/usage/presentation";
 
 const props = defineProps<{
@@ -51,214 +56,162 @@ const cost = computed(() => {
 const hitRate = computed(() => usageCacheHitRate(tokens.value));
 
 const providerName = computed(() => t(`provider.${props.source}`));
-
-function token(value: number) {
-  return presentUsageTokens(locale.value, value);
-}
-
-function valueOrDash(value: number): string {
-  if (!hasData.value) return t("main.noValue");
-  const display = token(value);
-  const separator = display.unit && !locale.value.toLowerCase().startsWith("zh") ? " " : "";
-  return `${display.value}${separator}${display.unit}`;
-}
 </script>
 
 <template>
-  <article class="usage-provider" :data-provider="source" :aria-labelledby="titleId">
-    <header class="usage-provider__header">
-      <span class="usage-provider__marker" aria-hidden="true"></span>
+  <article class="pcard" :data-p="source" :aria-labelledby="titleId">
+    <div class="pcard-head">
+      <i aria-hidden="true"></i>
       <h3 :id="titleId">{{ providerName }}</h3>
-    </header>
+    </div>
 
-    <div class="usage-provider__money">
-      <strong class="numeric">{{ cost ?? t("main.noValue") }}</strong>
-      <span class="usage-provider__total numeric" :title="total.full">
-        {{ hasData ? total.value : t("main.noValue")
-        }}<small v-if="hasData && total.unit">{{ tokenUnitSeparator }}{{ total.unit }}</small>
-        {{ t("main.tokenUnit") }}
+    <div class="pcard-money">
+      <strong class="pcard-cost numeric">{{ cost ?? t("main.noValue") }}</strong>
+      <span class="pcard-total numeric" :title="total.full">
+        <b>{{ hasData ? total.value : t("main.noValue") }}</b
+        ><small v-if="hasData && total.unit">{{ tokenUnitSeparator }}{{ total.unit }}</small>
+        <span class="pcard-total__unit">{{ t("main.tokenUnit") }}</span>
       </span>
     </div>
 
-    <dl class="usage-provider__metrics">
-      <div>
-        <dt>{{ t("main.input") }}</dt>
-        <dd class="numeric">{{ valueOrDash(tokens.inputTokens) }}</dd>
-      </div>
-      <div>
-        <dt>{{ t("main.output") }}</dt>
-        <dd class="numeric">{{ valueOrDash(tokens.outputTokens) }}</dd>
-      </div>
-      <div>
-        <dt>{{ t("main.cacheHit") }}</dt>
-        <dd class="numeric">{{ valueOrDash(tokens.cacheReadInputTokens) }}</dd>
-      </div>
-      <div>
-        <dt>{{ t("main.cacheWrite") }}</dt>
-        <dd class="numeric">{{ valueOrDash(usageCacheWriteTokens(tokens)) }}</dd>
-      </div>
-    </dl>
-
-    <div class="usage-provider__hit">
-      <div class="usage-provider__hit-label">
+    <div class="pcard-hit">
+      <div class="pcard-hit-label">
         <span>{{ t("main.cacheHitRate") }}</span>
-        <strong class="numeric">
-          {{ hasData ? formatUsagePercent(locale, hitRate) : t("main.noValue") }}
-        </strong>
+        <b class="numeric">{{
+          hasData ? formatUsagePercent(locale, hitRate) : t("main.noValue")
+        }}</b>
       </div>
-      <div class="usage-provider__track" aria-hidden="true">
-        <span :style="{ width: `${hasData ? (hitRate ?? 0) : 0}%` }"></span>
+      <div class="bar" aria-hidden="true">
+        <i :style="{ inlineSize: `${hasData ? (hitRate ?? 0) : 0}%` }"></i>
       </div>
     </div>
   </article>
 </template>
 
 <style scoped>
-.usage-provider {
+.pcard {
   --provider-color: var(--cat-codex);
-  --provider-tint: var(--cat-codex-dim);
-  padding: 0.9375rem 1rem 0.875rem;
+  display: grid;
+  gap: 0.5625rem;
+  align-content: start;
+  min-inline-size: 0;
+  padding: 0.8125rem 0.9375rem 0.75rem;
   background: var(--usage-surface, var(--surface-raised));
-  border: 1px solid var(--border-subtle);
-  border-radius: 0.625rem;
+  border: 1px solid color-mix(in srgb, var(--usage-divider, var(--border-subtle)) 80%, transparent);
+  border-radius: 0.875rem;
   box-shadow: var(--usage-card-shadow, var(--shadow-lane));
 }
 
-.usage-provider[data-provider="claude"] {
+.pcard[data-p="claude"] {
   --provider-color: var(--cat-claude);
-  --provider-tint: var(--cat-claude-dim);
 }
 
-.usage-provider[data-provider="pi"] {
+.pcard[data-p="pi"] {
   --provider-color: var(--cat-pi);
-  --provider-tint: var(--cat-pi-dim);
 }
 
-.usage-provider[data-provider="opencode"] {
+.pcard[data-p="opencode"] {
   --provider-color: var(--cat-opencode);
-  --provider-tint: var(--cat-opencode-dim);
 }
 
-.usage-provider__header {
+.pcard-head {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  margin-block-end: 0.75rem;
-}
-
-.usage-provider__header h3 {
-  margin: 0;
-  font-size: 0.6875rem;
-  font-weight: 680;
-}
-
-.usage-provider__marker {
-  inline-size: 0.4375rem;
-  block-size: 0.4375rem;
-  flex: 0 0 auto;
-  border-radius: 0.125rem;
-  background: var(--provider-color);
-}
-
-.usage-provider__money {
-  display: flex;
-  align-items: baseline;
-  gap: 1.125rem;
-  margin-block-end: 0.8125rem;
-}
-
-.usage-provider__money strong {
-  font-size: 1.375rem;
-  font-weight: 690;
-  letter-spacing: -0.025em;
-  line-height: 1;
-}
-
-.usage-provider__total {
-  color: var(--text-secondary);
-  font-size: 0.65625rem;
-}
-
-.usage-provider__total small {
-  margin-inline-start: 0.125rem;
-  font-size: 0.625rem;
-}
-
-.usage-provider__metrics {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0.5625rem;
-  margin: 0;
-}
-
-.usage-provider__metrics div {
+  gap: 0.4375rem;
   min-inline-size: 0;
 }
 
-.usage-provider__metrics dt,
-.usage-provider__metrics dd {
+.pcard-head i {
+  inline-size: 0.5rem;
+  block-size: 0.5rem;
+  flex: 0 0 auto;
+  border-radius: 0.1875rem;
+  background: var(--provider-color);
+}
+
+.pcard-head h3 {
   margin: 0;
-}
-
-.usage-provider__metrics dt {
-  color: var(--text-secondary);
-  font-size: 0.59375rem;
-  white-space: nowrap;
-}
-
-.usage-provider__metrics dd {
-  margin-block-start: 0.125rem;
   overflow: hidden;
-  font-size: 0.71875rem;
-  font-weight: 610;
+  font-size: 0.78125rem;
+  font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.usage-provider__hit {
-  margin-block-start: 0.75rem;
-  padding-block-start: 0.625rem;
-  border-block-start: 1px solid var(--border-subtle);
+.pcard-money {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-inline-size: 0;
 }
 
-.usage-provider__hit-label {
+.pcard-cost {
+  font-size: 1.3125rem;
+  font-weight: 680;
+  letter-spacing: -0.025em;
+  line-height: 1;
+}
+
+.pcard-total {
+  min-inline-size: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 0.71875rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pcard-total b {
+  color: var(--text-primary);
+  font-size: 0.8125rem;
+  font-weight: 620;
+}
+
+.pcard-total small {
+  margin-inline-start: 0.125rem;
+}
+
+.pcard-total__unit {
+  margin-inline-start: 0.25rem;
+}
+
+.pcard-hit {
+  display: grid;
+  gap: 0.375rem;
+}
+
+.pcard-hit-label {
   display: flex;
   justify-content: space-between;
-  gap: var(--space-3);
-  margin-block-end: 0.3125rem;
+  gap: 0.5rem;
   color: var(--text-secondary);
-  font-size: 0.59375rem;
+  font-size: 0.6875rem;
 }
 
-.usage-provider__hit-label strong {
+.pcard-hit-label b {
   color: var(--text-primary);
-  font-size: 0.65625rem;
-  font-weight: 650;
+  font-size: 0.71875rem;
+  font-weight: 620;
 }
 
-.usage-provider__track {
-  block-size: 0.3125rem;
+.bar {
+  block-size: 4px;
   overflow: hidden;
   border-radius: 999px;
-  background: var(--provider-tint);
+  background: color-mix(in srgb, var(--provider-color) 14%, transparent);
 }
 
-.usage-provider__track span {
+.bar > i {
   display: block;
   block-size: 100%;
-  border-radius: inherit;
-  background: var(--provider-color);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--provider-color) 75%, transparent);
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  .usage-provider__track span {
-    transition: width var(--motion-base) var(--ease-out);
-  }
-}
-
-@media (max-width: 820px) {
-  .usage-provider__money {
-    gap: 0.75rem;
+  .bar > i {
+    transition: inline-size var(--motion-base) var(--ease-out);
   }
 }
 </style>

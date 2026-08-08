@@ -13,7 +13,7 @@ export const EVENT_MAIN_NAVIGATION = "navigation://main";
 
 export type MainNavigationTarget = "quota" | "settings" | "timeline" | "conversations";
 export type MainFocusTarget =
-  "usage-title" | "settings-title" | "settings-trigger" | "timeline-title" | "conversations-title";
+  "usage-title" | "settings-title" | "timeline-title" | "conversations-title";
 
 export function isMainNavigationTarget(value: unknown): value is MainNavigationTarget {
   return (
@@ -21,12 +21,9 @@ export function isMainNavigationTarget(value: unknown): value is MainNavigationT
   );
 }
 
-export function mainRoute(target: MainNavigationTarget, origin?: "quota"): RouteLocationRaw {
+export function mainRoute(target: MainNavigationTarget): RouteLocationRaw {
   if (target === "settings") {
-    return {
-      name: "settings",
-      query: origin ? { origin } : undefined,
-    };
+    return { name: "settings" };
   }
   if (target === "timeline") {
     return { name: "timeline" };
@@ -41,9 +38,8 @@ export async function navigateMain(
   router: Router,
   target: MainNavigationTarget,
   focusTarget: MainFocusTarget,
-  origin?: "quota",
 ): Promise<void> {
-  await router.replace(mainRoute(target, origin));
+  await router.replace(mainRoute(target));
   await nextTick();
   document.getElementById(`main-${focusTarget}`)?.focus({ preventScroll: true });
 }

@@ -92,7 +92,7 @@ function formatDay(value: string): string {
 }
 
 function barOpacity(date: string): number {
-  return contextual.value && !selectedDates.value.has(date) ? 0.34 : 1;
+  return contextual.value && !selectedDates.value.has(date) ? 0.35 : 1;
 }
 
 const option = computed<EChartsOption>(() => {
@@ -129,7 +129,7 @@ const option = computed<EChartsOption>(() => {
       axisLabel: {
         color: colors.muted,
         fontFamily: colors.fontFamily,
-        fontSize: 10,
+        fontSize: 9.5,
         hideOverlap: true,
         interval: Math.max(0, Math.ceil(categories.length / 5) - 1),
       },
@@ -151,14 +151,16 @@ const option = computed<EChartsOption>(() => {
       type: "value",
     },
     series: props.sources.map((source, index) => ({
-      barMaxWidth: 28,
+      // 产物是纯 CSS 柱状：每列柱子占满列宽、上下堆叠两段、3px 圆角、降透明度。
+      barMaxWidth: 18,
+      barCategoryGap: "32%",
       data: dates.value.map((date) => ({
         itemStyle: { opacity: barOpacity(date) },
         value: costFor(source, date),
       })),
       itemStyle: {
         color: colors[source],
-        borderRadius: index === 0 ? [0, 0, 2, 2] : [2, 2, 0, 0],
+        borderRadius: index === 0 ? [0, 0, 3, 3] : [3, 3, 0, 0],
       },
       name: t(`provider.${source}`),
       stack: "cost",
@@ -195,22 +197,22 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .usage-chart {
-  min-block-size: 10.75rem;
+  min-block-size: 9.375rem;
   padding: 0.8125rem 0.875rem 0.5625rem;
   background: var(--usage-surface, var(--surface-raised));
   border: 1px solid var(--border-subtle);
-  border-radius: 0.625rem;
+  border-radius: 0.875rem;
   box-shadow: var(--usage-card-shadow, var(--shadow-lane));
 }
 
 .usage-chart__canvas {
   inline-size: 100%;
-  block-size: 10rem;
+  block-size: 8.625rem;
 }
 
 .usage-chart__empty {
   display: grid;
-  min-block-size: 10rem;
+  min-block-size: 8.625rem;
   place-items: center;
   color: var(--text-secondary);
   font-size: 0.75rem;

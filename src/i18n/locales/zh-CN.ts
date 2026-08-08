@@ -15,6 +15,14 @@ export default {
     retry: "重试",
   },
 
+  sidebar: {
+    views: "视图",
+    sources: "数据源",
+    allSources: "全部",
+    view: "视图 {name}",
+    filterBy: "只看 {name}",
+  },
+
   provider: {
     codex: "Codex",
     claude: "Claude Code",
@@ -108,12 +116,9 @@ export default {
     neverScanned: "尚未扫描本地用量",
     filter: "时间范围",
     customRange: "自定义日期范围",
-    overview: "总览",
     totalTokens: "总 Token",
     tokenUnit: "Token",
     totalCost: "总花费",
-    from: "起始",
-    to: "结束",
     chartContext: "近 14 天 · 高亮为所选范围",
     byProvider: "按 Provider",
     dailyCost: "每日花费",
@@ -153,7 +158,6 @@ export default {
 
   timeline: {
     title: "额度历史",
-    backToUsage: "返回用量",
     current: "当前",
     todayDelta: "今日变化",
     events: "事件数",
@@ -167,19 +171,16 @@ export default {
 
   conversations: {
     title: "对话",
-    backToUsage: "返回用量",
     backToList: "返回对话列表",
     filter: "筛选对话",
     searchPlaceholder: "搜索标题或项目",
     search: "搜索",
-    source: "数据源",
     sortLabel: "排序",
     sort: {
       recent: "最近",
       tokens: "Token",
       cost: "费用",
     },
-    sourceAll: "全部",
     pageRange: "第 {first}–{last} 条，共 {total} 条",
     previous: "上一页",
     next: "下一页",
@@ -218,7 +219,6 @@ export default {
 
   settings: {
     title: "设置",
-    backToUsage: "返回用量",
     general: "通用",
     refreshInterval: "自动刷新间隔",
     launchAtLogin: "开机时启动 CC Trace",
@@ -297,6 +297,8 @@ export default {
     usageRegion: "本地用量",
     usageChart: "按 Provider 的每日费用",
     usageTable: "按模型的用量明细",
+    sidebar: "主窗口导航",
+    settingsRegion: "设置",
     sortColumn: "按 {column} 排序",
     timelineRegion: "额度历史",
     timelineChart: "{provider} 额度历史曲线",

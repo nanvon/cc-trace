@@ -5,33 +5,32 @@
  * 标题／项目搜索、Provider 筛选、Recent／Tokens／Cost 排序与分页；对应 cc-bar F-17 的列表侧。
  * 行内展示 Provider、标题、项目、时间、请求数、Token 与费用；点击进入全生命周期详情。
  */
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
 
-import { navigateMain } from "../features/app/navigation";
 import { useSettingsStore } from "../features/settings/store";
 import type {
   UsageConversation,
   UsageConversationPage,
   UsageConversationSort,
-  UsageSource,
 } from "../features/usage/contracts";
 import { USAGE_SOURCES } from "../features/usage/contracts";
 import { listConversations } from "../features/usage/api";
 import { formatUsageCost, presentUsageTokens } from "../features/usage/presentation";
+import { useUsageStore } from "../features/usage/store";
 
 const PAGE_SIZE = 20;
 
 const { t, locale } = useI18n();
 const router = useRouter();
 const settings = useSettingsStore();
+const usage = useUsageStore();
 
 const loading = ref(true);
 const unavailable = ref(false);
 const page = ref<UsageConversationPage | null>(null);
 const search = ref("");
-const source = ref<"all" | UsageSource>("all");
 const sort = ref<UsageConversationSort>("recent");
 const offset = ref(0);
 const pendingSearch = ref("");
@@ -48,14 +47,6 @@ const visibleSources = computed(() => {
   return USAGE_SOURCES.filter((source) => visibility[source]);
 });
 
-const SOURCE_OPTIONS = computed(() => [
-  { value: "all" as const, label: "conversations.sourceAll" },
-  ...visibleSources.value.map((source) => ({
-    value: source as UsageSource,
-    label: `provider.${source}`,
-  })),
-]);
-
 const allServicesOff = computed(() => visibleSources.value.length === 0);
 const total = computed(() => page.value?.total ?? 0);
 const hasNext = computed(() => (offset.value + 1) * PAGE_SIZE < total.value);
@@ -71,7 +62,7 @@ async function load(): Promise<void> {
       filter: {
         from: null,
         to: null,
-        source: source.value === "all" ? null : source.value,
+        source: usage.sourceFilter === "all" ? null : usage.sourceFilter,
         model: null,
         speed: null,
       },
@@ -79,7 +70,9 @@ async function load(): Promise<void> {
       project: null,
       sort: sort.value,
       sources:
-        source.value === "all" && visibleSources.value.length > 0 ? visibleSources.value : null,
+        usage.sourceFilter === "all" && visibleSources.value.length > 0
+          ? visibleSources.value
+          : null,
       limit: PAGE_SIZE,
       offset: offset.value,
     });
@@ -99,12 +92,6 @@ async function load(): Promise<void> {
 
 function submitSearch(): void {
   pendingSearch.value = search.value.trim();
-  offset.value = 0;
-  void load();
-}
-
-function changeSource(event: Event): void {
-  source.value = (event.target as HTMLSelectElement).value as "all" | UsageSource;
   offset.value = 0;
   void load();
 }
@@ -129,10 +116,6 @@ function goNext(): void {
 
 function openDetail(conversation: UsageConversation): void {
   void router.push({ name: "conversation-detail", params: { key: conversation.conversationKey } });
-}
-
-function backToUsage(): void {
-  void navigateMain(router, "quota", "usage-title");
 }
 
 function formatTime(value: string): string {
@@ -172,16 +155,21 @@ onMounted(() => {
     void load();
   }
 });
+
+// 侧边栏数据源组是全局状态（ADR-0024）：变化时重新加载对话列表。
+watch(
+  () => usage.sourceFilter,
+  () => {
+    offset.value = 0;
+    void load();
+  },
+);
 </script>
 
 <template>
   <main class="conversations" :aria-label="t('a11y.conversationsRegion')">
     <div class="conversations__inner">
       <header class="conversations__header">
-        <button type="button" class="button button--quiet conversations__back" @click="backToUsage">
-          <span aria-hidden="true">←</span>
-          {{ t("conversations.backToUsage") }}
-        </button>
         <h1 id="conversations-title" tabindex="-1">{{ t("conversations.title") }}</h1>
       </header>
 
@@ -196,15 +184,6 @@ onMounted(() => {
           />
           <button type="submit" class="button">{{ t("conversations.search") }}</button>
         </form>
-
-        <label class="conversations__select">
-          <span class="visually-hidden">{{ t("conversations.source") }}</span>
-          <select :value="source" @change="changeSource">
-            <option v-for="option in SOURCE_OPTIONS" :key="option.value" :value="option.value">
-              {{ t(option.label) }}
-            </option>
-          </select>
-        </label>
 
         <label class="conversations__select">
           <span class="visually-hidden">{{ t("conversations.sortLabel") }}</span>
@@ -279,7 +258,7 @@ onMounted(() => {
 
 <style scoped>
 .conversations {
-  --usage-canvas: color-mix(in srgb, var(--surface-primary) 86%, var(--border-subtle) 14%);
+  --usage-canvas: var(--surface-primary);
   --usage-surface: var(--surface-raised);
   --usage-divider: var(--border-subtle);
   min-block-size: 100vh;
@@ -308,14 +287,6 @@ onMounted(() => {
   font-weight: 680;
   letter-spacing: -0.025em;
   line-height: 1.15;
-}
-
-.conversations__back {
-  min-inline-size: 3.25rem;
-  min-block-size: 2.5rem;
-  padding-inline: 0.75rem;
-  border-radius: var(--radius-control);
-  font-size: 0.75rem;
 }
 
 .conversations__filters {

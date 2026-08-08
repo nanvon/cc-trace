@@ -10,14 +10,11 @@ import type {
 } from "../features/usage/contracts";
 import {
   formatUsageCost,
-  formatUsagePercent,
   presentUsageTokens,
-  usageCacheHitRate,
   usageCacheWriteTokens,
 } from "../features/usage/presentation";
 
-type SortKey =
-  "model" | "input" | "output" | "cacheHit" | "cacheWrite" | "hitRate" | "total" | "cost";
+type SortKey = "model" | "input" | "output" | "cacheHit" | "cacheWrite" | "total" | "cost";
 type SortDirection = "ascending" | "descending";
 
 const props = defineProps<{
@@ -49,7 +46,6 @@ const columns: Array<{ key: SortKey; label: string }> = [
   { key: "output", label: "output" },
   { key: "cacheHit", label: "cacheHit" },
   { key: "cacheWrite", label: "cacheWrite" },
-  { key: "hitRate", label: "cacheHitRate" },
   { key: "total", label: "total" },
   { key: "cost", label: "cost" },
 ];
@@ -61,6 +57,9 @@ const groups = computed(() =>
     rows: sortRows(props.model[source]?.rows ?? []),
   })),
 );
+
+/* 无任何模型数据（含加载失败/不可用）时压缩整表行高，避免空态占一大块 */
+const compact = computed(() => groups.value.every((group) => group.rows.length === 0));
 
 function tokenText(value: number): string {
   if (!props.loaded || props.unavailable) return t("main.noValue");
@@ -77,11 +76,6 @@ function costText(row: UsageSummaryRow | null): string {
   );
 }
 
-function rateText(row: UsageSummaryRow | null): string {
-  if (!props.loaded || props.unavailable || !row) return t("main.noValue");
-  return formatUsagePercent(locale.value, usageCacheHitRate(row.tokens));
-}
-
 function sortValue(row: UsageSummaryRow, key: SortKey): number | string {
   switch (key) {
     case "model":
@@ -94,8 +88,6 @@ function sortValue(row: UsageSummaryRow, key: SortKey): number | string {
       return row.tokens.cacheReadInputTokens;
     case "cacheWrite":
       return usageCacheWriteTokens(row.tokens);
-    case "hitRate":
-      return usageCacheHitRate(row.tokens) ?? -1;
     case "total":
       return row.tokens.totalTokens;
     case "cost":
@@ -159,10 +151,6 @@ function providerSummaryValue(summary: UsageSummary | null, key: SortKey): strin
       return tokenText(tokens.cacheReadInputTokens);
     case "cacheWrite":
       return tokenText(usageCacheWriteTokens(tokens));
-    case "hitRate":
-      return props.loaded && !props.unavailable
-        ? formatUsagePercent(locale.value, usageCacheHitRate(tokens))
-        : t("main.noValue");
     case "total":
       return tokenText(tokens.totalTokens);
     case "cost":
@@ -178,7 +166,7 @@ function totalModelCount(): number {
 <template>
   <div class="usage-table-wrap">
     <div class="usage-table-scroll">
-      <table class="usage-table">
+      <table class="usage-table" :class="{ 'usage-table--compact': compact }">
         <caption class="visually-hidden">
           {{
             t("a11y.usageTable")
@@ -219,22 +207,18 @@ function totalModelCount(): number {
             </td>
           </tr>
           <tr v-for="row in group.rows" :key="`${group.source}-${row.key}`">
-            <th scope="row" class="usage-table__model">{{ row.key || t("main.noValue") }}</th>
+            <th scope="row" class="usage-table__model">
+              <span class="usage-table__m-provider" aria-hidden="true"></span>
+              {{ row.key || t("main.noValue") }}
+            </th>
             <td>{{ tokenText(row.tokens.inputTokens) }}</td>
             <td>{{ tokenText(row.tokens.outputTokens) }}</td>
             <td>{{ tokenText(row.tokens.cacheReadInputTokens) }}</td>
             <td>{{ tokenText(usageCacheWriteTokens(row.tokens)) }}</td>
-            <td>{{ rateText(row) }}</td>
             <td>{{ tokenText(row.tokens.totalTokens) }}</td>
             <td :class="{ 'usage-table__unpriced': row.cost.pricedEntries === 0 }">
               {{ costText(row) }}
             </td>
-          </tr>
-          <tr
-            v-if="props.loaded && !props.unavailable && group.rows.length === 0"
-            class="usage-table__empty"
-          >
-            <td colspan="8">{{ t("main.empty") }}</td>
           </tr>
         </tbody>
 
@@ -254,8 +238,10 @@ function totalModelCount(): number {
 <style scoped>
 .usage-table-wrap {
   overflow: hidden;
-  border: 1px solid var(--border-subtle);
-  border-radius: 0.625rem;
+  padding: 0.375rem 0.375rem 0.25rem;
+  border: 1px solid color-mix(in srgb, var(--border-subtle) 80%, transparent);
+  border-radius: 0.875rem;
+  background: var(--usage-surface, var(--surface-raised));
   box-shadow: var(--usage-card-shadow, var(--shadow-lane));
 }
 
@@ -266,16 +252,15 @@ function totalModelCount(): number {
 
 .usage-table {
   inline-size: 100%;
-  min-inline-size: 54.375rem;
+  min-inline-size: 48rem;
   border-collapse: collapse;
   background: var(--usage-surface, var(--surface-raised));
 }
 
 .usage-table th,
 .usage-table td {
-  block-size: 2.0625rem;
-  padding: 0 0.625rem;
-  border-block-end: 1px solid var(--border-subtle);
+  padding: 0.5625rem 0.75rem;
+  border-block-end: 1px solid color-mix(in srgb, var(--border-subtle) 55%, transparent);
   font-size: 0.75rem;
   font-variant-numeric: tabular-nums;
   text-align: right;
@@ -284,8 +269,10 @@ function totalModelCount(): number {
 
 .usage-table thead th {
   color: var(--text-secondary);
-  font-size: 0.59375rem;
-  font-weight: 550;
+  font-size: 0.65625rem;
+  font-weight: 620;
+  letter-spacing: 0.02em;
+  border-block-end-color: var(--border-subtle);
 }
 
 .usage-table thead th:first-child,
@@ -294,12 +281,9 @@ function totalModelCount(): number {
   text-align: left;
 }
 
-.usage-table tbody th,
-.usage-table tbody td,
-.usage-table tfoot th,
-.usage-table tfoot td {
-  font-size: 0.65625rem;
-  font-weight: 500;
+.usage-table tbody td:first-child,
+.usage-table tfoot td:first-child {
+  font-weight: 570;
 }
 
 .usage-table__sort {
@@ -311,6 +295,7 @@ function totalModelCount(): number {
   background: transparent;
   font-size: inherit;
   font-weight: inherit;
+  letter-spacing: inherit;
   white-space: nowrap;
 }
 
@@ -318,12 +303,16 @@ function totalModelCount(): number {
   color: var(--text-primary);
 }
 
+/* 分组行：不用 track 整行底色（深色下突兀），改为字重＋色点＋组上边界清晰线表达小计。
+   底部让位给下一条 55% 细线，避免与上一组末行的细线叠成双线。 */
 .usage-table__group th,
 .usage-table__group td {
-  background: var(--usage-track, var(--track-background));
+  background: transparent;
   color: var(--text-primary);
   font-size: 0.6875rem;
   font-weight: 680;
+  border-block-end: 0;
+  border-block-start: 1px solid var(--border-subtle);
 }
 
 .usage-table__group th {
@@ -332,10 +321,10 @@ function totalModelCount(): number {
 
 .usage-table__dot {
   display: inline-block;
-  inline-size: 0.375rem;
-  block-size: 0.375rem;
+  inline-size: 0.4375rem;
+  block-size: 0.4375rem;
   margin-inline-end: 0.4375rem;
-  border-radius: 50%;
+  border-radius: 0.15625rem;
   background: var(--cat-codex);
   vertical-align: 0.0625rem;
 }
@@ -352,10 +341,33 @@ tbody[data-provider="opencode"] .usage-table__dot {
   background: var(--cat-opencode);
 }
 
+/* 模型行前的 Provider 色点（产物 m-provider）：色点标识归属，不占语义色 */
+.usage-table__m-provider {
+  display: inline-block;
+  inline-size: 0.5rem;
+  block-size: 0.5rem;
+  margin-inline-end: 0.4375rem;
+  border-radius: 0.1875rem;
+  background: var(--cat-codex);
+  vertical-align: 0.0625rem;
+}
+
+tbody[data-provider="claude"] .usage-table__m-provider {
+  background: var(--cat-claude);
+}
+
+tbody[data-provider="pi"] .usage-table__m-provider {
+  background: var(--cat-pi);
+}
+
+tbody[data-provider="opencode"] .usage-table__m-provider {
+  background: var(--cat-opencode);
+}
+
 .usage-table__model {
   padding-inline-start: 1.4375rem !important;
   font-family: var(--font-data);
-  font-size: 0.625rem !important;
+  font-size: 0.75rem !important;
   font-weight: 500;
 }
 
@@ -363,18 +375,27 @@ tbody[data-provider="opencode"] .usage-table__dot {
   color: var(--text-secondary);
 }
 
-.usage-table__empty td {
-  color: var(--text-secondary);
-  text-align: left;
-}
-
 .usage-table tfoot th,
 .usage-table tfoot td {
   block-size: 2.1875rem;
   border-block-end: 0;
-  border-block-start: 1px solid var(--border-subtle);
-  background: var(--usage-total, var(--surface-primary));
+  border-block-start: 1px solid color-mix(in srgb, var(--border-subtle) 55%, transparent);
   color: var(--text-primary);
   font-weight: 650;
+}
+
+/* 空态压缩：无任何模型数据时收紧行高（表头 47 → ~35、分组行 32 → ~26、合计 35 → 28） */
+.usage-table--compact th,
+.usage-table--compact td {
+  padding-block: 0.375rem;
+}
+
+.usage-table--compact .usage-table__sort {
+  min-block-size: 1.375rem;
+}
+
+.usage-table--compact tfoot th,
+.usage-table--compact tfoot td {
+  block-size: 1.75rem;
 }
 </style>
