@@ -4,6 +4,7 @@ import {
   compactAge,
   compactDuration,
   compactReset,
+  formatCompactTokens,
   formatCompactUsdNanos,
   formatCountdown,
   formatPast,
@@ -58,6 +59,22 @@ describe("USD nanos", () => {
 
   it("keeps cents in the accessible full amount", () => {
     expect(formatUsdNanos("en", 1_234_000_000)).toBe("$1.23");
+  });
+});
+
+describe("formatCompactTokens", () => {
+  it("shows a real zero and small counts as-is", () => {
+    expect(formatCompactTokens("en", 0)).toBe("0");
+    expect(formatCompactTokens("en", 999)).toBe("999");
+  });
+
+  it("uses the locale's compact units", () => {
+    expect(formatCompactTokens("en", 1_234)).toBe("1.2K");
+    expect(formatCompactTokens("en", 67_700)).toBe("67.7K");
+    expect(formatCompactTokens("en", 1_234_567)).toBe("1.2M");
+    expect(formatCompactTokens("en", 12_345_678_901)).toBe("12.3B");
+    expect(formatCompactTokens("zh-CN", 67_700)).toBe("6.8万");
+    expect(formatCompactTokens("zh-CN", 123_456_789)).toBe("1.2亿");
   });
 });
 

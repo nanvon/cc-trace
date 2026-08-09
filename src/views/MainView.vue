@@ -254,7 +254,7 @@ onMounted(() => {
 
       <section class="usage-page__block" aria-labelledby="usage-daily-heading">
         <div class="usage-page__block-head usage-page__block-head--with-legend">
-          <h2 id="usage-daily-heading">{{ t("main.dailyCost") }}</h2>
+          <h2 id="usage-daily-heading">{{ t("main.dailyUsage") }}</h2>
           <div class="usage-page__chart-meta">
             <span v-if="chartUsesContextWindow" class="usage-page__chart-note">
               {{ t("main.chartContext") }}

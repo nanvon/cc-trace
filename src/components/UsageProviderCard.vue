@@ -3,7 +3,7 @@
  * Provider 矮宽卡：色点＋名称 / 费用＋总 Token / Token 分类（输入、输出、缓存读、缓存写）／缓存命中率条。
  *
  * Token 分类对齐 cc-bar By service 卡片；Fast 等效 Token 与倍率不上卡。
- * 命中率条复用余量条形态（4px），染 Provider 品牌色降饱和版，不占用语义色。
+ * 命中率条复用余量条形态（4px），染 Provider 品牌色降饱和版；命中率数值用 success 绿（「绿=好事」，与 cc-bar 一致）。
  */
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
@@ -79,15 +79,14 @@ const providerName = computed(() => t(`provider.${props.source}`));
     <div class="pcard-head">
       <i aria-hidden="true"></i>
       <h3 :id="titleId">{{ providerName }}</h3>
-    </div>
-
-    <div class="pcard-money">
-      <strong class="pcard-cost numeric">{{ cost ?? t("main.noValue") }}</strong>
-      <span class="pcard-total numeric" :title="total.full">
-        <b>{{ hasData ? total.value : t("main.noValue") }}</b
-        ><small v-if="hasData && total.unit">{{ tokenUnitSeparator }}{{ total.unit }}</small>
-        <span class="pcard-total__unit">{{ t("main.tokenUnit") }}</span>
-      </span>
+      <div class="pcard-meta">
+        <strong class="pcard-cost numeric">{{ cost ?? t("main.noValue") }}</strong>
+        <span class="pcard-total numeric" :title="total.full">
+          <b>{{ hasData ? total.value : t("main.noValue") }}</b
+          ><small v-if="hasData && total.unit">{{ tokenUnitSeparator }}{{ total.unit }}</small>
+          <span class="pcard-total__unit">{{ t("main.tokenUnit") }}</span>
+        </span>
+      </div>
     </div>
 
     <div class="pcard-detail">
@@ -170,6 +169,7 @@ const providerName = computed(() => t(`provider.${props.source}`));
 
 .pcard-head h3 {
   margin: 0;
+  min-inline-size: 0;
   overflow: hidden;
   font-size: 0.78125rem;
   font-weight: 650;
@@ -177,19 +177,20 @@ const providerName = computed(() => t(`provider.${props.source}`));
   white-space: nowrap;
 }
 
-.pcard-money {
+.pcard-meta {
   display: flex;
   align-items: baseline;
-  justify-content: space-between;
   gap: 0.5rem;
+  margin-inline-start: auto;
   min-inline-size: 0;
 }
 
 .pcard-cost {
-  font-size: 1.3125rem;
-  font-weight: 680;
-  letter-spacing: -0.025em;
-  line-height: 1;
+  flex: 0 0 auto;
+  color: var(--text-primary);
+  font-size: 0.71875rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
 }
 
 .pcard-total {
@@ -203,10 +204,9 @@ const providerName = computed(() => t(`provider.${props.source}`));
 
 .pcard-total b {
   color: var(--text-primary);
-  font-size: 1.3125rem;
-  font-weight: 680;
-  letter-spacing: -0.025em;
-  line-height: 1;
+  font-size: 0.71875rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
 }
 
 .pcard-total small {
@@ -267,7 +267,7 @@ const providerName = computed(() => t(`provider.${props.source}`));
 }
 
 .pcard-hit-label b {
-  color: var(--text-primary);
+  color: var(--status-success);
   font-size: 0.71875rem;
   font-weight: 620;
 }

@@ -156,10 +156,9 @@ const sources = computed(() => usage.sourceFilterOptions);
 }
 
 .sb-item.on {
-  color: var(--text-primary);
-  background: var(--surface-raised);
-  box-shadow: 0 1px 2px rgb(24 24 27 / 10%);
-  font-weight: 650;
+  color: var(--action-on-soft);
+  background: var(--action-soft);
+  font-weight: 700;
 }
 
 .sb-dot {

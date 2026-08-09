@@ -94,6 +94,17 @@ export function formatCompactUsdNanos(locale: string, nanos: number): string {
   }).format(nanos / USD_NANOS);
 }
 
+/**
+ * 紧凑 token 读数，口径与 cc-bar 一致：不足千原样，其余按界面语言取
+ * Intl 紧凑记数法（en `67.7K`、zh-CN `6.8万`）。只用于图表刻度与 Tooltip。
+ */
+export function formatCompactTokens(locale: string, value: number): string {
+  return new Intl.NumberFormat(locale, {
+    notation: "compact",
+    maximumFractionDigits: 1,
+  }).format(Math.max(0, value));
+}
+
 /** 完整金额只用于 Tooltip 与无障碍说明，不受 popover 定宽取整限制。 */
 export function formatUsdNanos(locale: string, nanos: number): string {
   return new Intl.NumberFormat(locale, {

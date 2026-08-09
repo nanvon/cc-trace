@@ -27,6 +27,9 @@
 
   /* HeroUI primary，只表达交互，不兼任成功、Provider 品牌或装饰色 */
   --action-primary: #006fee;
+  /* 导航选中态的中性浅底与文字（ADR-0024 侧边栏选中态，对齐 HeroUI default 变体，不取主色） */
+  --action-soft: rgb(24 24 28 / 8%);
+  --action-on-soft: var(--text-primary);
   --status-success: #17c964;
   --status-warning: #f5a524;
   /* 余量四档里 warning 与 danger 之间的一档。HeroUI 官方语义色没有这一档，
@@ -92,6 +95,8 @@
     --track-background: #2a2a2e;
 
     --action-primary: #338ef7;
+    --action-soft: rgb(236 237 238 / 10%);
+    --action-on-soft: var(--text-primary);
     --status-success: #45d483;
     --status-warning: #fbbf24;
     --status-low: #ff8a3d;
@@ -122,6 +127,8 @@
   --track-background: #2a2a2e;
 
   --action-primary: #338ef7;
+  --action-soft: rgb(236 237 238 / 10%);
+  --action-on-soft: var(--text-primary);
   --status-success: #45d483;
   --status-warning: #fbbf24;
   --status-low: #ff8a3d;

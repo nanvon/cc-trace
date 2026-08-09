@@ -9,8 +9,13 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import VChart from "vue-echarts";
 
-import type { UsageDashboardRange, UsageSource, UsageSummary } from "../features/usage/contracts";
-import { formatCompactUsdNanos, formatUsdNanos } from "../lib/format";
+import type {
+  UsageDashboardRange,
+  UsageSource,
+  UsageSummary,
+  UsageSummaryRow,
+} from "../features/usage/contracts";
+import { formatCompactTokens, formatUsdNanos } from "../lib/format";
 import { usageChartColors } from "../lib/chartTheme";
 
 use([BarChart, GridComponent, TooltipComponent, CanvasRenderer]);
@@ -82,8 +87,12 @@ const dates = computed(() => {
 
 const hasUsageRows = computed(() => rowDates.value.length > 0);
 
-function costFor(source: UsageSource, date: string): number {
-  return props.day[source]?.rows.find((row) => row.key === date)?.cost.apiEquivalentCostNanos ?? 0;
+function dayRow(source: UsageSource, date: string): UsageSummaryRow | undefined {
+  return props.day[source]?.rows.find((row) => row.key === date);
+}
+
+function dayTokens(source: UsageSource, date: string): number {
+  return dayRow(source, date)?.tokens.totalTokens ?? 0;
 }
 
 function formatDay(value: string): string {
@@ -93,6 +102,87 @@ function formatDay(value: string): string {
 
 function barOpacity(date: string): number {
   return contextual.value && !selectedDates.value.has(date) ? 0.35 : 1;
+}
+
+interface TooltipParam {
+  data: { dateKey?: string };
+}
+
+function tooltipFormatter(rawParams: unknown): string {
+  const params = rawParams as TooltipParam[];
+  const dateKey = params[0]?.data?.dateKey;
+  if (!dateKey) return "";
+
+  const colors = usageChartColors();
+  const rowStyle =
+    "display:flex;align-items:center;gap:6px;line-height:1.7;" + "font-family:" + colors.fontFamily;
+  const numStyle = "font-variant-numeric:tabular-nums";
+  const muted = `color:${colors.muted}`;
+
+  let totalCostNanos = 0;
+  let totalTokens = 0;
+  for (const source of props.sources) {
+    const row = dayRow(source, dateKey);
+    if (!row) continue;
+    totalCostNanos += row.cost.apiEquivalentCostNanos;
+    totalTokens += row.tokens.totalTokens;
+  }
+
+  const lines = [
+    `<div style="${rowStyle}">` +
+      `<span style="flex:1">${t("main.grandTotal")}</span>` +
+      `<span style="${numStyle};font-weight:600">${formatUsdNanos(locale.value, totalCostNanos)}</span>` +
+      `<span style="${numStyle};min-inline-size:4.5em;text-align:right;font-weight:600">${formatCompactTokens(locale.value, totalTokens)}</span>` +
+      `</div>`,
+  ];
+
+  for (const source of props.sources) {
+    const row = dayRow(source, dateKey);
+    if (!row) continue;
+    lines.push(
+      `<div style="${rowStyle}">` +
+        `<span style="inline-size:8px;block-size:8px;border-radius:2px;background:${colors[source]};flex:none"></span>` +
+        `<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${t(`provider.${source}`)}</span>` +
+        `<span style="${numStyle}">${formatUsdNanos(locale.value, row.cost.apiEquivalentCostNanos)}</span>` +
+        `<span style="${numStyle};min-inline-size:4.5em;text-align:right">${formatCompactTokens(locale.value, row.tokens.totalTokens)}</span>` +
+        `</div>`,
+    );
+  }
+
+  lines.push(`<div style="height:1px;background:${colors.border};margin:6px 0"></div>`);
+
+  let totalInput = 0;
+  let totalCacheRead = 0;
+  let totalOutput = 0;
+  for (const source of props.sources) {
+    const row = dayRow(source, dateKey);
+    if (!row) continue;
+    totalInput += row.tokens.inputTokens;
+    totalCacheRead += row.tokens.cacheReadInputTokens;
+    totalOutput += row.tokens.outputTokens;
+  }
+  const hitRate = totalInput > 0 ? Math.round((totalCacheRead / totalInput) * 100) : 0;
+
+  lines.push(
+    `<div style="${rowStyle};color:${colors.muted};font-size:11px">` +
+      `<span style="flex:1">${t("main.input")}</span><span style="${numStyle}">${formatCompactTokens(locale.value, totalInput)}</span>` +
+      `</div>`,
+    `<div style="${rowStyle};color:${colors.muted};font-size:11px">` +
+      `<span style="flex:1">${t("main.output")}</span><span style="${numStyle}">${formatCompactTokens(locale.value, totalOutput)}</span>` +
+      `</div>`,
+    `<div style="${rowStyle};color:${colors.muted};font-size:11px">` +
+      `<span style="flex:1">${t("main.cacheHit")}</span><span style="${numStyle}">${formatCompactTokens(locale.value, totalCacheRead)}</span>` +
+      `</div>`,
+    `<div style="${rowStyle};color:${colors.muted};font-size:11px">` +
+      `<span style="flex:1">${t("main.cacheHitRate")}</span><span style="${numStyle}">${hitRate}%</span>` +
+      `</div>`,
+  );
+
+  lines.push(
+    `<div style="margin-top:6px;${muted};font-family:${colors.fontFamily}">${dateKey}</div>`,
+  );
+
+  return lines.join("");
 }
 
 const option = computed<EChartsOption>(() => {
@@ -120,10 +210,10 @@ const option = computed<EChartsOption>(() => {
       borderColor: colors.border,
       borderWidth: 1,
       confine: true,
-      textStyle: { color: colors.text, fontFamily: colors.fontFamily, fontSize: 12 },
-      trigger: "axis",
+      formatter: tooltipFormatter,
+      padding: [8, 10],
       transitionDuration: 0,
-      valueFormatter: (value) => formatUsdNanos(locale.value, Number(value)),
+      trigger: "axis",
     },
     xAxis: {
       axisLabel: {
@@ -139,15 +229,10 @@ const option = computed<EChartsOption>(() => {
       type: "category",
     },
     yAxis: {
-      axisLabel: {
-        color: colors.muted,
-        fontFamily: colors.fontFamily,
-        fontSize: 10,
-        formatter: (value: number) => formatCompactUsdNanos(locale.value, value),
-      },
+      axisLabel: { show: false },
       axisLine: { show: false },
       axisTick: { show: false },
-      splitLine: { lineStyle: { color: colors.border, type: "solid" } },
+      splitLine: { show: false },
       type: "value",
     },
     series: props.sources.map((source, index) => ({
@@ -155,8 +240,9 @@ const option = computed<EChartsOption>(() => {
       barMaxWidth: 18,
       barCategoryGap: "32%",
       data: dates.value.map((date) => ({
+        dateKey: date,
         itemStyle: { opacity: barOpacity(date) },
-        value: costFor(source, date),
+        value: dayTokens(source, date),
       })),
       itemStyle: {
         color: colors[source],
