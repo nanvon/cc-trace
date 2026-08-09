@@ -101,14 +101,12 @@ pub fn install(app: &App, lang: Lang) -> tauri::Result<()> {
         // 拿不到 NSStatusItem 时必须失败可见：expanded 路径不绑定菜单也不处理
         // 点击事件，静默跳过会留下一个存在却点不动的图标；正常流程该分支不可达
         // （tray-icon 创建后即持有 NSStatusItem），宁可不启动也不悄悄坏。
-        let installed = tray.with_inner_tray_icon(move |inner| {
-            match inner.ns_status_item() {
-                Some(status_item) => {
-                    super::macos_status_item::install(&handle, &status_item, lang);
-                    true
-                }
-                None => false,
+        let installed = tray.with_inner_tray_icon(move |inner| match inner.ns_status_item() {
+            Some(status_item) => {
+                super::macos_status_item::install(&handle, &status_item, lang);
+                true
             }
+            None => false,
         })?;
         if !installed {
             return Err(tauri::Error::Io(std::io::Error::other(

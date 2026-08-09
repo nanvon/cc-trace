@@ -88,7 +88,10 @@ mod tests {
         assert_eq!(indicator_from_str("none"), ServiceStatusIndicator::None);
         assert_eq!(indicator_from_str("minor"), ServiceStatusIndicator::Minor);
         assert_eq!(indicator_from_str("major"), ServiceStatusIndicator::Major);
-        assert_eq!(indicator_from_str("critical"), ServiceStatusIndicator::Critical);
+        assert_eq!(
+            indicator_from_str("critical"),
+            ServiceStatusIndicator::Critical
+        );
         assert_eq!(
             indicator_from_str("maintenance"),
             ServiceStatusIndicator::Maintenance
@@ -98,7 +101,11 @@ mod tests {
     #[test]
     fn unknown_indicators_and_case_differences_become_unknown() {
         for raw in ["", "degraded", "None", "PERFORMANCE"] {
-            assert_eq!(indicator_from_str(raw), ServiceStatusIndicator::Unknown, "{raw:?}");
+            assert_eq!(
+                indicator_from_str(raw),
+                ServiceStatusIndicator::Unknown,
+                "{raw:?}"
+            );
         }
     }
 
@@ -109,8 +116,14 @@ mod tests {
         )
         .expect("payload parses");
         assert_eq!(payload.status.indicator, "minor");
-        assert_eq!(payload.status.description.as_deref(), Some("We are investigating"));
-        assert_eq!(payload.page.unwrap().updated_at.as_deref(), Some("2026-08-09T01:02:03Z"));
+        assert_eq!(
+            payload.status.description.as_deref(),
+            Some("We are investigating")
+        );
+        assert_eq!(
+            payload.page.unwrap().updated_at.as_deref(),
+            Some("2026-08-09T01:02:03Z")
+        );
     }
 
     #[test]

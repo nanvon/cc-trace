@@ -403,7 +403,10 @@ impl AppCore {
 
     /// 当前服务状态快照。
     pub fn service_status(&self) -> ServiceStatusState {
-        self.service_status.lock().expect("service status lock").clone()
+        self.service_status
+            .lock()
+            .expect("service status lock")
+            .clone()
     }
 
     /// 拉取 OpenAI／Anthropic 官方状态页。两个请求并发，互不影响；
