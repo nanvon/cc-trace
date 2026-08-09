@@ -45,37 +45,10 @@ impl Secret {
         Self(value.into())
     }
 
-    /// 取出明文。只允许用于构造请求头、回写原来源与身份比较。
+    /// 取出明文。只允许用于构造请求头、回写原来源、身份比较与构造展示身份
+    /// （`ProviderIdentity.account`，见 ADR-0025）。
     pub fn expose(&self) -> &str {
         &self.0
-    }
-
-    /// 脱敏展示提示，例如 `n***@example.com`、`ab***yz`。
-    ///
-    /// 结果会进入 command 载荷，因此保留的字符必须少到无法反推账号：邮箱只留首字母
-    /// 与域名，其余只留首尾各两位。
-    pub fn hint(&self) -> String {
-        let value = self.0.trim();
-        if let Some((local, domain)) = value.split_once('@') {
-            let head = local.chars().next().unwrap_or('*');
-            return format!("{head}***@{domain}");
-        }
-
-        let chars: Vec<char> = value.chars().collect();
-        if chars.len() <= 6 {
-            return "***".to_owned();
-        }
-
-        let head: String = chars.iter().take(2).collect();
-        let tail: String = chars
-            .iter()
-            .rev()
-            .take(2)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect();
-        format!("{head}***{tail}")
     }
 }
 
@@ -190,17 +163,6 @@ mod tests {
         let secret = Secret::new("sk-live-do-not-print");
         assert_eq!(format!("{secret:?}"), "Secret(<redacted>)");
         assert!(!format!("{secret:?}").contains("do-not-print"));
-    }
-
-    #[test]
-    fn hint_keeps_the_domain_but_not_the_local_part() {
-        assert_eq!(Secret::new("nanvon@example.com").hint(), "n***@example.com");
-    }
-
-    #[test]
-    fn hint_of_an_opaque_value_keeps_only_the_edges() {
-        assert_eq!(Secret::new("acct_1234567890").hint(), "ac***90");
-        assert_eq!(Secret::new("short").hint(), "***");
     }
 
     #[test]

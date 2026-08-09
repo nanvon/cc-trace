@@ -35,13 +35,17 @@ sys-locale = "0.3"
 # 自动刷新循环与合成 Provider 的延迟；`sync` 提供 token 刷新的单飞互斥锁。
 tokio = { version = "1", features = ["time", "sync"] }
 # Provider 额度请求与 token 刷新。rustls 而非系统 OpenSSL，两个平台构建条件一致；
-# 关掉默认 features 避免引入 cookie、代理自动探测等首版不需要的能力。
+# 关掉默认 features 后必须补回代理探测：`macos-system-configuration`（macOS 读系统
+# 代理）与 `system-proxy`（读环境变量代理）。否则国内网络下直连 chatgpt.com 会被
+# DNS 污染挡死，而 cc-bar 走 URLSession 天然继承系统代理。
 reqwest = { version = "0.12", default-features = false, features = [
   "rustls-tls",
   "json",
+  "system-proxy",
+  "macos-system-configuration",
 ] }
-# 身份变化判断用的单向摘要。account id 与邮箱本身永远不落盘，缓存里只存摘要，
-# 见 docs/额度领域模型.md 第 4.1 节。
+# 身份变化判断用的单向摘要。比较值不落盘：缓存只存摘要，展示身份（完整账号）
+# 是唯一落盘的身份明文，见 docs/额度领域模型.md 第 4.1 节与 ADR-0025。
 sha2 = "0.10"
 # GB 级本地 JSONL 的派生索引留在 Rust 层；bundled 固定 SQLite 能力并避免目标机
 # 系统库差异。前端不获得 SQL 权限，见 ADR-0018。
