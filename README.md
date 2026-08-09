@@ -96,7 +96,7 @@ CC Trace 是为个人需求开发的开源小工具。为了查询额度,它会�
 - Codex:`~/.codex/auth.json`
 - Claude Code:`~/.claude/.credentials.json` 与 macOS Keychain
 - 只向 Codex 与 Claude Code 的官方接口请求额度数据,凭据不发给任何第三方;对外部数据的唯一写入是按官方 OAuth 流程续期即将过期的凭据
-- 凭据只在 Rust 内核里处理,界面只拿到脱敏后的账号信息与额度数字;token 不进日志、不进缓存
+- 凭据只在 Rust 内核里处理,界面只拿到额度数字与账号信息(完整账号仅用于本地展示,见 `docs/决策/ADR-0025`);token 不进日志、不进缓存
 
 用量统计基于只读扫描 Codex 与 Claude Code 的本机会话日志(JSONL)得出,索引只写入 CC Trace 自己的数据目录。
 
