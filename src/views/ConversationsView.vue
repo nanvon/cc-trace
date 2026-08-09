@@ -261,6 +261,7 @@ watch(
   --usage-canvas: var(--surface-primary);
   --usage-surface: var(--surface-raised);
   --usage-divider: var(--border-subtle);
+  container-type: inline-size;
   min-block-size: 100vh;
   padding: clamp(1.125rem, 3vw, 1.375rem) clamp(1.125rem, 3vw, 1.875rem) 2.125rem;
   background: var(--usage-canvas);
@@ -441,7 +442,7 @@ watch(
   gap: 0.375rem;
 }
 
-@media (max-width: 640px) {
+@container (max-width: 640px) {
   .conversations__stats {
     display: none;
   }

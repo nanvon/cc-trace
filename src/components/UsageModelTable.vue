@@ -259,9 +259,9 @@ function totalModelCount(): number {
 
 .usage-table th,
 .usage-table td {
-  padding: 0.5625rem 0.75rem;
+  padding: 0.625rem 0.75rem;
   border-block-end: 1px solid color-mix(in srgb, var(--border-subtle) 55%, transparent);
-  font-size: 0.75rem;
+  font-size: 0.8125rem;
   font-variant-numeric: tabular-nums;
   text-align: right;
   white-space: nowrap;
@@ -269,7 +269,7 @@ function totalModelCount(): number {
 
 .usage-table thead th {
   color: var(--text-secondary);
-  font-size: 0.65625rem;
+  font-size: 0.71875rem;
   font-weight: 620;
   letter-spacing: 0.02em;
   border-block-end-color: var(--border-subtle);
@@ -287,7 +287,7 @@ function totalModelCount(): number {
 }
 
 .usage-table__sort {
-  min-block-size: 1.75rem;
+  min-block-size: 2.25rem;
   margin: 0 -0.3125rem;
   padding: 0 0.3125rem;
   border: 0;
@@ -367,7 +367,7 @@ tbody[data-provider="opencode"] .usage-table__m-provider {
 .usage-table__model {
   padding-inline-start: 1.4375rem !important;
   font-family: var(--font-data);
-  font-size: 0.75rem !important;
+  font-size: 0.8125rem !important;
   font-weight: 500;
 }
 

@@ -240,7 +240,10 @@ onMounted(() => {
             >
           </span>
         </div>
-        <div class="usage-page__providers">
+        <div
+          class="usage-page__providers"
+          :class="{ 'usage-page__providers--single': providerSources.length === 1 }"
+        >
           <UsageProviderCard
             v-for="source in providerSources"
             :key="source"
@@ -309,8 +312,10 @@ onMounted(() => {
   --usage-divider: var(--border-subtle);
   --usage-track: var(--track-background);
   --usage-card-shadow: var(--shadow-lane);
+  /* 断点按内容区而非视口：侧边栏 176px 不参与窄屏判断（ADR-0024 后内容区 = 视口 − 176px） */
+  container-type: inline-size;
   min-block-size: 100vh;
-  padding: clamp(1.125rem, 3vw, 1.375rem) clamp(1.125rem, 3vw, 1.875rem) 2.125rem;
+  padding: clamp(1.5rem, 3vw, 2rem) clamp(1.5rem, 3vw, 2.5rem) 2.5rem;
   background: var(--usage-canvas);
   font-family: var(--font-ui);
 }
@@ -332,9 +337,9 @@ onMounted(() => {
   align-items: baseline;
   justify-content: space-between;
   gap: var(--space-4);
-  padding-block-end: 0.625rem;
+  padding-block-end: 0.75rem;
   border-block-end: 1px solid var(--usage-divider);
-  margin-block-end: 0.875rem;
+  margin-block-end: 1.25rem;
 }
 
 .usage-page__heading {
@@ -345,8 +350,8 @@ onMounted(() => {
 
 .usage-page__heading h1 {
   margin: 0;
-  font-size: 1.25rem;
-  font-weight: 680;
+  font-size: 1.5rem;
+  font-weight: 700;
   letter-spacing: -0.025em;
   line-height: 1.15;
 }
@@ -361,7 +366,7 @@ onMounted(() => {
   align-items: center;
   gap: 0.375rem;
   color: var(--text-secondary);
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   white-space: nowrap;
 }
 
@@ -396,7 +401,7 @@ onMounted(() => {
 .usage-page__filters {
   flex-wrap: wrap;
   gap: 0.625rem;
-  margin-block-end: 1rem;
+  margin-block-end: 1.5rem;
 }
 
 .usage-page__segmented {
@@ -414,13 +419,13 @@ onMounted(() => {
 }
 
 .usage-page__segmented button {
-  min-block-size: 1.875rem;
-  padding: 0 0.625rem;
+  min-block-size: 2.5rem;
+  padding: 0 0.75rem;
   border: 0;
   border-radius: calc(var(--radius-control) - 0.1875rem);
   color: var(--text-secondary);
   background: transparent;
-  font-size: 0.71875rem;
+  font-size: 0.78125rem;
   white-space: nowrap;
 }
 
@@ -435,15 +440,15 @@ onMounted(() => {
   font-weight: 570;
 }
 
-/* 日期范围框：产物 date-input（32px 高、1px 边框、9px 圆角、surface-raised 底） */
+/* 日期范围框：产物 date-input（40px 高、1px 边框、9px 圆角、surface-raised 底） */
 .usage-page__date-input {
-  min-block-size: 2rem;
-  padding: 0 0.75rem;
+  min-block-size: 2.5rem;
+  padding: 0 0.875rem;
   color: var(--text-secondary);
   background: var(--usage-surface, var(--surface-raised));
   border: 1px solid var(--border-subtle);
   border-radius: 0.5625rem;
-  font-size: 0.71875rem;
+  font-size: 0.78125rem;
   font-variant-numeric: tabular-nums;
 }
 
@@ -459,7 +464,7 @@ onMounted(() => {
   align-items: baseline;
   gap: 0.875rem;
   color: var(--text-secondary);
-  font-size: 0.75rem;
+  font-size: 0.8125rem;
   font-weight: 520;
   white-space: nowrap;
 }
@@ -467,7 +472,7 @@ onMounted(() => {
 .usage-page__summary b {
   margin-inline-start: 0.3125rem;
   color: var(--text-primary);
-  font-size: 0.84375rem;
+  font-size: 0.9375rem;
   font-weight: 700;
 }
 
@@ -478,19 +483,23 @@ onMounted(() => {
 }
 
 .usage-page__summary-money {
-  font-size: 0.84375rem;
+  font-size: 0.9375rem;
   font-weight: 700;
 }
 
 .usage-page__providers {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0.75rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
   align-items: stretch;
 }
 
+.usage-page__providers--single {
+  grid-template-columns: 1fr;
+}
+
 .usage-page__block {
-  margin-block-end: 1.25rem;
+  margin-block-end: 1.75rem;
 }
 
 .usage-page__block--last {
@@ -500,8 +509,8 @@ onMounted(() => {
 .usage-page__block-head {
   justify-content: space-between;
   min-block-size: 1.5rem;
-  gap: 1rem;
-  margin-block-end: 0.5rem;
+  gap: 1.25rem;
+  margin-block-end: 0.75rem;
 }
 
 .usage-page__block-head:not(.usage-page__block-head--with-legend)::after {
@@ -515,8 +524,8 @@ onMounted(() => {
 .usage-page__block-head h2 {
   margin: 0;
   color: var(--text-secondary);
-  font-size: 0.6875rem;
-  font-weight: 680;
+  font-size: 0.78125rem;
+  font-weight: 700;
   letter-spacing: 0.04em;
 }
 
@@ -525,7 +534,7 @@ onMounted(() => {
   align-items: center;
   gap: 0.875rem;
   color: var(--text-secondary);
-  font-size: 0.65625rem;
+  font-size: 0.71875rem;
 }
 
 .usage-page__chart-meta {
@@ -537,7 +546,7 @@ onMounted(() => {
 
 .usage-page__chart-note {
   color: var(--text-secondary);
-  font-size: 0.65625rem;
+  font-size: 0.71875rem;
   white-space: nowrap;
 }
 
@@ -568,19 +577,7 @@ onMounted(() => {
   background: var(--provider-color);
 }
 
-.usage-page__providers {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.75rem;
-}
-
-@media (max-width: 1100px) {
-  .usage-page__providers {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 640px) {
+@container (max-width: 640px) {
   .usage-page__heading {
     align-items: flex-start;
     flex-direction: column;

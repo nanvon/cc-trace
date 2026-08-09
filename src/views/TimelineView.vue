@@ -263,6 +263,7 @@ onBeforeUnmount(() => {
   --usage-surface: var(--surface-raised);
   --usage-divider: var(--border-subtle);
   --usage-card-shadow: var(--shadow-lane);
+  container-type: inline-size;
   min-block-size: 100vh;
   padding: clamp(1.125rem, 3vw, 1.375rem) clamp(1.125rem, 3vw, 1.875rem) 2.125rem;
   background: var(--usage-canvas);
@@ -419,7 +420,7 @@ onBeforeUnmount(() => {
   font-weight: 500;
 }
 
-@media (max-width: 760px) {
+@container (max-width: 760px) {
   .timeline__section-head {
     align-items: flex-start;
     flex-direction: column;

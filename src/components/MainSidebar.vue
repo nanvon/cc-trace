@@ -129,7 +129,7 @@ const sources = computed(() => usage.sourceFilterOptions);
 .sb-group > h3 {
   margin: 0 0 0.25rem 0.625rem;
   color: var(--text-secondary);
-  font-size: 0.65625rem;
+  font-size: 0.6875rem;
   font-weight: 680;
   letter-spacing: 0.05em;
 }
@@ -138,13 +138,13 @@ const sources = computed(() => usage.sourceFilterOptions);
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  min-block-size: 1.875rem;
+  min-block-size: 2.5rem;
   padding: 0.3125rem 0.625rem;
   border: 0;
   border-radius: 0.5rem;
   color: var(--text-secondary);
   background: transparent;
-  font-size: 0.78125rem;
+  font-size: 0.8125rem;
   font-weight: 600;
   text-align: start;
   white-space: nowrap;

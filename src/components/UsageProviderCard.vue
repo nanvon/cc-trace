@@ -130,10 +130,10 @@ const providerName = computed(() => t(`provider.${props.source}`));
 .pcard {
   --provider-color: var(--cat-codex);
   display: grid;
-  gap: 0.5625rem;
+  gap: 0.75rem;
   align-content: start;
   min-inline-size: 0;
-  padding: 0.8125rem 0.9375rem 0.75rem;
+  padding: 1rem 1.125rem 0.9375rem;
   background: var(--usage-surface, var(--surface-raised));
   border: 1px solid color-mix(in srgb, var(--usage-divider, var(--border-subtle)) 80%, transparent);
   border-radius: 0.875rem;
@@ -171,7 +171,7 @@ const providerName = computed(() => t(`provider.${props.source}`));
   margin: 0;
   min-inline-size: 0;
   overflow: hidden;
-  font-size: 0.78125rem;
+  font-size: 0.875rem;
   font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -188,7 +188,7 @@ const providerName = computed(() => t(`provider.${props.source}`));
 .pcard-cost {
   flex: 0 0 auto;
   color: var(--text-primary);
-  font-size: 0.71875rem;
+  font-size: 0.8125rem;
   font-weight: 650;
   letter-spacing: -0.01em;
 }
@@ -197,14 +197,14 @@ const providerName = computed(() => t(`provider.${props.source}`));
   min-inline-size: 0;
   overflow: hidden;
   color: var(--text-secondary);
-  font-size: 0.71875rem;
+  font-size: 0.8125rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .pcard-total b {
   color: var(--text-primary);
-  font-size: 0.71875rem;
+  font-size: 0.8125rem;
   font-weight: 650;
   letter-spacing: -0.01em;
 }
@@ -219,7 +219,7 @@ const providerName = computed(() => t(`provider.${props.source}`));
 
 .pcard-detail {
   display: grid;
-  gap: 0.3125rem;
+  gap: 0.375rem;
 }
 
 .pcard-detail__row {
@@ -239,7 +239,7 @@ const providerName = computed(() => t(`provider.${props.source}`));
 .pcard-detail__label {
   flex: 0 0 auto;
   color: var(--text-secondary);
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   white-space: nowrap;
 }
 
@@ -247,7 +247,7 @@ const providerName = computed(() => t(`provider.${props.source}`));
   min-inline-size: 0;
   overflow: hidden;
   color: var(--text-primary);
-  font-size: 0.71875rem;
+  font-size: 0.78125rem;
   font-weight: 620;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -255,7 +255,7 @@ const providerName = computed(() => t(`provider.${props.source}`));
 
 .pcard-hit {
   display: grid;
-  gap: 0.375rem;
+  gap: 0.4375rem;
 }
 
 .pcard-hit-label {
@@ -263,17 +263,17 @@ const providerName = computed(() => t(`provider.${props.source}`));
   justify-content: space-between;
   gap: 0.5rem;
   color: var(--text-secondary);
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
 }
 
 .pcard-hit-label b {
   color: var(--status-success);
-  font-size: 0.71875rem;
+  font-size: 0.78125rem;
   font-weight: 620;
 }
 
 .bar {
-  block-size: 4px;
+  block-size: 6px;
   overflow: hidden;
   border-radius: 999px;
   background: color-mix(in srgb, var(--provider-color) 14%, transparent);

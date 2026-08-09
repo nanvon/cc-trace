@@ -219,7 +219,7 @@ const option = computed<EChartsOption>(() => {
       axisLabel: {
         color: colors.muted,
         fontFamily: colors.fontFamily,
-        fontSize: 9.5,
+        fontSize: 10.5,
         hideOverlap: true,
         interval: Math.max(0, Math.ceil(categories.length / 5) - 1),
       },
@@ -283,7 +283,7 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .usage-chart {
-  min-block-size: 9.375rem;
+  min-block-size: 12.5rem;
   padding: 0.8125rem 0.875rem 0.5625rem;
   background: var(--usage-surface, var(--surface-raised));
   border: 1px solid var(--border-subtle);
@@ -293,12 +293,12 @@ onBeforeUnmount(() => {
 
 .usage-chart__canvas {
   inline-size: 100%;
-  block-size: 8.625rem;
+  block-size: 12.5rem;
 }
 
 .usage-chart__empty {
   display: grid;
-  min-block-size: 8.625rem;
+  min-block-size: 12.5rem;
   place-items: center;
   color: var(--text-secondary);
   font-size: 0.75rem;
