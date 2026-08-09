@@ -1,8 +1,8 @@
 <script setup lang="ts">
 /**
- * Provider 矮宽卡（ADR-0024 第 5 节）：色点＋名称 / 费用＋总 Token / 缓存命中率条。
+ * Provider 矮宽卡：色点＋名称 / 费用＋总 Token / Token 分类（输入、输出、缓存读、缓存写）／缓存命中率条。
  *
- * 输入／输出／缓存命中／缓存写入细节交还按模型表（表头已有这些列），不在卡上重复。
+ * Token 分类对齐 cc-bar By service 卡片；Fast 等效 Token 与倍率不上卡。
  * 命中率条复用余量条形态（4px），染 Provider 品牌色降饱和版，不占用语义色。
  */
 import { computed } from "vue";
@@ -14,6 +14,7 @@ import {
   formatUsagePercent,
   presentUsageTokens,
   usageCacheHitRate,
+  usageCacheWriteTokens,
 } from "../features/usage/presentation";
 
 const props = defineProps<{
@@ -55,6 +56,21 @@ const cost = computed(() => {
 });
 const hitRate = computed(() => usageCacheHitRate(tokens.value));
 
+const detail = computed(() => {
+  const format = (n: number) => {
+    if (!hasData.value) return t("main.noValue");
+    const display = presentUsageTokens(locale.value, n);
+    return display.unit ? `${display.value}${display.unit}` : display.value;
+  };
+  const raw = tokens.value;
+  return {
+    input: format(raw.inputTokens),
+    output: format(raw.outputTokens),
+    cacheRead: format(raw.cacheReadInputTokens),
+    cacheWrite: format(usageCacheWriteTokens(raw)),
+  };
+});
+
 const providerName = computed(() => t(`provider.${props.source}`));
 </script>
 
@@ -72,6 +88,29 @@ const providerName = computed(() => t(`provider.${props.source}`));
         ><small v-if="hasData && total.unit">{{ tokenUnitSeparator }}{{ total.unit }}</small>
         <span class="pcard-total__unit">{{ t("main.tokenUnit") }}</span>
       </span>
+    </div>
+
+    <div class="pcard-detail">
+      <div class="pcard-detail__row">
+        <span class="pcard-detail__item">
+          <span class="pcard-detail__label">{{ t("main.input") }}</span>
+          <b class="pcard-detail__value numeric">{{ detail.input }}</b>
+        </span>
+        <span class="pcard-detail__item">
+          <span class="pcard-detail__label">{{ t("main.output") }}</span>
+          <b class="pcard-detail__value numeric">{{ detail.output }}</b>
+        </span>
+      </div>
+      <div class="pcard-detail__row">
+        <span class="pcard-detail__item">
+          <span class="pcard-detail__label">{{ t("main.cacheHit") }}</span>
+          <b class="pcard-detail__value numeric">{{ detail.cacheRead }}</b>
+        </span>
+        <span class="pcard-detail__item">
+          <span class="pcard-detail__label">{{ t("main.cacheWrite") }}</span>
+          <b class="pcard-detail__value numeric">{{ detail.cacheWrite }}</b>
+        </span>
+      </div>
     </div>
 
     <div class="pcard-hit">
@@ -174,6 +213,42 @@ const providerName = computed(() => t(`provider.${props.source}`));
 
 .pcard-total__unit {
   margin-inline-start: 0.25rem;
+}
+
+.pcard-detail {
+  display: grid;
+  gap: 0.3125rem;
+}
+
+.pcard-detail__row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.875rem;
+}
+
+.pcard-detail__item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-inline-size: 0;
+}
+
+.pcard-detail__label {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+  font-size: 0.6875rem;
+  white-space: nowrap;
+}
+
+.pcard-detail__value {
+  min-inline-size: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 0.71875rem;
+  font-weight: 620;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .pcard-hit {
