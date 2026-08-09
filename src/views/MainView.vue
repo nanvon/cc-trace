@@ -454,6 +454,7 @@ onMounted(() => {
 
 /* 摘要挂「按 Provider」标题行右侧（ADR-0024）：钱为主、Token 为次 */
 .usage-page__summary {
+  order: 1;
   display: inline-flex;
   align-items: baseline;
   gap: 0.875rem;
