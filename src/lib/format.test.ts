@@ -110,12 +110,17 @@ describe("compactReset", () => {
 });
 
 describe("compactAge", () => {
-  it("hands the last minute back to i18n instead of counting seconds", () => {
-    const iso = new Date(NOW.getTime() - 30_000).toISOString();
+  it("keeps a sub-second age as justNow", () => {
+    const iso = new Date(NOW.getTime() - 500).toISOString();
     expect(compactAge(iso, NOW).kind).toBe("justNow");
   });
 
-  it("reports elapsed time in the compact form", () => {
+  it("counts seconds inside the first minute", () => {
+    const iso = new Date(NOW.getTime() - 30_000).toISOString();
+    expect(compactAge(iso, NOW)).toEqual({ kind: "compact", text: "30s" });
+  });
+
+  it("reports elapsed time in the compact form past one minute", () => {
     const iso = new Date(NOW.getTime() - MINUTE).toISOString();
     expect(compactAge(iso, NOW)).toEqual({ kind: "compact", text: "1m" });
   });

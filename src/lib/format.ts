@@ -12,7 +12,8 @@
  * 本模块只做计算，不含任何可见文案：需要词语的地方返回 `kind`，由调用方查 i18n。
  */
 
-const MINUTE_MS = 60_000;
+const SECOND_MS = 1_000;
+const MINUTE_MS = 60 * SECOND_MS;
 const HOUR_MS = 60 * MINUTE_MS;
 const DAY_MS = 24 * HOUR_MS;
 const USD_NANOS = 1_000_000_000;
@@ -139,13 +140,19 @@ export function compactReset(iso: string, now: Date = new Date()): string {
 }
 
 /**
- * 距上次成功刷新的时长。不足 1 分钟交给 i18n 说「刚刚」：秒级读数会自己跳字，
- * 而这一行不值得每秒重排。
+ * 距上次成功刷新的时长。1 分钟窗口内给秒级读数（`32s`），不足 1 秒仍交给 i18n 说
+ * 「刚刚」；窗口外回到分钟级紧凑时长。
+ *
+ * 秒级只服务头部副标题这一处，且只存在 1 分钟：调用方在窗口内订阅秒级 tick
+ * （`useNowSeconds`），窗口外切回分钟级 `useNow`，见 ADR-0019 修订。
  */
 export function compactAge(iso: string, now: Date = new Date()): CompactTime {
   const elapsed = now.getTime() - new Date(iso).getTime();
-  if (elapsed < MINUTE_MS) {
+  if (elapsed < SECOND_MS) {
     return { kind: "justNow" };
+  }
+  if (elapsed < MINUTE_MS) {
+    return { kind: "compact", text: `${Math.floor(elapsed / SECOND_MS)}s` };
   }
   return { kind: "compact", text: compactDuration(elapsed) };
 }

@@ -5,17 +5,21 @@
  * 因此同一个说法在两种语言下只有一处译法。
  *
  * 紧凑读数（`reset`、`refreshed`）依赖 `useNow()`，因此调用方的 `computed` 会随
- * 分钟推进自动重算，不需要各自管计时器。
+ * 分钟推进自动重算，不需要各自管计时器。`refreshed` 在 1 分钟窗口内改走秒级
+ * `useNowSeconds()`：只要窗口没关就每秒跳字，一过 1 分钟自动切回分钟级（ADR-0019 修订）。
  */
 
 import { useI18n } from "vue-i18n";
 
 import { compactAge, compactReset, formatCountdown, formatPast } from "./format";
-import { useNow } from "./useNow";
+import { useNow, useNowSeconds } from "./useNow";
+
+const MINUTE_MS = 60_000;
 
 export function useTimeText() {
   const { t, locale } = useI18n();
   const now = useNow();
+  const nowSeconds = useNowSeconds();
 
   /** 过去时刻的相对描述，用于提示条里的解释句。`null` 表示还没有成功过。 */
   function past(iso: string | null): string {
@@ -55,12 +59,17 @@ export function useTimeText() {
     return iso ? compactReset(iso, now.value) : t("quota.noValue");
   }
 
-  /** 头部副标题：紧凑读数 + 「前已刷新」。 */
+  /**
+   * 头部副标题：紧凑读数 + 「前已刷新」。1 分钟窗口内用秒级时钟（`32s 前已刷新`），
+   * 窗口外切回分钟级——窗口期内逐秒跳字，之后每分钟才动一次。
+   */
   function refreshed(iso: string | null): string {
     if (!iso) {
       return t("quota.neverRefreshed");
     }
-    const result = compactAge(iso, now.value);
+    const elapsed = nowSeconds.value.getTime() - new Date(iso).getTime();
+    const clock = elapsed < MINUTE_MS ? nowSeconds.value : now.value;
+    const result = compactAge(iso, clock);
     return result.kind === "justNow"
       ? t("quota.refreshedJustNow")
       : t("quota.refreshedAgo", { time: result.text });
