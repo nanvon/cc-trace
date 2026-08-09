@@ -85,6 +85,14 @@ impl UsageService {
 
     fn start_scan(self: &Arc<Self>, roots: ScanRoots) -> Result<UsageScanStatus, UsageError> {
         let _lifecycle = self.lifecycle.lock().expect("usage lifecycle");
+        self.start_scan_locked(roots)
+    }
+
+    /// 假定调用方已持有 lifecycle 锁；`rebuild` 在清库后复用同一启动路径。
+    fn start_scan_locked(
+        self: &Arc<Self>,
+        roots: ScanRoots,
+    ) -> Result<UsageScanStatus, UsageError> {
         if self.scan_status().state != UsageScanState::Idle {
             return Err(UsageError::ScanBusy);
         }
@@ -206,6 +214,31 @@ impl UsageService {
             .load_for_known_usage(&known_usage)
             .map_err(|_| UsageError::Unavailable)?;
         self.db.reprice(&catalog).map_err(Into::into)
+    }
+
+    /// 重建指定数据源：清空其用量条目、对话与扫描水位后立即全量重扫，
+    /// 用于修复上游补写或历史解析导致的过期数据。`None` 表示全部数据源。
+    pub fn rebuild(
+        self: &Arc<Self>,
+        sources: Option<Vec<UsageSource>>,
+    ) -> Result<UsageScanStatus, UsageError> {
+        let roots = ScanRoots::from_environment();
+        self.rebuild_with_roots(sources, roots)
+    }
+
+    fn rebuild_with_roots(
+        self: &Arc<Self>,
+        sources: Option<Vec<UsageSource>>,
+        roots: ScanRoots,
+    ) -> Result<UsageScanStatus, UsageError> {
+        let _lifecycle = self.lifecycle.lock().expect("usage lifecycle");
+        if self.scan_status().state != UsageScanState::Idle {
+            return Err(UsageError::ScanBusy);
+        }
+        self.db
+            .rebuild_data(sources.as_deref())
+            .map_err(UsageError::from)?;
+        self.start_scan_locked(roots)
     }
 
     /// 设置页手动更新价格目录：绕过 24 小时与失败退避，等待当前扫描结束后提交并重计价。
@@ -1372,5 +1405,54 @@ mod tests {
             Some("system>说明 实现一个函数")
         );
         assert_eq!(pi_conversation.entry_count, 4);
+    }
+
+    fn wait_for_idle(service: &UsageService) {
+        for _ in 0..200 {
+            if service.scan_status().state == UsageScanState::Idle {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        panic!("scan did not finish in time");
+    }
+
+    #[test]
+    fn rebuild_rescans_fixtures_to_an_identical_summary() {
+        let config = tempfile::tempdir().expect("config");
+        let sources = tempfile::tempdir().expect("sources");
+        seed_fixture_roots(sources.path());
+        let service = UsageService::new(config.path().to_path_buf());
+        service
+            .run_scan_inner(fixture_roots(sources.path()))
+            .expect("initial scan");
+        let query = UsageSummaryQuery {
+            filter: UsageFilter::default(),
+            group_by: crate::contracts::UsageGroupBy::Source,
+        };
+        let before = service.summary(query.clone()).expect("before summary");
+
+        let status = service
+            .rebuild_with_roots(None, fixture_roots(sources.path()))
+            .expect("rebuild");
+        assert_eq!(status.state, UsageScanState::Running);
+        wait_for_idle(&service);
+
+        let after = service.summary(query).expect("after summary");
+        assert_eq!(before.entry_count, after.entry_count);
+        assert_eq!(before.tokens.total_tokens, after.tokens.total_tokens);
+        assert_eq!(
+            before.cost.api_equivalent_cost_nanos,
+            after.cost.api_equivalent_cost_nanos
+        );
+    }
+
+    #[test]
+    fn rebuild_while_scanning_is_rejected_as_busy() {
+        let config = tempfile::tempdir().expect("config");
+        let service = UsageService::new(config.path().to_path_buf());
+        service.status.lock().expect("status").state = UsageScanState::Running;
+
+        assert_eq!(service.rebuild(None), Err(UsageError::ScanBusy));
     }
 }

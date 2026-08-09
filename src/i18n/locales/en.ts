@@ -254,6 +254,15 @@ export default {
     pricingCatalogPartiallyUpdated:
       "Some prices were updated; the previous catalog remains in use for the rest.",
     pricingCatalogUpdateFailed: "Could not update prices. The previous catalog is still in use.",
+    rebuildUsage: "Recalculate usage",
+    rebuildUsageDescription:
+      "Deletes current statistics and rescans all local data to repair missing or stale costs.",
+    rebuildConfirm: "Confirm recalculation?",
+    rebuildRunning: "Recalculating…",
+    rebuildRunningHint:
+      "Rescanning all local data now. The usage page refreshes automatically when done.",
+    rebuildSuccess: "Recalculation complete. Statistics were rebuilt.",
+    rebuildFailure: "Recalculation failed: a scan may be running. Try again in a moment.",
     about: "About",
     version: "Version {version}",
     privacy:

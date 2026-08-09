@@ -66,8 +66,8 @@ onBeforeUnmount(() => {
 .main-window {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
-  min-block-size: 100vh;
-  overflow-x: hidden;
+  block-size: 100vh;
+  overflow: hidden;
   background: var(--surface-primary);
 }
 
@@ -78,6 +78,8 @@ onBeforeUnmount(() => {
 .main-window > :not(.mw-sidebar) {
   grid-area: 1 / 2;
   min-inline-size: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 @media (prefers-reduced-motion: no-preference) {

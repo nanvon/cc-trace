@@ -145,15 +145,21 @@ const sources = computed(() => usage.sourceFilterOptions);
   color: var(--text-secondary);
   background: transparent;
   font-size: 0.78125rem;
-  font-weight: 550;
+  font-weight: 600;
   text-align: start;
   white-space: nowrap;
 }
 
+.sb-item:hover {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-primary) 7%, transparent);
+}
+
 .sb-item.on {
   color: var(--text-primary);
-  background: var(--track-background);
-  font-weight: 620;
+  background: var(--surface-raised);
+  box-shadow: 0 1px 2px rgb(24 24 27 / 10%);
+  font-weight: 650;
 }
 
 .sb-dot {
@@ -186,14 +192,15 @@ const sources = computed(() => usage.sourceFilterOptions);
 }
 
 .sb-item--settings {
-  font-weight: 570;
+  font-weight: 600;
 }
 
 @media (prefers-reduced-motion: no-preference) {
   .sb-item {
     transition:
       background-color var(--motion-fast) var(--ease-out),
-      color var(--motion-fast) var(--ease-out);
+      color var(--motion-fast) var(--ease-out),
+      box-shadow var(--motion-fast) var(--ease-out);
   }
 }
 </style>

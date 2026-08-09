@@ -248,6 +248,13 @@ export default {
     pricingCatalogUpdated: "价格目录已是最新。",
     pricingCatalogPartiallyUpdated: "部分价格已更新；其余价格继续使用原有目录。",
     pricingCatalogUpdateFailed: "价格更新失败，当前仍使用原有目录。",
+    rebuildUsage: "重新计算用量",
+    rebuildUsageDescription: "删除现有统计后重新扫描全部本地数据，修复缺失或过期的费用。",
+    rebuildConfirm: "确认重新计算？",
+    rebuildRunning: "重新计算中…",
+    rebuildRunningHint: "正在重新扫描全部本地数据，完成后用量页会自动更新。",
+    rebuildSuccess: "重新计算完成，统计数据已重建。",
+    rebuildFailure: "重新计算失败：可能正在扫描中，请稍后再试。",
     about: "关于",
     version: "版本 {version}",
     privacy:

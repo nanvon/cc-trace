@@ -9,6 +9,7 @@ import type {
   UsageConversationPage,
   UsageConversationQuery,
   UsageScanStatus,
+  UsageSource,
   UsageSummary,
   UsageSummaryQuery,
 } from "./contracts";
@@ -51,4 +52,12 @@ export function getConversationBreakdown(
 
 export function refreshPricingCatalog(): Promise<PricingCatalogRefreshStatus> {
   return invoke<PricingCatalogRefreshStatus>("usage_refresh_pricing_catalog");
+}
+
+/**
+ * 重建指定数据源：清空其条目与扫描水位后全量重扫。`sources` 缺省时重建全部。
+ * 返回启动后的扫描状态，UI 通过轮询 `usage_scan_status` 感知完成。
+ */
+export function rebuildUsageData(sources?: UsageSource[]): Promise<UsageScanStatus> {
+  return invoke<UsageScanStatus>("usage_rebuild_data", { sources: sources ?? null });
 }

@@ -10,7 +10,7 @@ use crate::app::AppCore;
 use crate::contracts::{
     PricingCatalogRefreshStatus, QuotaHistory, QuotaHistoryQuery, UsageConversation,
     UsageConversationBreakdown, UsageConversationPage, UsageConversationQuery, UsageRepriceResult,
-    UsageScanStatus, UsageSummary, UsageSummaryQuery,
+    UsageScanStatus, UsageSource, UsageSummary, UsageSummaryQuery,
 };
 use crate::usage::UsageError;
 
@@ -94,6 +94,18 @@ pub async fn usage_refresh_pricing_catalog(
     usage
         .refresh_pricing_catalog()
         .await
+        .map_err(map_usage_error)
+}
+
+#[tauri::command]
+pub async fn usage_rebuild_data(
+    core: State<'_, Arc<AppCore>>,
+    sources: Option<Vec<UsageSource>>,
+) -> Result<UsageScanStatus, CommandError> {
+    let usage = core.usage();
+    tauri::async_runtime::spawn_blocking(move || usage.rebuild(sources))
+        .await
+        .map_err(|_| CommandError::USAGE_UNAVAILABLE)?
         .map_err(map_usage_error)
 }
 

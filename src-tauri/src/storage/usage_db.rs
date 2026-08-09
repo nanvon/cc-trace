@@ -52,6 +52,12 @@ pub struct CommitResult {
     pub duplicates: u64,
 }
 
+pub struct RebuildResult {
+    pub entries_removed: u64,
+    pub conversations_removed: u64,
+    pub files_removed: u64,
+}
+
 struct QuotaEventBackup {
     provider: String,
     identity_key: String,
@@ -203,17 +209,20 @@ impl UsageDb {
                    fast_multiplier_nanos = excluded.fast_multiplier_nanos,
                    pricing_fingerprint = excluded.pricing_fingerprint
                  WHERE (
-                   excluded.uncached_input_tokens
-                   + excluded.cache_read_input_tokens
-                   + excluded.cache_write_5m_input_tokens
-                   + excluded.cache_write_1h_input_tokens
-                   + excluded.output_tokens
-                 ) > (
-                   usage_entries.uncached_input_tokens
-                   + usage_entries.cache_read_input_tokens
-                   + usage_entries.cache_write_5m_input_tokens
-                   + usage_entries.cache_write_1h_input_tokens
-                   + usage_entries.output_tokens
+                   excluded.source NOT IN ('codex', 'claude')
+                   OR (
+                     excluded.uncached_input_tokens
+                     + excluded.cache_read_input_tokens
+                     + excluded.cache_write_5m_input_tokens
+                     + excluded.cache_write_1h_input_tokens
+                     + excluded.output_tokens
+                   ) > (
+                     usage_entries.uncached_input_tokens
+                     + usage_entries.cache_read_input_tokens
+                     + usage_entries.cache_write_5m_input_tokens
+                     + usage_entries.cache_write_1h_input_tokens
+                     + usage_entries.output_tokens
+                   )
                  )",
             )?;
             for entry in &batch.entries {
@@ -295,6 +304,51 @@ impl UsageDb {
         Ok(CommitResult {
             inserted,
             duplicates: batch.entries.len() as u64 - inserted,
+        })
+    }
+
+    /// 重建指定数据源：删除用量条目、无引用的对话与扫描水位，调用方随后全量重扫。
+    /// `sources` 为 `None` 或空时重建全部数据源；含 OpenCode 时一并重置其增量水位。
+    pub fn rebuild_data(
+        &self,
+        sources: Option<&[UsageSource]>,
+    ) -> Result<RebuildResult, UsageDbError> {
+        let _guard = self.write_lock.lock().expect("usage db write lock");
+        let mut connection = self.open_write()?;
+        let transaction = connection.transaction()?;
+        // source 值为静态枚举常量，不来自 command 输入，拼接无注入风险。
+        let condition = match sources.filter(|list| !list.is_empty()) {
+            Some(list) => {
+                let values = list
+                    .iter()
+                    .map(|source| source.as_db())
+                    .collect::<Vec<_>>()
+                    .join("', '");
+                format!("source IN ('{values}')")
+            }
+            None => "1 = 1".to_owned(),
+        };
+        let entries_removed =
+            transaction.execute(&format!("DELETE FROM usage_entries WHERE {condition}"), [])?;
+        let conversations_removed = transaction.execute(
+            "DELETE FROM conversations
+              WHERE NOT EXISTS (
+                SELECT 1 FROM usage_entries
+                 WHERE usage_entries.conversation_key = conversations.conversation_key
+              )",
+            [],
+        )?;
+        let files_removed =
+            transaction.execute(&format!("DELETE FROM scan_files WHERE {condition}"), [])?;
+        if sources.is_none_or(|list| list.iter().any(|source| *source == UsageSource::Opencode)) {
+            transaction.execute("DELETE FROM opencode_state", [])?;
+        }
+        transaction.commit()?;
+        Ok(RebuildResult {
+            entries_removed: u64::try_from(entries_removed).map_err(|_| UsageDbError::Sql)?,
+            conversations_removed: u64::try_from(conversations_removed)
+                .map_err(|_| UsageDbError::Sql)?,
+            files_removed: u64::try_from(files_removed).map_err(|_| UsageDbError::Sql)?,
         })
     }
 
@@ -2454,5 +2508,242 @@ mod tests {
             )
             .expect("pi cost");
         assert_eq!(pi_cost, Some(42_000), "pi 的真实 cost 不得被重计价覆盖");
+    }
+
+    #[test]
+    fn rebuild_data_removes_only_the_selected_sources() {
+        let (_dir, database) = database();
+        database
+            .commit_scan_batch(
+                "file-codex",
+                UsageSource::Codex,
+                1,
+                1,
+                1,
+                "prefix",
+                None,
+                false,
+                &sample_batch("codex-rebuild"),
+            )
+            .expect("codex");
+        let mut pi_batch = sample_batch("pi-rebuild");
+        pi_batch.entries[0].source = UsageSource::Pi;
+        pi_batch.entries[0].conversation_key = "conversation-pi".to_owned();
+        pi_batch.conversations[0].source = UsageSource::Pi;
+        pi_batch.conversations[0].conversation_key = "conversation-pi".to_owned();
+        database
+            .commit_scan_batch(
+                "file-pi",
+                UsageSource::Pi,
+                1,
+                1,
+                1,
+                "prefix",
+                None,
+                false,
+                &pi_batch,
+            )
+            .expect("pi");
+        database
+            .save_opencode_state(&OpencodeScanState {
+                watermark_ms: 1234,
+                seen_ids: vec!["m1".to_owned()],
+            })
+            .expect("opencode state");
+
+        let result = database
+            .rebuild_data(Some(&[UsageSource::Pi, UsageSource::Opencode]))
+            .expect("rebuild");
+        assert_eq!(result.entries_removed, 1);
+        assert_eq!(result.conversations_removed, 1);
+        assert_eq!(result.files_removed, 1);
+
+        let connection = database.open_read().expect("read");
+        let codex_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM usage_entries WHERE source = 'codex'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("codex count");
+        assert_eq!(codex_count, 1, "codex 数据不得被部分重建误删");
+        let removed_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM usage_entries WHERE source IN ('pi', 'opencode')",
+                [],
+                |row| row.get(0),
+            )
+            .expect("removed count");
+        assert_eq!(removed_count, 0);
+        let scan_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM scan_files WHERE source IN ('pi', 'opencode')",
+                [],
+                |row| row.get(0),
+            )
+            .expect("scan count");
+        assert_eq!(scan_count, 0);
+
+        let state = database.opencode_state().expect("state");
+        assert_eq!(state.watermark_ms, 0, "opencode 水位必须重置为全量重扫起点");
+        assert!(state.seen_ids.is_empty());
+    }
+
+    #[test]
+    fn rebuild_all_sources_empties_entries_conversations_and_watermarks() {
+        let (_dir, database) = database();
+        database
+            .commit_scan_batch(
+                "file-codex",
+                UsageSource::Codex,
+                1,
+                1,
+                1,
+                "prefix",
+                None,
+                false,
+                &sample_batch("codex-all"),
+            )
+            .expect("codex");
+        let mut pi_batch = sample_batch("pi-all");
+        pi_batch.entries[0].source = UsageSource::Pi;
+        pi_batch.entries[0].conversation_key = "conversation-pi".to_owned();
+        pi_batch.conversations[0].source = UsageSource::Pi;
+        pi_batch.conversations[0].conversation_key = "conversation-pi".to_owned();
+        database
+            .commit_scan_batch(
+                "file-pi",
+                UsageSource::Pi,
+                1,
+                1,
+                1,
+                "prefix",
+                None,
+                false,
+                &pi_batch,
+            )
+            .expect("pi");
+        database
+            .save_opencode_state(&OpencodeScanState {
+                watermark_ms: 999,
+                seen_ids: vec!["m1".to_owned(), "m2".to_owned()],
+            })
+            .expect("opencode state");
+
+        let result = database.rebuild_data(None).expect("rebuild all");
+        assert_eq!(result.entries_removed, 2);
+        assert_eq!(result.conversations_removed, 2);
+        assert_eq!(result.files_removed, 2);
+
+        let connection = database.open_read().expect("read");
+        let total_entries: i64 = connection
+            .query_row("SELECT COUNT(*) FROM usage_entries", [], |row| row.get(0))
+            .expect("entries");
+        let total_conversations: i64 = connection
+            .query_row("SELECT COUNT(*) FROM conversations", [], |row| row.get(0))
+            .expect("conversations");
+        assert_eq!(total_entries, 0);
+        assert_eq!(total_conversations, 0, "无引用的对话必须一并清理");
+        assert_eq!(database.opencode_state().expect("state").watermark_ms, 0);
+    }
+
+    #[test]
+    fn conflict_overwrites_opencode_shrunk_values_but_keeps_codex_append_only() {
+        let (_dir, database) = database();
+
+        // opencode 官方 cost 是真值：token 变小也必须采纳，否则上游补写永不生效。
+        let mut first = sample_batch("opencode-shrink");
+        first.entries[0].source = UsageSource::Opencode;
+        first.entries[0].api_equivalent_cost_nanos = Some(1000);
+        database
+            .commit_scan_batch(
+                "file-opencode",
+                UsageSource::Opencode,
+                1,
+                1,
+                1,
+                "prefix",
+                None,
+                false,
+                &first,
+            )
+            .expect("opencode first");
+        let mut shrunk = sample_batch("opencode-shrink");
+        shrunk.entries[0].source = UsageSource::Opencode;
+        shrunk.entries[0].api_equivalent_cost_nanos = Some(500);
+        shrunk.entries[0].tokens = TokenFacts {
+            uncached_input_tokens: 4,
+            output_tokens: 2,
+            ..TokenFacts::default()
+        };
+        database
+            .commit_scan_batch(
+                "file-opencode",
+                UsageSource::Opencode,
+                1,
+                1,
+                1,
+                "prefix",
+                None,
+                false,
+                &shrunk,
+            )
+            .expect("opencode second");
+        let opencode_row: (i64, Option<i64>) = database
+            .open_read()
+            .expect("read")
+            .query_row(
+                "SELECT uncached_input_tokens + output_tokens, api_equivalent_cost_nanos
+                   FROM usage_entries WHERE source = 'opencode'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("opencode row");
+        assert_eq!(opencode_row, (6, Some(500)));
+
+        // codex 由价格目录驱动：token 变小不采纳，保持只增不减的防倒算语义。
+        database
+            .commit_scan_batch(
+                "file-codex",
+                UsageSource::Codex,
+                1,
+                1,
+                1,
+                "prefix",
+                None,
+                false,
+                &sample_batch("codex-append"),
+            )
+            .expect("codex first");
+        let mut codex_shrunk = sample_batch("codex-append");
+        codex_shrunk.entries[0].tokens = TokenFacts {
+            uncached_input_tokens: 2,
+            output_tokens: 1,
+            ..TokenFacts::default()
+        };
+        database
+            .commit_scan_batch(
+                "file-codex",
+                UsageSource::Codex,
+                1,
+                1,
+                1,
+                "prefix",
+                None,
+                false,
+                &codex_shrunk,
+            )
+            .expect("codex second");
+        let codex_tokens: i64 = database
+            .open_read()
+            .expect("read")
+            .query_row(
+                "SELECT uncached_input_tokens + output_tokens
+                   FROM usage_entries WHERE source = 'codex'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("codex row");
+        assert_eq!(codex_tokens, 15);
     }
 }

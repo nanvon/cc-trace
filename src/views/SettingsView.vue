@@ -6,10 +6,10 @@
  * 保存成功立即生效；写入失败时**保留原值**并明确提示。
  * 导航由侧边栏承担（ADR-0024）：本视图不再提供「返回用量」按钮。
  */
-import { computed, ref } from "vue";
+import { computed, onUnmounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 
-import { refreshPricingCatalog } from "../features/usage/api";
+import { getUsageScanStatus, rebuildUsageData, refreshPricingCatalog } from "../features/usage/api";
 import {
   APPEARANCE_OPTIONS,
   LANGUAGE_OPTIONS,
@@ -39,6 +39,88 @@ const PRICING_REFRESH_STATE = {
   partial: "partial",
   failed: "failure",
 } as const;
+
+/** 数据重建：idle → confirm（二次确认防误触）→ running → success/failure。 */
+const rebuildState = ref<"idle" | "confirm" | "running" | "success" | "failure">("idle");
+const rebuildPending = ref(false);
+let rebuildConfirmTimer: ReturnType<typeof setTimeout> | null = null;
+let rebuildPoll: ReturnType<typeof setInterval> | null = null;
+
+const rebuildLabel = computed(() => {
+  if (rebuildState.value === "confirm") return t("settings.rebuildConfirm");
+  if (rebuildPending.value) return t("settings.rebuildRunning");
+  return t("settings.rebuildUsage");
+});
+
+const rebuildStatusText = computed(() => {
+  switch (rebuildState.value) {
+    case "running":
+      return t("settings.rebuildRunningHint");
+    case "success":
+      return t("settings.rebuildSuccess");
+    case "failure":
+      return t("settings.rebuildFailure");
+    default:
+      return "";
+  }
+});
+
+function scheduleRebuildConfirmReset(): void {
+  if (rebuildConfirmTimer) clearTimeout(rebuildConfirmTimer);
+  rebuildConfirmTimer = setTimeout(() => {
+    if (rebuildState.value === "confirm") rebuildState.value = "idle";
+  }, 10_000);
+}
+
+function clearRebuildPoll(): void {
+  if (rebuildPoll) {
+    clearInterval(rebuildPoll);
+    rebuildPoll = null;
+  }
+}
+
+/**
+ * 首次点击进入确认态（10 秒未确认自动退回）；确认后删除本地统计并全量重扫，
+ * 期间轮询扫描状态，结束后给出完成反馈。扫描中触发返回 busy，直接报失败文案。
+ */
+async function requestRebuild(): Promise<void> {
+  if (rebuildPending.value) return;
+  if (rebuildState.value !== "confirm") {
+    rebuildState.value = "confirm";
+    scheduleRebuildConfirmReset();
+    return;
+  }
+  if (rebuildConfirmTimer) {
+    clearTimeout(rebuildConfirmTimer);
+    rebuildConfirmTimer = null;
+  }
+  rebuildPending.value = true;
+  rebuildState.value = "running";
+  try {
+    await rebuildUsageData();
+    rebuildPoll = setInterval(async () => {
+      try {
+        const status = await getUsageScanStatus();
+        if (status.state === "running" || status.state === "cancelling") return;
+        clearRebuildPoll();
+        rebuildState.value = "success";
+        rebuildPending.value = false;
+      } catch {
+        clearRebuildPoll();
+        rebuildState.value = "failure";
+        rebuildPending.value = false;
+      }
+    }, 1_000);
+  } catch {
+    rebuildState.value = "failure";
+    rebuildPending.value = false;
+  }
+}
+
+onUnmounted(() => {
+  clearRebuildPoll();
+  if (rebuildConfirmTimer) clearTimeout(rebuildConfirmTimer);
+});
 
 const current = computed(() => settings.settings);
 
@@ -261,6 +343,34 @@ async function updatePricingCatalog(): Promise<void> {
                     ? t("settings.pricingCatalogPartiallyUpdated")
                     : t("settings.pricingCatalogUpdateFailed")
               }}
+            </p>
+            <div class="sw-row sw-row--action">
+              <span class="sw-label">
+                {{ t("settings.rebuildUsage") }}
+                <span class="sw-desc">{{ t("settings.rebuildUsageDescription") }}</span>
+              </span>
+              <button
+                type="button"
+                class="flat-btn"
+                data-rebuild-btn
+                :class="{ 'flat-btn--danger': rebuildState === 'confirm' }"
+                :disabled="rebuildPending"
+                @click="requestRebuild"
+              >
+                {{ rebuildLabel }}
+              </button>
+            </div>
+            <p
+              v-if="
+                rebuildState === 'running' ||
+                rebuildState === 'success' ||
+                rebuildState === 'failure'
+              "
+              class="settings__action-status supporting"
+              :class="{ 'settings__action-status--error': rebuildState === 'failure' }"
+              aria-live="polite"
+            >
+              {{ rebuildStatusText }}
             </p>
           </div>
         </section>
@@ -488,6 +598,12 @@ select {
 
 .flat-btn:hover {
   background: color-mix(in srgb, var(--text-primary) 12%, var(--track-background));
+}
+
+.flat-btn--danger,
+.flat-btn--danger:hover {
+  color: var(--status-error);
+  background: color-mix(in srgb, var(--status-error) 12%, var(--track-background));
 }
 
 .flat-btn:disabled {
