@@ -7,8 +7,9 @@
 //! - **损坏时直接删除并重新获取**，不像 `settings.json` 那样保留 `.corrupt` 副本：
 //!   缓存可以完全重建，留一份坏文件没有诊断价值。
 //!
-//! 缓存只保存展示所需的脱敏快照与身份摘要，**不保存凭据、响应原文或明文身份**。
-//! 身份摘要用于重启后仍能发现身份变化，见 `docs/额度领域模型.md` 第 4.1 节。
+//! 缓存保存展示所需的快照与展示身份（含完整账号，见 ADR-0025），**不保存凭据、
+//! 响应原文或 token**。身份摘要（单向指纹）用于重启后仍能发现身份变化，
+//! 见 `docs/额度领域模型.md` 第 4.1 节。
 
 use std::fs;
 use std::io::{self, Write};
@@ -121,7 +122,7 @@ mod tests {
         CachedProvider {
             provider,
             identity: Some(ProviderIdentity {
-                account_hint: Some("u***@example.test".to_owned()),
+                account: Some("user@example.test".to_owned()),
                 plan: Some("plus".to_owned()),
             }),
             identity_key: Some("0123456789abcdef".to_owned()),

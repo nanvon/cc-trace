@@ -5,6 +5,9 @@
 //! 额度字段与窗口分层规则见 `docs/额度领域模型.md` 第 1～2 节。
 //!
 //! 所有载荷都是脱敏 DTO：不含凭据、端点原文、请求头或本机路径。
+//! 唯一例外是 `ProviderIdentity.account`：按 [ADR-0025] 展示完整账号
+//! 需要它进入 command 载荷与本地缓存；token、凭据与响应原文仍不进入载荷。
+//! [ADR-0025]: ../../../../docs/决策/ADR-0025-非隐私模式显示完整邮箱.md
 
 use serde::{Deserialize, Serialize};
 
@@ -104,12 +107,14 @@ pub struct QuotaSnapshot {
     pub captured_at: String,
 }
 
-/// 脱敏身份提示。不含完整邮箱、account id 或 token。
+/// 展示身份。账号字段按 [ADR-0025] 携带完整邮箱或 account id（隐私模式下由前端隐藏显示，
+/// 不在此层过滤）；计划名用于套餐展示。不含 token、凭据或响应原文。
+/// [ADR-0025]: ../../../../docs/决策/ADR-0025-非隐私模式显示完整邮箱.md
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderIdentity {
-    /// 已脱敏的账号提示，例如 `n***@example.com`。
-    pub account_hint: Option<String>,
+    /// 完整账号，例如 `nanvon@example.com` 或 account id。仅在隐私模式开启时前端不显示。
+    pub account: Option<String>,
     pub plan: Option<String>,
 }
 

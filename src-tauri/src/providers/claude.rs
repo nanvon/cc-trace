@@ -520,7 +520,11 @@ impl ClaudeProvider {
 
         ProviderFetchOutcome::Success {
             identity: Some(ProviderIdentity {
-                account_hint: credentials.email.as_ref().map(Secret::hint),
+                account: credentials
+                    .email
+                    .as_ref()
+                    .map(Secret::expose)
+                    .map(str::to_owned),
                 plan: credentials.subscription.clone(),
             }),
             identity_key: credentials::identity_fingerprint(

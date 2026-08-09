@@ -99,7 +99,7 @@ pub fn parse_usage_response(
         .plan_type
         .and_then(|value| non_empty(value.as_str()).map(str::to_owned));
     let identity = plan.map(|plan| ProviderIdentity {
-        account_hint: None,
+        account: None,
         plan: Some(plan),
     });
 
@@ -373,17 +373,18 @@ impl QuotaProvider for CodexProvider {
     }
 }
 
-/// 展示身份：账号提示只用脱敏 hint，计划名优先本地凭据，缺失时用响应补位。
+/// 展示身份：账号优先本地凭据邮箱，缺失时用 account id；计划名优先本地凭据，缺失时用响应补位。
 fn identity_of(
     credentials: &CodexCredentials,
     from_response: Option<ProviderIdentity>,
 ) -> ProviderIdentity {
     ProviderIdentity {
-        account_hint: credentials
+        account: credentials
             .email
             .as_ref()
             .or(credentials.account_id.as_ref())
-            .map(Secret::hint),
+            .map(Secret::expose)
+            .map(str::to_owned),
         plan: credentials
             .plan
             .clone()
@@ -504,7 +505,7 @@ mod tests {
         assert_eq!(
             parsed.identity,
             Some(ProviderIdentity {
-                account_hint: None,
+                account: None,
                 plan: Some("plus".to_owned()),
             })
         );
@@ -709,13 +710,13 @@ mod tests {
     }
 
     #[test]
-    fn the_display_identity_only_carries_a_hint_and_a_plan() {
+    fn the_display_identity_carries_the_full_account_and_a_plan() {
         let Discovery::Found(credentials) = credentials::codex::parse(&oauth_credentials()) else {
             panic!("fixture parses");
         };
 
         let identity = identity_of(&credentials, None);
-        assert_eq!(identity.account_hint.as_deref(), Some("u***@example.test"));
+        assert_eq!(identity.account.as_deref(), Some("user@example.test"));
         assert_eq!(identity.plan.as_deref(), Some("plus"));
     }
 
@@ -729,14 +730,14 @@ mod tests {
         let identity = identity_of(
             &credentials,
             Some(ProviderIdentity {
-                account_hint: None,
+                account: None,
                 plan: Some("pro".to_owned()),
             }),
         );
         assert_eq!(identity.plan.as_deref(), Some("pro"));
         assert_eq!(
-            identity.account_hint, None,
-            "the response identity must never supply an account hint"
+            identity.account, None,
+            "the response identity must never supply an account"
         );
     }
 

@@ -141,7 +141,7 @@ fn success(provider: ProviderId, now: DateTime<Utc>) -> ProviderFetchOutcome {
     let (identity, windows) = match provider {
         ProviderId::Codex => (
             ProviderIdentity {
-                account_hint: Some("d***@example.com".to_owned()),
+                account: Some("demo@example.com".to_owned()),
                 plan: Some("Plus".to_owned()),
             },
             vec![
@@ -167,7 +167,7 @@ fn success(provider: ProviderId, now: DateTime<Utc>) -> ProviderFetchOutcome {
         ),
         ProviderId::Claude => (
             ProviderIdentity {
-                account_hint: Some("d***@example.com".to_owned()),
+                account: Some("demo@example.com".to_owned()),
                 plan: Some("Max".to_owned()),
             },
             vec![

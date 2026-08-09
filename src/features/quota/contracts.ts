@@ -48,7 +48,8 @@ export interface QuotaSnapshot {
 }
 
 export interface ProviderIdentity {
-  accountHint: string | null;
+  /** 完整账号（邮箱或 account id），见 ADR-0025；隐私模式开启时由前端隐藏显示。 */
+  account: string | null;
   plan: string | null;
 }
 
