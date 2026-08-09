@@ -340,7 +340,7 @@ impl UsageDb {
         )?;
         let files_removed =
             transaction.execute(&format!("DELETE FROM scan_files WHERE {condition}"), [])?;
-        if sources.is_none_or(|list| list.iter().any(|source| *source == UsageSource::Opencode)) {
+        if sources.is_none_or(|list| list.contains(&UsageSource::Opencode)) {
             transaction.execute("DELETE FROM opencode_state", [])?;
         }
         transaction.commit()?;
