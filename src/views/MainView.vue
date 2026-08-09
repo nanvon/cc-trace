@@ -467,8 +467,8 @@ onMounted(() => {
 .usage-page__summary b {
   margin-inline-start: 0.3125rem;
   color: var(--text-primary);
-  font-size: 0.8125rem;
-  font-weight: 650;
+  font-size: 0.84375rem;
+  font-weight: 700;
 }
 
 .usage-page__summary b small {

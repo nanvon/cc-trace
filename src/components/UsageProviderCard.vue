@@ -203,8 +203,10 @@ const providerName = computed(() => t(`provider.${props.source}`));
 
 .pcard-total b {
   color: var(--text-primary);
-  font-size: 0.8125rem;
-  font-weight: 620;
+  font-size: 1.3125rem;
+  font-weight: 680;
+  letter-spacing: -0.025em;
+  line-height: 1;
 }
 
 .pcard-total small {
