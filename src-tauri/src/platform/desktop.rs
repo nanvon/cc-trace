@@ -190,8 +190,25 @@ fn present_window(window: &WebviewWindow) -> Result<(), WindowError> {
     window.set_focus().map_err(|_| WindowError)
 }
 
-/// 收起紧凑面板，并记录隐藏时刻供主点击去抖使用。
-pub fn hide_compact(app: &AppHandle) {
+/// 收起紧凑面板：请求关闭。
+///
+/// macOS 27 的 expanded interface session 活跃时，先让系统结束 session，
+/// 窗口隐藏交给 didEnd 回调（AppKit 完成收尾后再隐藏）；没有 session 的
+/// 情况（macOS 26 及以下、无 session 的手动打开）直接隐藏。macOS 26
+/// 及以下行为与旧版 `hide_compact` 完全一致。
+pub fn request_hide_compact(app: &AppHandle) {
+    #[cfg(target_os = "macos")]
+    if super::macos_status_item::end_active_session() {
+        return;
+    }
+    hide_compact_now(app);
+}
+
+/// 真正隐藏紧凑面板，并记录隐藏时刻供主点击去抖使用。
+///
+/// 由 [`request_hide_compact`] 与 macOS 27 的 session 结束回调调用；
+/// 重复调用是幂等的。
+pub fn hide_compact_now(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(COMPACT_WINDOW) {
         let was_visible = window.is_visible().unwrap_or(false);
         let _ = window.hide();
@@ -214,10 +231,36 @@ pub fn toggle_compact(app: &AppHandle, icon_rect: Rect) -> Result<(), WindowErro
         .is_some_and(|instant| instant.elapsed() < TOGGLE_DEBOUNCE);
 
     if visible || just_hidden {
-        hide_compact(app);
+        hide_compact_now(app);
         return Ok(());
     }
 
+    present_compact(app, &window, anchor)
+}
+
+/// macOS 27 expanded session 开始时的显示入口：锚点取自状态栏图标的矩形，
+/// 与 [`toggle_compact`] 同一条定位与去抖规则。
+pub fn show_compact_from_tray_rect(app: &AppHandle, icon_rect: Rect) -> Result<(), WindowError> {
+    let anchor = anchor_from_tray_rect(icon_rect);
+    *last_anchor().lock().expect("anchor lock") = Some(anchor);
+
+    // 系统可能在一次点击里先 didEnd 再 didBegin（「关闭＋重开」语义）；
+    // 刚隐藏过就视为关闭，不再弹出，与主点击去抖同一规则。
+    let just_hidden = last_hidden_at()
+        .lock()
+        .expect("debounce lock")
+        .is_some_and(|instant| instant.elapsed() < TOGGLE_DEBOUNCE);
+    if just_hidden {
+        // 但 didBegin 已经发生、新 session 已由系统开始：不取消它会出现
+        // 「session 活跃但面板不可见」的幽灵状态，下次点击图标会被 local
+        // monitor 当成关闭消费掉（吞掉一次点击）。取消后 didEnd 回调会调
+        // hide_compact_now，面板本来就不可见，不会重置去抖时间戳。
+        #[cfg(target_os = "macos")]
+        super::macos_status_item::end_active_session();
+        return Ok(());
+    }
+
+    let window = app.get_webview_window(COMPACT_WINDOW).ok_or(WindowError)?;
     present_compact(app, &window, anchor)
 }
 
@@ -241,11 +284,15 @@ fn present_compact(
 
     position_compact(app, window, anchor, height)?;
     window.show().map_err(|_| WindowError)?;
-    // macOS 上 `show()` 已经等价于 `makeKeyAndOrderFront`：面板置前，但不激活应用。
-    // 这里不能再用 `set_focus()`——tao 的 macOS 实现会在其后追加
-    // `activateIgnoringOtherApps: YES` 把整个应用激活；主窗口打开期间激活策略是
-    // `.regular`，AppKit 激活行为会把应用的所有可见窗口一并 order front，后台的
-    // 主窗口因此被顶到最前。与 Swift 版 cc-bar 的 NSPopover 一致：弹面板不抢焦点。
+    // `show()` 在 macOS 只执行 makeKeyAndOrderFront，不会激活应用。macOS 27 的
+    // expanded session 要让 WKWebView 真正收到 hover、键盘和首次点击，仍需激活
+    // compact；失焦关闭已在 lib.rs 对活跃 session 做了隔离，不会因此立即收起。
+    // 旧系统没有 expanded session，保持原来的非激活显示行为。
+    #[cfg(target_os = "macos")]
+    if super::macos_status_item::has_active_session() {
+        return window.set_focus().map_err(|_| WindowError);
+    }
+
     #[cfg(target_os = "macos")]
     return Ok(());
 

@@ -5,6 +5,10 @@
 pub mod autostart;
 pub mod desktop;
 pub mod keychain;
+/// macOS 27 的 Expanded Interface Session 适配：左键由系统管理，右键菜单手动
+/// 弹出。旧系统没有这套 API 时整个模块不生效，见 macos_status_item.rs。
+#[cfg(target_os = "macos")]
+pub mod macos_status_item;
 /// 菜单栏徽标位图只有 macOS 用得上：Windows 托盘不支持图标旁并排文字，见 ADR-0017。
 #[cfg(target_os = "macos")]
 pub mod menubar_badge;

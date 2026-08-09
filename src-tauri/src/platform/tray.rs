@@ -15,7 +15,7 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{App, AppHandle, Manager, Wry};
 
-use super::desktop::{MainNavigationTarget, hide_compact, show_main, toggle_compact};
+use super::desktop::{MainNavigationTarget, request_hide_compact, show_main, toggle_compact};
 use super::strings::{Lang, native, provider_name};
 use crate::app::AppCore;
 use crate::contracts::{ProviderAvailability, ProviderId, QuotaState};
@@ -41,29 +41,43 @@ const MENU_QUIT: &str = "quit";
 
 pub fn install(app: &App, lang: Lang) -> tauri::Result<()> {
     let strings = native(lang);
-    let builder = TrayIconBuilder::with_id(TRAY_ID)
+
+    // macOS 27 起，给状态栏图标绑定 NSMenu 会让系统接管左键（自动展开菜单），
+    // tray-icon 的点击回调收不到事件。运行时探测到 expanded interface API 时
+    // 改走 macos_status_item 的 session 路径：不绑定菜单、不处理点击事件；
+    // 旧系统与 Windows 保持现状。
+    #[cfg(target_os = "macos")]
+    let expanded = super::macos_status_item::supported();
+    #[cfg(not(target_os = "macos"))]
+    let expanded = false;
+
+    let mut builder = TrayIconBuilder::with_id(TRAY_ID)
         .tooltip(strings.tooltip)
-        .menu(&build_menu(app, lang)?)
-        .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {
             MENU_OPEN => open_main(app, MainNavigationTarget::Quota),
             MENU_REFRESH => refresh_all(app),
             MENU_SETTINGS => open_main(app, MainNavigationTarget::Settings),
             MENU_QUIT => app.exit(0),
             _ => {}
-        })
-        .on_tray_icon_event(|tray, event| {
-            // 锚点用图标矩形而不是事件里的光标位置：光标落在图标的哪个像素是随机的。
-            if let TrayIconEvent::Click {
-                rect,
-                button: MouseButton::Left,
-                button_state: MouseButtonState::Up,
-                ..
-            } = event
-            {
-                let _ = toggle_compact(tray.app_handle(), rect);
-            }
         });
+
+    if !expanded {
+        builder = builder
+            .menu(&build_menu(app, lang)?)
+            .show_menu_on_left_click(false)
+            .on_tray_icon_event(|tray, event| {
+                // 锚点用图标矩形而不是事件里的光标位置：光标落在图标的哪个像素是随机的。
+                if let TrayIconEvent::Click {
+                    rect,
+                    button: MouseButton::Left,
+                    button_state: MouseButtonState::Up,
+                    ..
+                } = event
+                {
+                    let _ = toggle_compact(tray.app_handle(), rect);
+                }
+            });
+    }
 
     #[cfg(target_os = "macos")]
     // macOS 会按当前 Menu Bar 外观给 alpha 蒙版重新着色。
@@ -78,7 +92,31 @@ pub fn install(app: &App, lang: Lang) -> tauri::Result<()> {
             .clone(),
     );
 
-    builder.build(app)?;
+    let tray = builder.build(app)?;
+
+    #[cfg(target_os = "macos")]
+    if expanded {
+        let handle = app.handle().clone();
+        // 状态栏图标已经建好，把底层的 NSStatusItem 交给 session 模块。
+        // 拿不到 NSStatusItem 时必须失败可见：expanded 路径不绑定菜单也不处理
+        // 点击事件，静默跳过会留下一个存在却点不动的图标；正常流程该分支不可达
+        // （tray-icon 创建后即持有 NSStatusItem），宁可不启动也不悄悄坏。
+        let installed = tray.with_inner_tray_icon(move |inner| {
+            match inner.ns_status_item() {
+                Some(status_item) => {
+                    super::macos_status_item::install(&handle, &status_item, lang);
+                    true
+                }
+                None => false,
+            }
+        })?;
+        if !installed {
+            return Err(tauri::Error::Io(std::io::Error::other(
+                "macOS expanded interface: NSStatusItem unavailable",
+            )));
+        }
+    }
+
     Ok(())
 }
 
@@ -86,6 +124,14 @@ pub fn install(app: &App, lang: Lang) -> tauri::Result<()> {
 ///
 /// tooltip 不在这里恢复成产品名：它承载额度文本，由 [`present_quota`] 拥有。
 pub fn relocalize(app: &AppHandle, lang: Lang) -> tauri::Result<()> {
+    // macOS 27 的右键菜单不绑定 status item：语言切换只重建菜单内容，
+    // 重新 set_menu 会把左键重新交还给菜单。
+    #[cfg(target_os = "macos")]
+    if super::macos_status_item::supported() {
+        super::macos_status_item::rebuild_context_menu(lang);
+        return Ok(());
+    }
+
     let Some(tray) = app.tray_by_id(TRAY_ID) else {
         return Ok(());
     };
@@ -175,13 +221,14 @@ fn build_menu<M: Manager<Wry>>(manager: &M, lang: Lang) -> tauri::Result<Menu<Wr
     Menu::with_items(manager, &[&open, &refresh, &settings, &separator, &quit])
 }
 
-fn open_main(app: &AppHandle, target: MainNavigationTarget) {
-    hide_compact(app);
+pub(crate) fn open_main(app: &AppHandle, target: MainNavigationTarget) {
+    request_hide_compact(app);
     let _ = show_main(app, target);
 }
 
-/// 原生菜单的「刷新额度」与界面共用同一个用例：同一份请求合并、节流与退避。
-fn refresh_all(app: &AppHandle) {
+/// 原生菜单与 macOS 27 右键菜单的「刷新额度」与界面共用同一个用例：
+/// 同一份请求合并、节流与退避。
+pub(crate) fn refresh_all(app: &AppHandle) {
     let Some(core) = app.try_state::<Arc<AppCore>>() else {
         return;
     };

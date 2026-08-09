@@ -1,10 +1,10 @@
 //! macOS 全局点击监听：复刻 NSPopover 的 transient 关闭行为。
 //!
 //! compact 面板是普通 WebView 窗口。macOS 上未激活应用的窗口不会成为 key
-//! window，`Focused(false)`（来自 `windowDidResignKey`）因此永远不会触发，
-//! 「点击外部关闭」失效。这里用 NSEvent 全局监听：每次左键按下时判断点击点
-//! 是否落在面板 frame 内，不在则收起。这正是 NSPopover transient 的底层机制，
-//! 不激活应用、不抢焦点。
+//! window，`Focused(false)`（来自 `windowDidResignKey`）因此可能不触发，
+//! 「点击外部关闭」失效。这里用 NSEvent 全局监听补齐旧系统与无 expanded
+//! session 的显示路径：每次左键按下时判断点击点是否落在面板 frame 内，不在
+//! 则收起。macOS 27 expanded session 活跃时不参与，由 AppKit 管理关闭时机。
 //!
 //! 全局监听收不到本应用自己的事件。托盘图标的点击由 `tray.rs` 的 toggle 与
 //! 主点击去抖处理（全局监听先收起，tray 事件到达时已在去抖窗口内，不会重新
@@ -23,7 +23,7 @@ use objc2_app_kit::{NSEvent, NSEventMask, NSWindow};
 use objc2_foundation::NSRect;
 use tauri::{AppHandle, Manager};
 
-use super::desktop::{hide_compact, COMPACT_WINDOW};
+use super::desktop::{COMPACT_WINDOW, request_hide_compact};
 
 /// 全局监听句柄必须保持存活，否则 AppKit 会移除监听。句柄与进程同生命周期，
 /// 用 `Box::leak` 泄漏持有；`Retained<AnyObject>` 不是 `Send`，这里只存指针。
@@ -50,7 +50,10 @@ pub fn install(app: &AppHandle) {
             frame.size.width,
             frame.size.height,
         ) {
-            hide_compact(&app);
+            // expanded session 活跃时这里会先请求 AppKit cancel，再由 didEnd
+            // 隐藏窗口；普通显示路径则直接隐藏。面板内部事件由本应用接收，
+            // global monitor 不会抢在 WebView click 前触发。
+            request_hide_compact(&app);
         }
     });
 
@@ -91,7 +94,9 @@ mod tests {
     #[test]
     fn click_outside_the_frame_hides() {
         assert!(!click_inside_frame(50.0, 300.0, 100.0, 200.0, 380.0, 392.0));
-        assert!(!click_inside_frame(200.0, 100.0, 100.0, 200.0, 380.0, 392.0));
+        assert!(!click_inside_frame(
+            200.0, 100.0, 100.0, 200.0, 380.0, 392.0
+        ));
     }
 
     #[test]

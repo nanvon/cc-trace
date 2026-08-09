@@ -21,7 +21,9 @@ tauri-build = { version = "2", features = [] }
 # macos-private-api 支撑紧凑面板的透明窗口与 popover 材质（tauri.conf.json 的
 # macOSPrivateApi 与 windowEffects）。代价是不能上架 Mac App Store；CC Trace 走
 # 独立分发，见 docs/桌面壳验证记录.md。
-tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }
+# `~2.11` 锁定小版本：macos_status_item 依赖 `with_inner_tray_icon`，tauri 官方
+# 提示 tray-icon 可能在 minor 版本里更新，跨小版本升级需单独回归菜单栏行为。
+tauri = { version = "~2.11", features = ["tray-icon", "macos-private-api"] }
 # 常驻托盘应用必须单实例，否则二次启动会出现第二个图标与第二份设置写入。
 tauri-plugin-single-instance = "2"
 # 开机自动启动属首版必须能力，见 docs/产品范围.md「基础设置」。

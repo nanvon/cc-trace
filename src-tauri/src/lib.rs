@@ -17,7 +17,8 @@ use tauri::{Manager, WindowEvent};
 
 use app::AppCore;
 use platform::desktop::{
-    self, COMPACT_WINDOW, MAIN_WINDOW, MainNavigationTarget, ONBOARDING_WINDOW, hide_compact,
+    self, COMPACT_WINDOW, MAIN_WINDOW, MainNavigationTarget, ONBOARDING_WINDOW,
+    request_hide_compact,
 };
 use platform::strings::Lang;
 use scheduler::RefreshTrigger;
@@ -28,7 +29,7 @@ pub fn run() {
         // 常驻托盘应用必须单实例：否则第二次启动会出现第二个图标，
         // 并让两个进程同时写同一份 settings.json。
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            hide_compact(app);
+            request_hide_compact(app);
             let onboarding_completed = app
                 .try_state::<Arc<AppCore>>()
                 .is_none_or(|core| core.settings().onboarding.completed);
@@ -92,14 +93,21 @@ pub fn run() {
         })
         .on_window_event(|window, event| match event {
             // 点击面板外部即收起，与「点击外部关闭」的交互约定一致。Windows 的
-            // 失焦事件可靠；macOS 上窗口未必成为 key，真正的关闭由
-            // `outside_click` 的全局监听负责，这里只作为兜底。
+            // 失焦事件可靠；macOS 26 及以下由 `outside_click` 的全局监听补齐，
+            // macOS 27 expanded session 活跃时则交给 AppKit 管理。
             WindowEvent::Focused(false) if window.label() == COMPACT_WINDOW => {
-                hide_compact(window.app_handle());
+                // macOS 27 的 expanded session 自己管理焦点生命周期。面板内部的
+                // 第一次点击可能伴随窗口激活／焦点迁移；这里若继续按旧逻辑 cancel，
+                // didEnd 会抢在 WebView 的 click 前隐藏窗口。
+                #[cfg(target_os = "macos")]
+                if platform::macos_status_item::has_active_session() {
+                    return;
+                }
+                request_hide_compact(window.app_handle());
             }
             // 全局监听收不到本应用自己的点击：面板开着时点击主窗口，同样收起。
             WindowEvent::Focused(true) if window.label() == MAIN_WINDOW => {
-                hide_compact(window.app_handle());
+                request_hide_compact(window.app_handle());
             }
             // 关闭窗口不等于退出应用：进程继续驻留系统区域。
             WindowEvent::CloseRequested { api, .. }
@@ -109,9 +117,15 @@ pub fn run() {
                 ) =>
             {
                 api.prevent_close();
-                let _ = window.hide();
-                if window.label() == MAIN_WINDOW {
-                    desktop::leave_main(window.app_handle());
+                if window.label() == COMPACT_WINDOW {
+                    // macOS 27 下先结束 expanded session，窗口隐藏由 didEnd
+                    // 回调兜底；main 与 onboarding 不参与 session，直接隐藏。
+                    desktop::request_hide_compact(window.app_handle());
+                } else {
+                    let _ = window.hide();
+                    if window.label() == MAIN_WINDOW {
+                        desktop::leave_main(window.app_handle());
+                    }
                 }
             }
             _ => {}
