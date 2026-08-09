@@ -337,6 +337,10 @@ h1 {
   line-height: 1.15;
 }
 
+h1[tabindex="-1"]:focus {
+  outline: none;
+}
+
 .sw-group {
   display: grid;
   gap: var(--space-3);

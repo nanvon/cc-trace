@@ -351,6 +351,11 @@ onMounted(() => {
   line-height: 1.15;
 }
 
+/* 辅助聚焦目标：程序化 focus 不画 outline，键盘 Tab 的控件仍走全局 :focus-visible */
+.usage-page__heading h1[tabindex="-1"]:focus {
+  outline: none;
+}
+
 .usage-page__scan {
   display: inline-flex;
   align-items: center;

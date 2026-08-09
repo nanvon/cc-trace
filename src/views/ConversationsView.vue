@@ -289,6 +289,10 @@ watch(
   line-height: 1.15;
 }
 
+.conversations__header h1[tabindex="-1"]:focus {
+  outline: none;
+}
+
 .conversations__filters {
   display: flex;
   flex-wrap: wrap;

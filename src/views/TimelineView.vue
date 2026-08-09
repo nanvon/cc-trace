@@ -291,6 +291,10 @@ onBeforeUnmount(() => {
   line-height: 1.15;
 }
 
+.timeline__header h1[tabindex="-1"]:focus {
+  outline: none;
+}
+
 .timeline__notice {
   padding: 2.5rem 1rem;
   color: var(--text-secondary);
