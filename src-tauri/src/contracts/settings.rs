@@ -104,6 +104,10 @@ pub struct Settings {
     pub launch_at_login: bool,
     /// 隐私模式：紧凑入口隐藏账号标识。仅 UI 隐藏，不承诺隐私隔离（cc-bar F-24 边界）。
     pub privacy_mode: bool,
+    /// 服务状态圆点：只控制紧凑面板的 Statuspage 状态点是否绘制，
+    /// 后台 5 分钟拉取不受开关影响，见 [ADR-0026]。
+    /// [ADR-0026]: ../../../../docs/决策/ADR-0026-Statuspage状态链进入首版.md
+    pub show_service_status: bool,
     pub onboarding: OnboardingState,
     pub usage_service_visibility: UsageServiceVisibility,
 }
@@ -117,6 +121,7 @@ impl Default for Settings {
             refresh_interval: RefreshInterval::default(),
             launch_at_login: false,
             privacy_mode: false,
+            show_service_status: true,
             onboarding: OnboardingState::default(),
             usage_service_visibility: UsageServiceVisibility::default(),
         }
@@ -132,6 +137,7 @@ pub struct SettingsUpdate {
     pub refresh_interval: Option<RefreshInterval>,
     pub launch_at_login: Option<bool>,
     pub privacy_mode: Option<bool>,
+    pub show_service_status: Option<bool>,
     pub usage_service_visibility: Option<UsageServiceVisibility>,
 }
 
@@ -153,6 +159,9 @@ impl SettingsUpdate {
         if let Some(privacy_mode) = self.privacy_mode {
             settings.privacy_mode = privacy_mode;
         }
+        if let Some(show_service_status) = self.show_service_status {
+            settings.show_service_status = show_service_status;
+        }
         if let Some(visibility) = self.usage_service_visibility {
             settings.usage_service_visibility = visibility;
         }
@@ -173,6 +182,7 @@ mod tests {
         assert_eq!(settings.appearance, AppearancePreference::System);
         assert!(!settings.launch_at_login);
         assert!(!settings.onboarding.completed);
+        assert!(settings.show_service_status, "服务状态圆点默认开启");
         assert!(settings.usage_service_visibility.codex);
         assert!(settings.usage_service_visibility.claude);
         assert!(settings.usage_service_visibility.pi);

@@ -72,7 +72,10 @@ async function commitSelect(
   await settings.update({ [key]: value } as SettingsUpdate);
 }
 
-async function commitToggle(key: "launchAtLogin" | "privacyMode", checked: boolean): Promise<void> {
+async function commitToggle(
+  key: "launchAtLogin" | "privacyMode" | "showServiceStatus",
+  checked: boolean,
+): Promise<void> {
   await settings.update({ [key]: checked });
   if (!current.value) return;
   // 写入失败时 store 保持原值，控件由 :checked 绑定自然回到原值。
@@ -165,6 +168,23 @@ async function updatePricingCatalog(): Promise<void> {
                 @click="commitToggle('privacyMode', !current.privacyMode)"
               >
                 <span class="visually-hidden">{{ t("settings.privacyMode") }}</span>
+              </button>
+            </div>
+
+            <div class="sw-row">
+              <span class="sw-label">
+                {{ t("settings.serviceStatus") }}
+                <span class="sw-desc">{{ t("settings.serviceStatusDescription") }}</span>
+              </span>
+              <button
+                type="button"
+                class="toggle"
+                :class="{ off: !current.showServiceStatus }"
+                role="switch"
+                :aria-checked="current.showServiceStatus"
+                @click="commitToggle('showServiceStatus', !current.showServiceStatus)"
+              >
+                <span class="visually-hidden">{{ t("settings.serviceStatus") }}</span>
               </button>
             </div>
           </div>

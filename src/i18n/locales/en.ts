@@ -59,6 +59,16 @@ export default {
     rateLimited: "Refresh rate-limited",
     errorCredentials: "Credentials are no longer valid",
     errorProtocol: "Could not read quota data",
+    service: {
+      none: "All systems normal",
+      minor: "Minor issue",
+      major: "Major issue",
+      critical: "Critical outage",
+      maintenance: "Maintenance",
+      unknown: "Status unknown",
+    },
+    /** Service-status dot tooltip: official note + Statuspage page update time. */
+    serviceUpdated: "{head} · updated {age}",
   },
 
   impact: {
@@ -225,6 +235,9 @@ export default {
     privacyMode: "Privacy mode",
     privacyModeDescription:
       "Hides account names in the compact panel only. Not a privacy boundary.",
+    serviceStatus: "Service status dot",
+    serviceStatusDescription:
+      "Shows the official status-page dot for each service in the compact panel. Background fetching is unaffected.",
     appearanceAndLanguage: "Appearance & language",
     language: "Language",
     appearance: "Appearance",

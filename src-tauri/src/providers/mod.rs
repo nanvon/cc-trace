@@ -11,6 +11,7 @@ pub mod claude;
 pub mod codex;
 pub mod credentials;
 pub mod http;
+pub mod service_status;
 pub mod synthetic;
 
 use std::future::Future;

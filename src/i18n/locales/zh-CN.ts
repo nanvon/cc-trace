@@ -61,6 +61,16 @@ export default {
     rateLimited: "刷新受限",
     errorCredentials: "凭据已失效",
     errorProtocol: "无法读取额度数据",
+    service: {
+      none: "服务正常",
+      minor: "轻微故障",
+      major: "重大故障",
+      critical: "严重故障",
+      maintenance: "维护中",
+      unknown: "状态未知",
+    },
+    /** 服务状态圆点 tooltip：官方说明 + Statuspage 页面更新时间。 */
+    serviceUpdated: "{head} · {age}更新",
   },
 
   impact: {
@@ -223,6 +233,8 @@ export default {
     launchAtLogin: "开机时启动 CC Trace",
     privacyMode: "隐私模式",
     privacyModeDescription: "仅在紧凑面板隐藏账号标识，不构成隐私隔离。",
+    serviceStatus: "服务状态圆点",
+    serviceStatusDescription: "在紧凑面板为每个服务显示官方状态页圆点；后台拉取不受开关影响。",
     appearanceAndLanguage: "外观与语言",
     language: "语言",
     appearance: "外观",

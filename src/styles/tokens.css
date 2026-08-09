@@ -33,6 +33,8 @@
      取值由 ADR-0017 正式采纳 */
   --status-low: #f3730e;
   --status-error: #f31260;
+  /* 官方状态页 maintenance（ADR-0026）。取值参考 cc-bar 的系统蓝（macOS blue / #007aff） */
+  --status-maintenance: #007aff;
 
   /* Provider 品牌识别是分类维度；Codex 与 cc-bar 对齐为石墨灰，不表达可用性、风险或交互状态。 */
   --cat-codex: #6c6c70;
@@ -94,6 +96,7 @@
     --status-warning: #fbbf24;
     --status-low: #ff8a3d;
     --status-error: #f5455c;
+    --status-maintenance: #0a84ff;
 
     --cat-codex: #98989d;
     --cat-claude: #f0a080;
@@ -123,6 +126,7 @@
   --status-warning: #fbbf24;
   --status-low: #ff8a3d;
   --status-error: #f5455c;
+  --status-maintenance: #0a84ff;
 
   --cat-codex: #98989d;
   --cat-claude: #f0a080;

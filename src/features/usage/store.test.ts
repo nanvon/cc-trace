@@ -119,6 +119,7 @@ describe("usage store", () => {
       refreshInterval: "2m",
       launchAtLogin: false,
       privacyMode: false,
+      showServiceStatus: true,
       onboarding: { completed: true, completedAt: null },
       usageServiceVisibility: { codex: true, claude: true, pi: false, opencode: false },
     });
@@ -163,6 +164,7 @@ describe("usage store", () => {
       refreshInterval: "2m",
       launchAtLogin: false,
       privacyMode: false,
+      showServiceStatus: true,
       onboarding: { completed: true, completedAt: null },
       usageServiceVisibility: { codex: true, claude: false, pi: false, opencode: false },
     });

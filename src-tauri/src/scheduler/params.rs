@@ -9,6 +9,10 @@ pub const AUTO_REFRESH_JITTER_RATIO: f64 = 0.10;
 /// 本地 Token 用量增量扫描间隔（秒）。首版固定为 5 分钟，后续由设置页接管。
 pub const USAGE_SCAN_INTERVAL_SECS: u64 = 5 * 60;
 
+/// 官方服务状态拉取间隔（秒）。Statuspage 变化很慢，固定 5 分钟，不跟额度间隔抖动，
+/// 见 [ADR-0026](../../../../docs/决策/ADR-0026-Statuspage状态链进入首版.md)。
+pub const SERVICE_STATUS_INTERVAL_SECS: u64 = 5 * 60;
+
 /// 同一 Provider 手动刷新最小间隔（秒）。期间的重复触发合并到当前任务，不排队重发。
 pub const MANUAL_REFRESH_MIN_INTERVAL_SECS: i64 = 60;
 
@@ -86,6 +90,7 @@ mod tests {
     #[test]
     fn baseline_values_match_the_architecture_table() {
         assert_eq!(USAGE_SCAN_INTERVAL_SECS, 300);
+        assert_eq!(SERVICE_STATUS_INTERVAL_SECS, 300);
         assert_eq!(MANUAL_REFRESH_MIN_INTERVAL_SECS, 60);
         assert_eq!(REQUEST_TIMEOUT_SECS, 15);
         assert_eq!(RATE_LIMIT_BACKOFF_STEPS_SECS, [60, 120, 300]);

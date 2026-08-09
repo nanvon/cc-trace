@@ -30,7 +30,7 @@ import { useTimeText } from "../lib/useTimeText";
 const { t } = useI18n();
 const { countdown } = useTimeText();
 const usage = useUsageStore();
-const { quota, settings } = useAppShell("compact");
+const { quota, settings, serviceStatus } = useAppShell("compact");
 
 const COMPACT_TITLE_ID = "compact-title";
 const entered = ref(false);
@@ -306,6 +306,7 @@ onBeforeUnmount(() => {
           variant="compact"
           :usage-costs="usage.costs[provider.provider]"
           :usage-scanning="usage.loading"
+          :service-status="serviceStatus.state[provider.provider]"
         />
       </div>
     </section>

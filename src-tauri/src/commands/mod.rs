@@ -5,6 +5,7 @@
 //! 文件路径、系统错误原文或凭据内容。
 
 pub mod quota;
+pub mod service_status;
 pub mod settings;
 pub mod status;
 pub mod usage;

@@ -6,6 +6,7 @@
 mod app_status;
 mod error;
 mod quota;
+mod service_status;
 mod settings;
 mod usage;
 
@@ -15,6 +16,7 @@ pub use quota::{
     ProviderAvailability, ProviderId, ProviderIdentity, ProviderSnapshot, QuotaSnapshot,
     QuotaState, QuotaWindow, QuotaWindowKind, RefreshState, RefreshStatePayload, SnapshotFreshness,
 };
+pub use service_status::{ServiceStatus, ServiceStatusIndicator, ServiceStatusState};
 pub use settings::{
     AppearancePreference, LanguagePreference, OnboardingState, RefreshInterval,
     SETTINGS_SCHEMA_VERSION, Settings, SettingsUpdate,

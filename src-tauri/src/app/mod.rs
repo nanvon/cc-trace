@@ -15,7 +15,8 @@ use chrono::{DateTime, Utc};
 use tauri::{AppHandle, Emitter};
 
 use crate::contracts::{
-    ProviderId, QuotaState, RefreshState, RefreshStatePayload, Settings, SettingsUpdate,
+    ProviderId, QuotaState, RefreshState, RefreshStatePayload, ServiceStatusState, Settings,
+    SettingsUpdate,
 };
 use crate::providers::QuotaProvider;
 use crate::providers::claude::ClaudeProvider;
@@ -31,6 +32,9 @@ use crate::usage::UsageService;
 pub const EVENT_QUOTA_UPDATED: &str = "quota://updated";
 /// 某个 Provider 的活动维度发生变化。刷新状态的唯一来源。
 pub const EVENT_QUOTA_REFRESH_STATE: &str = "quota://refresh-state";
+/// 官方服务状态发生变化。载荷是完整的 [`ServiceStatusState`]；与额度状态是
+/// 两条独立状态链，见 [ADR-0026](../../../docs/决策/ADR-0026-Statuspage状态链进入首版.md)。
+pub const EVENT_SERVICE_STATUS_UPDATED: &str = "service-status://updated";
 /// 设置发生变化。
 pub const EVENT_SETTINGS_UPDATED: &str = "settings://updated";
 
@@ -67,6 +71,9 @@ pub struct AppCore {
     scenario: ScenarioHandle,
     /// 每次重启自动刷新循环时自增，旧循环发现代次不符就自行退出。
     schedule_generation: AtomicU64,
+    /// 官方服务状态的内存快照。公开信息、可随时重建，因此不落盘；
+    /// 失败保留上一份值，不清空，见 [ADR-0026](../../../docs/决策/ADR-0026-Statuspage状态链进入首版.md)。
+    service_status: Mutex<ServiceStatusState>,
 }
 
 impl AppCore {
@@ -110,6 +117,7 @@ impl AppCore {
             #[cfg(debug_assertions)]
             scenario,
             schedule_generation: AtomicU64::new(0),
+            service_status: Mutex::new(ServiceStatusState::default()),
         });
 
         (core, issue)
@@ -391,6 +399,42 @@ impl AppCore {
         self.refresh_all(app, RefreshTrigger::Startup);
     }
 
+    // --- 官方服务状态（Statuspage 状态链） ---
+
+    /// 当前服务状态快照。
+    pub fn service_status(&self) -> ServiceStatusState {
+        self.service_status.lock().expect("service status lock").clone()
+    }
+
+    /// 拉取 OpenAI／Anthropic 官方状态页。两个请求并发，互不影响；
+    /// 单个失败保留上一份内存值，不清空。
+    pub fn refresh_service_status(self: &Arc<Self>, app: &AppHandle) {
+        let core = Arc::clone(self);
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            let codex = crate::providers::service_status::fetch_status(
+                crate::providers::service_status::OPENAI_STATUS_URL,
+            )
+            .await;
+            let claude = crate::providers::service_status::fetch_status(
+                crate::providers::service_status::ANTHROPIC_STATUS_URL,
+            )
+            .await;
+
+            {
+                let mut state = core.service_status.lock().expect("service status lock");
+                if let Ok(status) = codex {
+                    state.set(ProviderId::Codex, status);
+                }
+                if let Ok(status) = claude {
+                    state.set(ProviderId::Claude, status);
+                }
+            }
+
+            core.emit_service_status(&app);
+        });
+    }
+
     // --- 事件 ---
 
     /// 界面与系统区域用同一份状态：菜单栏徽标不是第二个数据源，
@@ -403,6 +447,10 @@ impl AppCore {
 
     pub fn emit_settings(&self, app: &AppHandle, settings: &Settings) {
         let _ = app.emit(EVENT_SETTINGS_UPDATED, settings);
+    }
+
+    pub fn emit_service_status(&self, app: &AppHandle) {
+        let _ = app.emit(EVENT_SERVICE_STATUS_UPDATED, self.service_status());
     }
 
     fn emit_refresh_state(&self, app: &AppHandle, provider: ProviderId, refresh: RefreshState) {
@@ -513,6 +561,26 @@ pub fn start_auto_usage_scan(core: &Arc<AppCore>) {
             ))
             .await;
             let _ = core.usage.start_default_scan();
+        }
+    });
+}
+
+/// 每 5 分钟拉一次官方服务状态，启动后立即拉一次。
+///
+/// 固定间隔、不加抖动（公开只读端点，不与额度刷新争峰）；失败保留旧值，
+/// 不进入退避体系，见 [ADR-0026](../../../docs/决策/ADR-0026-Statuspage状态链进入首版.md)。
+pub fn start_auto_service_status(core: &Arc<AppCore>, app: &AppHandle) {
+    core.refresh_service_status(app);
+
+    let core = Arc::clone(core);
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(StdDuration::from_secs(
+                crate::scheduler::params::SERVICE_STATUS_INTERVAL_SECS,
+            ))
+            .await;
+            core.refresh_service_status(&app);
         }
     });
 }

@@ -18,6 +18,7 @@ import {
   type ProviderSnapshot,
   type QuotaWindow,
 } from "../features/quota/contracts";
+import type { ServiceStatus } from "../features/quota/serviceStatus";
 import type { UsageProviderCosts } from "../features/usage/contracts";
 import { formatAbsolute, formatPercent, splitPercent } from "../lib/format";
 import { planLabel, providerLabel, windowCode, windowLabel } from "../lib/labels";
@@ -31,13 +32,58 @@ const props = defineProps<{
   variant: "compact" | "full";
   usageCosts?: UsageProviderCosts;
   usageScanning?: boolean;
+  /** 官方服务状态（Statuspage 状态链，ADR-0026）。与额度状态无关。 */
+  serviceStatus?: ServiceStatus | null;
 }>();
 
 const { t, locale } = useI18n();
 const settingsStore = useSettingsStore();
-const { reset } = useTimeText();
+const { reset, past } = useTimeText();
 const presentation = computed(() => presentProvider(props.provider));
 const name = computed(() => providerLabel(t, props.provider.provider));
+
+/**
+ * 官方服务状态圆点（ADR-0026）。`unknown` 或没有快照时不画点；
+ * 开关只控制绘制，后台拉取不受影响。
+ */
+const serviceStatusShown = computed(
+  () =>
+    (settingsStore.settings?.showServiceStatus ?? true) &&
+    props.serviceStatus !== undefined &&
+    props.serviceStatus !== null &&
+    props.serviceStatus.indicator !== "unknown",
+);
+const serviceStatusTone = computed(() => {
+  const indicator = props.serviceStatus?.indicator;
+  switch (indicator) {
+    case "none":
+      return "success";
+    case "minor":
+      return "warning";
+    case "major":
+      return "low";
+    case "critical":
+      return "error";
+    case "maintenance":
+      return "maintenance";
+    default:
+      return null;
+  }
+});
+const serviceStatusLabel = computed(() => {
+  const indicator = props.serviceStatus?.indicator;
+  return indicator ? t(`status.service.${indicator}`) : "";
+});
+/** tooltip：description 优先，缺失时用 indicator 文案；有更新时刻时附「N 前更新」。 */
+const serviceStatusTitle = computed(() => {
+  const status = props.serviceStatus;
+  if (!status) {
+    return "";
+  }
+  const head = status.description?.trim() || serviceStatusLabel.value;
+  const age = status.updatedAt ? past(status.updatedAt) : null;
+  return age ? t("status.serviceUpdated", { head, age }) : head;
+});
 
 /**
  * 身份是一段并置的次要信息：账号在前、套餐在后。
@@ -52,7 +98,7 @@ const plan = computed(() => {
 /** 隐私模式：仅隐藏紧凑入口的账号标识，不承诺隐私隔离（cc-bar F-24 边界）。 */
 const privacyMode = computed(() => settingsStore.settings?.privacyMode ?? false);
 const account = computed(() =>
-  privacyMode.value ? null : (props.provider.identity?.accountHint ?? null),
+  privacyMode.value ? null : (props.provider.identity?.account ?? null),
 );
 
 const primary = computed(() => primaryWindow(props.provider.snapshot));
@@ -171,6 +217,14 @@ function secondaryValueA11y(window: QuotaWindow): string {
         <h3 class="lane-name" translate="no">{{ name }}</h3>
         <span v-if="plan" class="lane-chip" translate="no">{{ plan }}</span>
         <p v-if="account" class="lane-account" :title="account">{{ account }}</p>
+        <span
+          v-if="serviceStatusShown && serviceStatusTone"
+          class="lane-status"
+          :class="`lane-status--${serviceStatusTone}`"
+          role="img"
+          :aria-label="serviceStatusLabel"
+          :title="serviceStatusTitle"
+        />
       </header>
 
       <template v-if="showsRails">
@@ -534,6 +588,32 @@ function secondaryValueA11y(window: QuotaWindow): string {
   white-space: nowrap;
   color: var(--text-secondary);
   font-size: 0.71875rem;
+}
+
+/* 官方服务状态点：靠右，与 cc-bar headerRow 一致（ADR-0026）。unknown 不绘制。 */
+.lane-status {
+  margin-inline-start: auto;
+  flex: none;
+  inline-size: 6px;
+  block-size: 6px;
+  border-radius: 50%;
+  background: var(--status-success);
+}
+
+.lane-status--warning {
+  background: var(--status-warning);
+}
+
+.lane-status--low {
+  background: var(--status-low);
+}
+
+.lane-status--error {
+  background: var(--status-error);
+}
+
+.lane-status--maintenance {
+  background: var(--status-maintenance);
 }
 
 /* ---------- 读数行：% 与重置时间同一行（One Reading Path） ---------- */

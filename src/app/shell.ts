@@ -11,6 +11,7 @@ import { onBeforeUnmount, onMounted } from "vue";
 
 import { hideCompactPanel, openSettingsWindow, quitApp } from "../features/app/windows";
 import { onQuotaUpdated, onRefreshState } from "../features/quota/api";
+import { onServiceStatusUpdated, useServiceStatusStore } from "../features/quota/serviceStatus";
 import { useQuotaStore } from "../features/quota/store";
 import { onSettingsUpdated } from "../features/settings/api";
 import { useSettingsStore } from "../features/settings/store";
@@ -20,6 +21,7 @@ export type Surface = "compact" | "main" | "onboarding";
 export function useAppShell(surface: Surface) {
   const quota = useQuotaStore();
   const settings = useSettingsStore();
+  const serviceStatus = useServiceStatusStore();
   const subscriptions: UnlistenFn[] = [];
 
   /**
@@ -86,6 +88,9 @@ export function useAppShell(surface: Surface) {
     if (surface !== "main") {
       startupLoads.push(quota.load());
     }
+    if (surface === "compact") {
+      startupLoads.push(serviceStatus.load());
+    }
     await Promise.allSettled(startupLoads);
 
     try {
@@ -95,6 +100,9 @@ export function useAppShell(surface: Surface) {
           await onQuotaUpdated(quota.adopt),
           await onRefreshState(quota.adoptRefreshState),
         );
+      }
+      if (surface === "compact") {
+        subscriptions.push(await onServiceStatusUpdated(serviceStatus.adopt));
       }
     } catch {
       // 纯浏览器预览没有 Tauri 事件桥；界面仍可用已加载的状态渲染。
@@ -107,5 +115,5 @@ export function useAppShell(surface: Surface) {
     subscriptions.length = 0;
   });
 
-  return { quota, settings, closeSurface };
+  return { quota, settings, serviceStatus, closeSurface };
 }

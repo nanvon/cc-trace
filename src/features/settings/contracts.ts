@@ -31,6 +31,8 @@ export interface Settings {
   refreshInterval: RefreshIntervalOption;
   launchAtLogin: boolean;
   privacyMode: boolean;
+  /** 服务状态圆点：只控制紧凑面板绘制，后台拉取不受影响（ADR-0026）。 */
+  showServiceStatus: boolean;
   onboarding: OnboardingState;
   usageServiceVisibility: UsageServiceVisibility;
 }
@@ -42,6 +44,7 @@ export interface SettingsUpdate {
   refreshInterval?: RefreshIntervalOption;
   launchAtLogin?: boolean;
   privacyMode?: boolean;
+  showServiceStatus?: boolean;
   usageServiceVisibility?: UsageServiceVisibility;
 }
 

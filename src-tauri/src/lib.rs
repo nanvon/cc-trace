@@ -79,6 +79,10 @@ pub fn run() {
                 app::start_auto_usage_scan(&core);
             }
 
+            // 官方服务状态不涉及凭据与权限，引导完成与否都立即拉取一次并进入
+            // 5 分钟周期；失败保留旧值，不影响任何额度功能（ADR-0026）。
+            app::start_auto_service_status(&core, &handle);
+
             // 首次启动未完成时优先进入引导，不直接弹出紧凑面板。
             if !settings.onboarding.completed {
                 let _ = desktop::show_window(&handle, ONBOARDING_WINDOW);
@@ -118,6 +122,7 @@ pub fn run() {
         commands::status::app_get_status,
         commands::quota::quota_get_snapshot,
         commands::quota::quota_refresh,
+        commands::service_status::service_status_get,
         commands::settings::settings_read,
         commands::settings::settings_update,
         commands::settings::onboarding_complete,
@@ -146,6 +151,7 @@ pub fn run() {
         commands::status::app_get_status,
         commands::quota::quota_get_snapshot,
         commands::quota::quota_refresh,
+        commands::service_status::service_status_get,
         commands::settings::settings_read,
         commands::settings::settings_update,
         commands::settings::onboarding_complete,
