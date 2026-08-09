@@ -1,6 +1,6 @@
 ---
 name: CC Trace
-description: A HeroUI-styled adaptive desktop system built around stable provider lanes, shadow-driven elevation and honest reset-state progress.
+description: A HeroUI-styled adaptive desktop system built around stable provider lanes, hairline-outlined flush cards and honest reset-state progress.
 ---
 
 <!-- Token values below are mirrored from the shipped implementation in
@@ -13,9 +13,9 @@ description: A HeroUI-styled adaptive desktop system built around stable provide
 
 ## Overview
 
-**Creative North Star: "HeroUI"** (see [ADR-0012](docs/决策/ADR-0012-视觉方向改为HeroUI风格.md), fixed values per [ADR-0023](docs/决策/ADR-0023-视觉修复方向定稿.md))
+**Creative North Star: "HeroUI, flush-card layering"** (see [ADR-0012](docs/决策/ADR-0012-视觉方向改为HeroUI风格.md), fixed values per [ADR-0023](docs/决策/ADR-0023-视觉修复方向定稿.md), layering per [ADR-0028](docs/决策/ADR-0028-全部表面改为贴合式弱化卡片层级.md))
 
-CC Trace adopts the HeroUI visual language: shadow-driven elevation, larger corner radii, and semantic color that appears more often and more saturated than a purely restrained system. Provider lanes still read from identity to remaining capacity to reset endpoint in one path, and Codex/Claude Code keep a stable order — the information grammar is unchanged, only the shape, elevation and color language changed.
+CC Trace adopts the HeroUI visual language — larger corner radii and semantic color that appears more often and more saturated than a purely restrained system — with the card hierarchy mechanism revised to cc-bar's flush-card approach: cards rest **without shadows**, their boundaries drawn by a hairline stroke (`--border-hairline`), and hierarchy is carried by type. The KPI row gives the usage page a single visual anchor: one large numeric scale, everything else recedes below 12.5px. Provider lanes still read from identity to remaining capacity to reset endpoint in one path, and Codex/Claude Code keep a stable order — the information grammar is unchanged, only the shape, stroke and color language changed.
 
 macOS and Windows share the same information grammar while their shells, menu behavior and window materials remain platform-appropriate.
 
@@ -23,20 +23,20 @@ macOS and Windows share the same information grammar while their shells, menu be
 
 - Stable Codex → Claude Code lanes.
 - Risk-led hierarchy without reordering content.
-- Cards carry shadow at rest; hairline borders stay for definition, especially in dark mode.
+- Cards rest flush: no resting shadow, hairline border only; shadow (`--shadow-panel`) is reserved for floating surfaces (compact panel shell, status-dot tooltip).
 - 12–14px corner radii, pill-shaped quota progress tracks.
-- System UI typography paired with platform-aware monospaced numerals.
+- System UI typography on a four-step scale — 22px numerals / 13px titles / 12.5px body / 11px labels — with tabular numerals.
 - Honest state combinations: activity, freshness and failure reason remain distinguishable.
 
 ## Colors
 
-The palette follows HeroUI's default semantic scale. Canvas and card surfaces stay close in value, but not identical — the shipped values deepen the canvas (`#F4F4F5` light / `#0E0E11` dark) and strengthen the resting lane shadow so elevation reads through both shadow and a modest color difference (ADR-0023).
+The palette follows HeroUI's default semantic scale. Canvas and card surfaces stay close in value — the shipped values deepen the canvas (`#F4F4F5` light / `#0E0E11` dark) so a white card separates from the page by tone; card boundaries are drawn with a hairline stroke (`--border-hairline`) instead of a resting shadow (ADR-0028).
 
 Values are light / dark pairs as shipped in `src/styles/tokens.css`.
 
 ### Primary
 
-- **HeroUI Primary** `--action-primary` `#006FEE` / `#338EF7`: interactive controls, keyboard focus and selected settings. It must never stand in for success.
+- **HeroUI Primary** `--action-primary` `#006FEE` / `#338EF7`: interactive controls, keyboard focus, selected settings and the **selected sidebar item** (blue fill with `--action-on-primary` white text, ADR-0028). It must never stand in for success.
 
 ### Secondary
 
@@ -47,11 +47,12 @@ Values are light / dark pairs as shipped in `src/styles/tokens.css`.
 
 ### Neutral
 
-- **Canvas** `--surface-primary` `#F4F4F5` / `#0E0E11`: application background. One step darker than the white card so elevation reads from color difference as well as shadow.
-- **Surface** `--surface-raised` `#FFFFFF` / `#1C1C1F`: provider lanes, fields and quiet grouped content — intentionally close to the canvas value; shadow and the modest canvas gap do the separating.
+- **Canvas** `--surface-primary` `#F4F4F5` / `#0E0E11`: application background. One step darker than the white card so elevation reads from color difference as well as stroke.
+- **Surface** `--surface-raised` `#FFFFFF` / `#1C1C1F`: provider lanes, fields and quiet grouped content — intentionally close to the canvas value; the hairline stroke and the modest canvas gap do the separating.
+- **Hairline** `--border-subtle` `#E4E4E7` / `#2E2E33`: list and dense-area structural separators.
+- **Card hairline** `--border-hairline` `rgb(16 16 20 / 8%)` / `rgb(255 255 255 / 10%)`: the 1px card boundary stroke that replaces the resting shadow (ADR-0028). Cards use this token, never a hand-mixed border.
 - **Ink** `--text-primary` `#11181C` / `#ECEDEE`: primary text and high-value numbers.
 - **Muted** `--text-secondary` `#71717A` / `#A1A1AA`: labels, timestamps and supporting explanations.
-- **Hairline** `--border-subtle` `#E4E4E7` / `#2E2E33`: card borders, list and dense-area structural separators.
 - **Track** `--track-background` `#EDEDF0` / `#2A2A2E`: the unfilled groove of the quota progress bar.
 
 Appearance is driven by `data-appearance` on the root element: absent or `system` follows `prefers-color-scheme`; `light` and `dark` override it.
@@ -74,6 +75,8 @@ Appearance is driven by `data-appearance` on the root element: absent or `system
 
 ### Hierarchy
 
+A four-step type scale carries the hierarchy (ADR-0028): **22px numerals** are the only large type on a page (KPI row; the compact panel's 32px primary reading is the lone exception), **13px medium** titles, **12.5px regular** body, **11px muted** labels, with 10.5px for small notes. No intermediate odd sizes like 11.5px.
+
 - **Window title:** compact system-weight heading; never an oversized marketing headline.
 - **Provider title:** medium weight with enough contrast to anchor a stable lane.
 - **Quota value:** strong but not theatrical; tabular numerals prevent refresh-time movement.
@@ -91,7 +94,9 @@ Appearance is driven by `data-appearance` on the root element: absent or `system
 
 The core spatial grammar is a stack of stable provider lanes. Each lane reads from identity to remaining capacity to reset endpoint, then to freshness and recovery. Compact surfaces collapse details but preserve that order; larger windows add explanation below the same progress bar instead of changing the model.
 
-Use a four-point spacing rhythm. Dense control groups prefer 8–16 units; major content transitions use 24–32 units. Provider order never changes after refresh. The main window is driven by a 176px grouped sidebar (views group / data source group / settings pinned bottom, ADR-0024): usage, conversations and timeline share the same window and the data source selection is a global in-memory filter across views; settings hides the data source group. Settings content stays a narrow 640px reading column.
+Use a four-point spacing rhythm. Dense control groups prefer 8–16 units; major content transitions use 20–32 units. Provider order never changes after refresh. The main window is driven by a 176px grouped sidebar (views group / data source group / settings pinned bottom, ADR-0024): usage, conversations and timeline share the same window and the data source selection is a global in-memory filter across views; settings hides the data source group. Settings content stays a narrow 640px reading column.
+
+The usage page opens with a **KPI row** (total tokens / total spend / per-provider spend, one flush card each) that anchors the page's hierarchy — the single 22px numeric scale everything else recedes beneath (ADR-0028). Section headings are plain 13px medium text without decorative rules; sections sit 20px apart.
 
 Transient surfaces originate from their system trigger. The macOS compact panel is anchored to the Menu Bar icon; the Windows compact panel appears adjacent to the Tray. The main window holds usage, timeline, conversations and settings under one platform title bar, navigated by the grouped sidebar; onboarding remains a separate window.
 
@@ -101,9 +106,9 @@ Transient surfaces originate from their system trigger. The macOS compact panel 
 
 ## Elevation & Depth
 
-Depth is expressive, not just structural. Provider lanes carry a soft shadow (`--shadow-lane`) at rest — elevation does not wait for hover or interaction. The lane shadow was strengthened in ADR-0023 so it reads at rest, and the canvas was deepened one step so a white card separates from the page even where shadow is subtle. A hairline border stays on every card for definition, especially where shadow alone is too faint on a dark background. The compact panel may use the operating system's translucent or acrylic material at the outer shell, but its content surfaces remain solid enough for dependable contrast.
+Depth is structural, not decorative — and it is carried by **stroke, tone and type, not resting shadows** (ADR-0028). Cards sit flush on the canvas: their boundary is the 1px hairline stroke (`--border-hairline`), their separation from the page comes from the modest canvas gap, and their hierarchy comes from the type scale (the KPI numerals are the page's only large type). A resting shadow on every card makes all of them claim the same emphasis, which reads as no hierarchy at all; the hairline is a quiet boundary that lets information speak.
 
-Transient panels use a stronger layered ambient shadow (`--shadow-panel`) than resting lanes, so the floating compact panel reads as a higher layer than the cards inside the main window. Never stack translucent surfaces.
+Shadows are reserved for floating surfaces: the compact panel shell and the status-dot tooltip use `--shadow-panel`, which reads as a higher layer than the cards inside the main window. The compact panel may use the operating system's translucent or acrylic material at the outer shell, but its content surfaces remain solid enough for dependable contrast. Dark mode keeps a faint card stroke as a definition backstop. Never stack translucent surfaces.
 
 ## Shapes
 
@@ -117,10 +122,11 @@ Quota progress uses a pill-shaped track, not a straight rail. It does not become
 |---|---|---|
 | Quota progress | `src/components/QuotaProgress.vue` | Rounded pill track. Primary windows stack a large reading above a full-width bar; secondary windows are a single row. Fill and reading are coloured by remaining quota, not by availability |
 | Usage cost readout | `src/components/UsageCostReadout.vue` | Compact-only today / this-week API-equivalent cost beside the primary reset reading, with a muted `花费 / Cost` label below. Scanning uses a small muted loading indicator after the amounts. A priced subtotal is shown without a lower-bound suffix or unpriced notice; never-indexed, wholly unpriced and unavailable values use `—`, never a false `$0` |
-| Provider lane | `src/components/ProviderLane.vue` | Shadow-driven card, no left status spine. Header is name + plan chip + masked account; secondary windows sit under a dashed divider |
+| Provider lane | `src/components/ProviderLane.vue` | Flush hairline card, no left status spine, no resting shadow. Header is name + plan chip + masked account; secondary windows sit under a dashed divider |
 | Overall signal | `src/components/OverallSignal.vue` | Raises the weight of the highest-risk provider without reordering anything. Both surfaces use a stable surface name as the title — never a status sentence; a status dot with an accessible name carries the overall state. All status detail lives in a dot tooltip (hover or keyboard focus): one entry per affected provider with status, next step and backoff countdown; cards carry quota only |
 | Refresh icon | `src/components/RefreshIcon.vue` | Spins only during a real refresh; static under reduced motion |
-| Main window sidebar | `src/components/MainSidebar.vue` | 176px grouped sidebar: views group, data source group (all / Codex / Claude Code / Pi / OpenCode) and settings pinned bottom. Data source selection is a global in-memory filter; settings hides the data source group (ADR-0024) |
+| Main window sidebar | `src/components/MainSidebar.vue` | 176px grouped sidebar: views group, data source group (all / Codex / Claude Code / Pi / OpenCode) and settings pinned bottom. Selected item is a blue fill with white text (ADR-0028). Data source selection is a global in-memory filter; settings hides the data source group (ADR-0024) |
+| KPI row | `src/views/MainView.vue` | The page's visual anchor: one flush card each for total tokens, total spend and per-provider spend. 22px semibold tabular numerals are the page's only large type; 11px muted labels; provider cards carry a 7px squircle mark (ADR-0028) |
 | Menu bar badge | `src-tauri/src/platform/menubar_badge.rs` | macOS only: provider marks and five-hour percentages rendered into a single-colour template bitmap (ADR-0017) |
 
 Spacing follows a four-point rhythm (`--space-1` … `--space-8` = 4/8/12/16/20/24/32). Radii are `--radius-control` 8px, `--radius-small` 12px, `--radius-medium` 14px, `--radius-shell` 16px. Motion uses `--motion-fast` 140ms, `--motion-base` 200ms, `--motion-panel` 320ms with a single `--ease-out` curve and no overshoot.
@@ -136,13 +142,15 @@ Desktop controls keep a 40 × 40 minimum target, with one exception: the four ic
 - **Do** keep Codex and Claude Code in stable lanes with the same field order.
 - **Do** show remaining capacity, reset time and freshness as one coherent reading path.
 - **Do** use system typography, tabular numerals and precise optical alignment.
-- **Do** let shadow — plus a modest canvas/white gap — carry elevation for lanes and panels.
+- **Do** let the hairline stroke — plus a modest canvas/white gap — carry card boundaries; reserve shadows for floating surfaces (`--shadow-panel`).
+- **Do** keep the KPI numerals as the page's only large type; let everything else recede below 12.5px.
 - **Do** pair every semantic color with readable status language.
 - **Do** preserve old snapshot values during refresh and visibly mark their freshness.
 
 ### Don't:
 
 - **Don't** use gradients, glass stacks, colored icon tiles or badge/pill spam.
+- **Don't** add resting shadows to cards (`--shadow-lane` was removed by ADR-0028); a box of six floating cards is the Dashboard-wall look the direction rejects.
 - **Don't** dynamically reorder Providers by risk.
 - **Don't** use circular gauges, charts or animated counters for static quota facts.
 - **Don't** revert to a straight-rail progress shape or reintroduce tick marks — that direction was explicitly superseded by [ADR-0012](docs/决策/ADR-0012-视觉方向改为HeroUI风格.md).

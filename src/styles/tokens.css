@@ -23,10 +23,12 @@
   --text-primary: #18181c;
   --text-secondary: #71717a;
   --border-subtle: #e4e4e7;
+  --border-hairline: rgb(16 16 20 / 8%);
   --track-background: #ededf0;
 
   /* HeroUI primary，只表达交互，不兼任成功、Provider 品牌或装饰色 */
   --action-primary: #006fee;
+  --action-on-primary: #ffffff;
   /* 导航选中态的中性浅底与文字（ADR-0024 侧边栏选中态，对齐 HeroUI default 变体，不取主色） */
   --action-soft: rgb(24 24 28 / 8%);
   --action-on-soft: var(--text-primary);
@@ -52,8 +54,6 @@
   /* 紧凑面板是悬浮层，阴影比主窗口里的卡片更明显（原型评审稿 🚩 加档） */
   --shadow-panel: 0 24px 56px -18px rgb(16 16 20 / 26%), 0 4px 12px rgb(16 16 20 / 7%);
   --ring-panel: rgb(16 16 20 / 8%);
-  /* Provider lane 静止时也带阴影，不需要交互才出现（🚩 加档：静止时肉眼可见） */
-  --shadow-lane: 0 1px 2px rgb(16 16 20 / 5%), 0 6px 20px -8px rgb(16 16 20 / 10%);
   /* 4 / 8 / 12 / 16 / 20 / 24 / 32 */
   --space-1: 0.25rem;
   --space-2: 0.5rem;
@@ -92,9 +92,11 @@
     --text-primary: #ecedee;
     --text-secondary: #a1a1aa;
     --border-subtle: #2e2e33;
+    --border-hairline: rgb(255 255 255 / 10%);
     --track-background: #2a2a2e;
 
     --action-primary: #338ef7;
+    --action-on-primary: #ffffff;
     --action-soft: rgb(236 237 238 / 10%);
     --action-on-soft: var(--text-primary);
     --status-success: #45d483;
@@ -114,7 +116,6 @@
 
     --shadow-panel: 0 24px 56px -18px rgb(0 0 0 / 65%), 0 4px 12px rgb(0 0 0 / 40%);
     --ring-panel: rgb(255 255 255 / 9%);
-    --shadow-lane: 0 1px 2px rgb(0 0 0 / 40%), 0 6px 20px -8px rgb(0 0 0 / 35%);
   }
 }
 
@@ -124,9 +125,11 @@
   --text-primary: #ecedee;
   --text-secondary: #a1a1aa;
   --border-subtle: #2e2e33;
+  --border-hairline: rgb(255 255 255 / 10%);
   --track-background: #2a2a2e;
 
   --action-primary: #338ef7;
+  --action-on-primary: #ffffff;
   --action-soft: rgb(236 237 238 / 10%);
   --action-on-soft: var(--text-primary);
   --status-success: #45d483;
@@ -146,5 +149,4 @@
 
   --shadow-panel: 0 24px 56px -18px rgb(0 0 0 / 65%), 0 4px 12px rgb(0 0 0 / 40%);
   --ring-panel: rgb(255 255 255 / 9%);
-  --shadow-lane: 0 1px 2px rgb(0 0 0 / 40%), 0 6px 20px -8px rgb(0 0 0 / 35%);
 }

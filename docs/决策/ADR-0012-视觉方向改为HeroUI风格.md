@@ -2,6 +2,7 @@
 
 - 状态：已确认
 - 日期：2026-07-27
+- 修订：2026-08-09，「阴影驱动层级」的层级机制部分被 [ADR-0028](ADR-0028-全部表面改为贴合式弱化卡片层级.md) 推翻（删静止阴影，改为描边勾勒＋文字层级）；更大圆角、更饱和且更常出现的语义色等其余结论继续有效。
 - 相关文档：[设计方向与状态规范](../设计方向与状态规范.md)、[DESIGN.md](../../DESIGN.md)、`src/styles/tokens.css`
 - 选定的探索稿：Artifact「CC Trace · HeroUI 方向」<https://claude.ai/code/artifact/5aef7024-5acb-4184-889a-24bfabd3a0ed>
 

@@ -286,9 +286,8 @@ onBeforeUnmount(() => {
   min-block-size: 12.5rem;
   padding: 0.8125rem 0.875rem 0.5625rem;
   background: var(--usage-surface, var(--surface-raised));
-  border: 1px solid var(--border-subtle);
+  border: 1px solid var(--border-hairline);
   border-radius: 0.875rem;
-  box-shadow: var(--usage-card-shadow, var(--shadow-lane));
 }
 
 .usage-chart__canvas {

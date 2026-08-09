@@ -295,7 +295,7 @@ function retryText(provider: ProviderSnapshot): string | null {
   background: var(--status-error);
 }
 
-/* 状态点 tooltip：悬浮说明，列表容纳多个 Provider 同时异常 */
+/* 状态点 tooltip：悬浮层，用面板阴影而非 lane 阴影 */
 .signal__tooltip {
   position: absolute;
   inset-block-start: calc(100% + 4px);
@@ -308,7 +308,7 @@ function retryText(provider: ProviderSnapshot): string | null {
   background: var(--surface-raised);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-small);
-  box-shadow: var(--shadow-lane);
+  box-shadow: var(--shadow-panel);
   font-size: 0.78125rem;
   line-height: 1.5;
 }

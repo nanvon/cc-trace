@@ -15,7 +15,7 @@ import UsageDailyChart from "../components/UsageDailyChart.vue";
 import UsageModelTable from "../components/UsageModelTable.vue";
 import UsageProviderCard from "../components/UsageProviderCard.vue";
 import { navigateMain } from "../features/app/navigation";
-import type { UsageDashboardRange } from "../features/usage/contracts";
+import type { UsageDashboardRange, UsageSource } from "../features/usage/contracts";
 import {
   customUsageRange,
   usageChartRange,
@@ -61,6 +61,43 @@ const chartUsesContextWindow = computed(
 const sourceSummary = computed(() => usage.visibleSourceSummary);
 const allServicesOff = computed(() => usage.visibleSources.length === 0);
 const dashboardReady = computed(() => usage.dashboardLoaded && !usage.dashboardLoading);
+
+interface UsageKpiCard {
+  key: string;
+  label: string;
+  text: string;
+  unit?: string;
+  provider?: UsageSource;
+}
+
+const kpiCards = computed<UsageKpiCard[]>(() => {
+  const ready = dashboardReady.value && !usage.dashboardUnavailable;
+  const noValue = t("main.noValue");
+  const tokens = totalTokens.value;
+  const cost = totalCost.value;
+  const providerCost = (source: UsageSource): string => {
+    const row = sourceSummary.value?.rows.find((candidate) => candidate.key === source);
+    if (!ready || !row || row.entryCount === 0) return noValue;
+    return (
+      formatUsageCost(locale.value, row.cost, row.entryCount, t("main.lessThanCent")) ?? noValue
+    );
+  };
+  return [
+    {
+      key: "total-tokens",
+      label: t("main.totalTokens"),
+      text: tokens?.value ?? noValue,
+      ...(tokens?.unit ? { unit: tokens.unit } : {}),
+    },
+    { key: "total-cost", label: t("main.totalCost"), text: cost ?? noValue },
+    ...providerSources.value.map((source) => ({
+      key: `provider-${source}`,
+      label: t(`provider.${source}`),
+      text: providerCost(source),
+      provider: source,
+    })),
+  ];
+});
 const tokenUnitSeparator = computed(() => (locale.value.toLowerCase().startsWith("zh") ? "" : " "));
 const totalTokens = computed(() => {
   if (
@@ -208,6 +245,23 @@ onMounted(() => {
         </VDatePicker>
       </div>
 
+      <section v-if="!allServicesOff" class="usage-page__kpi" role="group">
+        <div v-for="card in kpiCards" :key="card.key" class="kpi-card">
+          <span class="kpi-card__label">
+            <i
+              v-if="card.provider"
+              class="kpi-card__mark"
+              :data-provider="card.provider"
+              aria-hidden="true"
+            ></i>
+            {{ card.label }}
+          </span>
+          <span class="kpi-card__value numeric">
+            {{ card.text }}<small v-if="card.unit">{{ tokenUnitSeparator }}{{ card.unit }}</small>
+          </span>
+        </div>
+      </section>
+
       <section
         v-if="allServicesOff"
         class="usage-page__empty"
@@ -224,21 +278,6 @@ onMounted(() => {
       <section class="usage-page__block" aria-labelledby="usage-provider-heading">
         <div class="usage-page__block-head">
           <h2 id="usage-provider-heading">{{ t("main.byProvider") }}</h2>
-          <span v-if="!allServicesOff" class="usage-page__summary numeric">
-            <span
-              >{{ t("main.totalTokens") }}
-              <b :title="totalTokens?.full"
-                >{{ totalTokens?.value ?? t("main.noValue")
-                }}<small v-if="totalTokens?.unit"
-                  >{{ tokenUnitSeparator }}{{ totalTokens.unit }}</small
-                ></b
-              ></span
-            >
-            <span
-              >{{ t("main.totalCost") }}
-              <b class="usage-page__summary-money">{{ totalCost ?? t("main.noValue") }}</b></span
-            >
-          </span>
         </div>
         <div
           class="usage-page__providers"
@@ -311,7 +350,6 @@ onMounted(() => {
   --usage-surface: var(--surface-raised);
   --usage-divider: var(--border-subtle);
   --usage-track: var(--track-background);
-  --usage-card-shadow: var(--shadow-lane);
   /* 断点按内容区而非视口：侧边栏 176px 不参与窄屏判断（ADR-0024 后内容区 = 视口 − 176px） */
   container-type: inline-size;
   min-block-size: 100vh;
@@ -401,7 +439,75 @@ onMounted(() => {
 .usage-page__filters {
   flex-wrap: wrap;
   gap: 0.625rem;
-  margin-block-end: 1.5rem;
+  margin-block-end: 1.25rem;
+}
+
+/* KPI 总览行：数字是整页唯一的大字号，标签退到次文字层级（贴合式层级方向） */
+.usage-page__kpi {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10.5rem, 1fr));
+  gap: 0.75rem;
+  margin-block-end: 1.25rem;
+}
+
+.kpi-card {
+  display: grid;
+  gap: 0.3125rem;
+  min-inline-size: 0;
+  padding: 1rem 1.125rem;
+  background: var(--usage-surface, var(--surface-raised));
+  border: 1px solid var(--border-hairline);
+  border-radius: 0.875rem;
+}
+
+.kpi-card__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-inline-size: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 0.6875rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kpi-card__mark {
+  inline-size: 0.4375rem;
+  block-size: 0.4375rem;
+  flex: 0 0 auto;
+  border-radius: 0.125rem;
+  background: var(--cat-codex);
+}
+
+.kpi-card__mark[data-provider="claude"] {
+  background: var(--cat-claude);
+}
+
+.kpi-card__mark[data-provider="pi"] {
+  background: var(--cat-pi);
+}
+
+.kpi-card__mark[data-provider="opencode"] {
+  background: var(--cat-opencode);
+}
+
+.kpi-card__value {
+  min-inline-size: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 1.375rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kpi-card__value small {
+  margin-inline-start: 0.125rem;
+  font-size: 0.6em;
+  font-weight: 550;
 }
 
 .usage-page__segmented {
@@ -457,35 +563,7 @@ onMounted(() => {
   outline-offset: 2px;
 }
 
-/* 摘要挂「按 Provider」标题行右侧（ADR-0024）：钱为主、Token 为次 */
-.usage-page__summary {
-  order: 1;
-  display: inline-flex;
-  align-items: baseline;
-  gap: 0.875rem;
-  color: var(--text-secondary);
-  font-size: 0.8125rem;
-  font-weight: 520;
-  white-space: nowrap;
-}
-
-.usage-page__summary b {
-  margin-inline-start: 0.3125rem;
-  color: var(--text-primary);
-  font-size: 0.9375rem;
-  font-weight: 700;
-}
-
-.usage-page__summary b small {
-  margin-inline-start: 0.0625rem;
-  font-size: 0.6em;
-  font-weight: 550;
-}
-
-.usage-page__summary-money {
-  font-size: 0.9375rem;
-  font-weight: 700;
-}
+/* 摘要信息已上移到 KPI 总览行，标题行只留标题 */
 
 .usage-page__providers {
   display: grid;
@@ -499,7 +577,7 @@ onMounted(() => {
 }
 
 .usage-page__block {
-  margin-block-end: 1.75rem;
+  margin-block-end: 1.25rem;
 }
 
 .usage-page__block--last {
@@ -513,20 +591,11 @@ onMounted(() => {
   margin-block-end: 0.75rem;
 }
 
-.usage-page__block-head:not(.usage-page__block-head--with-legend)::after {
-  block-size: 1px;
-  flex: 1 1 auto;
-  margin-inline-start: 0.25rem;
-  background: var(--usage-divider);
-  content: "";
-}
-
 .usage-page__block-head h2 {
   margin: 0;
   color: var(--text-secondary);
-  font-size: 0.78125rem;
-  font-weight: 700;
-  letter-spacing: 0.04em;
+  font-size: 0.8125rem;
+  font-weight: 600;
 }
 
 .usage-page__legend {
@@ -534,7 +603,7 @@ onMounted(() => {
   align-items: center;
   gap: 0.875rem;
   color: var(--text-secondary);
-  font-size: 0.71875rem;
+  font-size: 0.6875rem;
 }
 
 .usage-page__chart-meta {
@@ -546,7 +615,7 @@ onMounted(() => {
 
 .usage-page__chart-note {
   color: var(--text-secondary);
-  font-size: 0.71875rem;
+  font-size: 0.6875rem;
   white-space: nowrap;
 }
 
@@ -592,10 +661,6 @@ onMounted(() => {
     align-items: flex-end;
     flex-direction: column;
     gap: 0.25rem;
-  }
-
-  .usage-page__summary {
-    display: none;
   }
 
   .usage-page__providers {

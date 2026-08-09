@@ -152,12 +152,12 @@ const sources = computed(() => usage.sourceFilterOptions);
 
 .sb-item:hover {
   color: var(--text-primary);
-  background: color-mix(in srgb, var(--text-primary) 7%, transparent);
+  background: var(--action-soft);
 }
 
 .sb-item.on {
-  color: var(--action-on-soft);
-  background: var(--action-soft);
+  color: var(--action-on-primary);
+  background: var(--action-primary);
   font-weight: 700;
 }
 

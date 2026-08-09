@@ -376,7 +376,7 @@ function secondaryValueA11y(window: QuotaWindow): string {
 </template>
 
 <style scoped>
-/* 层级靠阴影和圆角表达，不用左侧色条 */
+/* 层级靠描边勾勒与文字层级表达，不用阴影浮起 */
 .lane {
   display: grid;
   gap: var(--space-3);
@@ -384,9 +384,8 @@ function secondaryValueA11y(window: QuotaWindow): string {
   min-inline-size: 0;
   padding: var(--space-3) 0.8125rem;
   background: var(--surface-raised);
-  border: 1px solid var(--border-subtle);
+  border: 1px solid var(--border-hairline);
   border-radius: var(--radius-medium);
-  box-shadow: var(--shadow-lane);
 }
 
 .lane--full {

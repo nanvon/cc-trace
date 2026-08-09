@@ -239,10 +239,9 @@ function totalModelCount(): number {
 .usage-table-wrap {
   overflow: hidden;
   padding: 0.375rem 0.375rem 0.25rem;
-  border: 1px solid color-mix(in srgb, var(--border-subtle) 80%, transparent);
+  border: 1px solid var(--border-hairline);
   border-radius: 0.875rem;
   background: var(--usage-surface, var(--surface-raised));
-  box-shadow: var(--usage-card-shadow, var(--shadow-lane));
 }
 
 .usage-table-scroll {
@@ -269,8 +268,8 @@ function totalModelCount(): number {
 
 .usage-table thead th {
   color: var(--text-secondary);
-  font-size: 0.71875rem;
-  font-weight: 620;
+  font-size: 0.6875rem;
+  font-weight: 600;
   letter-spacing: 0.02em;
   border-block-end-color: var(--border-subtle);
 }
@@ -283,7 +282,7 @@ function totalModelCount(): number {
 
 .usage-table tbody td:first-child,
 .usage-table tfoot td:first-child {
-  font-weight: 570;
+  font-weight: 600;
 }
 
 .usage-table__sort {

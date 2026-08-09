@@ -467,9 +467,8 @@ h1[tabindex="-1"]:focus {
 .sw-card {
   padding: 0.25rem 0;
   background: var(--surface-raised);
-  border: 1px solid color-mix(in srgb, var(--border-subtle) 80%, transparent);
+  border: 1px solid var(--border-hairline);
   border-radius: 0.875rem;
-  box-shadow: var(--shadow-lane);
 }
 
 .sw-row {
