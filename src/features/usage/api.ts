@@ -7,6 +7,7 @@ import type {
   UsageConversation,
   UsageConversationBreakdown,
   UsageConversationPage,
+  UsageConversationProjectOption,
   UsageConversationQuery,
   UsageScanStatus,
   UsageSource,
@@ -36,6 +37,12 @@ export function getQuotaHistory(query: QuotaHistoryQuery): Promise<QuotaHistory>
 
 export function listConversations(query: UsageConversationQuery): Promise<UsageConversationPage> {
   return invoke<UsageConversationPage>("usage_list_conversations", { query });
+}
+
+export function listConversationProjects(
+  query: UsageConversationQuery,
+): Promise<UsageConversationProjectOption[]> {
+  return invoke<UsageConversationProjectOption[]>("usage_list_conversation_projects", { query });
 }
 
 export function getConversation(conversationKey: string): Promise<UsageConversation | null> {

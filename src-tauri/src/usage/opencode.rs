@@ -142,6 +142,8 @@ pub fn scan_opencode(db: &UsageDb, db_path: &Path) -> Result<OpencodeScanOutcome
                     project_hint: project,
                     is_sidechain: false,
                     occurred_at,
+                    source_id: None,
+                    branch: None,
                 });
             }
             _ => {}

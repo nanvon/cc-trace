@@ -368,6 +368,16 @@
       整页唯一大字号）并删标题行摘要与区块标题装饰横线；侧边栏选中态改蓝底白字；紧凑面板
       lane、设置卡、时间线段去阴影统一 hairline；字号 scale 收敛（11.5px 等奇数小数消除）。
       vue-tsc、eslint、prettier 与相关 vitest 通过；浏览器与实机验证待门禁。
+- [x] 按 [ADR-0029](决策/ADR-0029-主窗口与对话页对齐cc-bar的功能与布局.md) 落地主窗口与对话页
+      对齐 cc-bar（2026-08-10）：对话标题两级来源（`session_index.jsonl`／`history.jsonl` 优先，
+      user 行兜底，新增 `title_index.rs`，cursor 扩展 `source_id`／`pending_title`／Codex
+      `project_hint`）；用量页顶栏右上 range 分段＋扫描状态＋手动刷新按钮、KPI 环比 delta
+      （`all`／`custom` 除外）、Token 拆分面板与 Fast 汇总；对话页左列表右详情分栏（删
+      `conversation-detail` 路由）、时间范围与用量页共享、项目筛选菜单（新增
+      `usage_list_conversation_projects`）、行内模型与速度徽标；详情补对话 ID（可复制）与分支；
+      schema 升至 v5（`conversations` 增 `source_id`／`branch`）。Rust 241 项与全量 vitest 108 项
+      通过，vue-tsc／eslint／prettier 通过；浏览器与实机验证待门禁。存量标题修复需设置页
+      「重新计算用量」一次补齐。
 
 ## 14. 完成首次初始化
 

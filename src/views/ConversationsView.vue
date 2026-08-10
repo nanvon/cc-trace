@@ -1,29 +1,30 @@
 <script setup lang="ts">
 /**
- * 主窗口 Conversations 列表视图。
+ * 主窗口 Conversations 分栏视图（对齐 cc-bar F-17 分栏形态）。
  *
- * 标题／项目搜索、Provider 筛选、Recent／Tokens／Cost 排序与分页；对应 cc-bar F-17 的列表侧。
- * 行内展示 Provider、标题、项目、时间、请求数、Token 与费用；点击进入全生命周期详情。
+ * 左侧：标题／项目搜索、项目筛选、Provider 联动、时间范围（与用量页共享）、
+ * Recent／Tokens／Cost 排序与分页；右侧：选中对话的全生命周期详情面板。
  */
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { useRouter } from "vue-router";
 
+import ConversationDetailPane from "../components/ConversationDetailPane.vue";
+import MenuSelect, { type MenuSelectOption } from "../components/MenuSelect.vue";
 import { useSettingsStore } from "../features/settings/store";
 import type {
   UsageConversation,
   UsageConversationPage,
+  UsageConversationProjectOption,
   UsageConversationSort,
 } from "../features/usage/contracts";
 import { USAGE_SOURCES } from "../features/usage/contracts";
-import { listConversations } from "../features/usage/api";
+import { listConversationProjects, listConversations } from "../features/usage/api";
 import { formatUsageCost, presentUsageTokens } from "../features/usage/presentation";
 import { useUsageStore } from "../features/usage/store";
 
 const PAGE_SIZE = 20;
 
 const { t, locale } = useI18n();
-const router = useRouter();
 const settings = useSettingsStore();
 const usage = useUsageStore();
 
@@ -34,12 +35,29 @@ const search = ref("");
 const sort = ref<UsageConversationSort>("recent");
 const offset = ref(0);
 const pendingSearch = ref("");
+const selectedKey = ref<string | null>(null);
+const projects = ref<UsageConversationProjectOption[]>([]);
+const projectFilter = ref<string | null>(null);
 
 const SORT_OPTIONS: Array<{ value: UsageConversationSort; label: string }> = [
   { value: "recent", label: "conversations.sort.recent" },
   { value: "tokens", label: "conversations.sort.tokens" },
   { value: "cost", label: "conversations.sort.cost" },
 ];
+
+const sortOptions = computed<MenuSelectOption<UsageConversationSort>[]>(() =>
+  SORT_OPTIONS.map((option) => ({ value: option.value, label: t(option.label) })),
+);
+
+/** 项目菜单：首项「全部项目」，其余带对话计数（对齐 cc-bar menuLabel）。 */
+const projectOptions = computed<MenuSelectOption<string>[]>(() => [
+  { value: "", label: t("conversations.projectFilter") },
+  ...projects.value.map((option) => ({
+    value: option.name,
+    label: option.name,
+    count: option.conversationCount,
+  })),
+]);
 
 const visibleSources = computed(() => {
   const visibility = settings.settings?.usageServiceVisibility;
@@ -53,31 +71,62 @@ const hasNext = computed(() => (offset.value + 1) * PAGE_SIZE < total.value);
 const hasPrevious = computed(() => offset.value > 0);
 let loadRequest = 0;
 
+/** 与用量页共享的全局时间范围（ADR-0024 数据源过滤同理）。 */
+function conversationFilter() {
+  const range = usage.dashboardRange;
+  return {
+    from: range.preset === "all" ? null : range.from,
+    to: range.preset === "all" ? null : range.to,
+    source: usage.sourceFilter === "all" ? null : usage.sourceFilter,
+    model: null,
+    speed: null,
+  };
+}
+function queryArgs() {
+  const sources =
+    usage.sourceFilter === "all" && visibleSources.value.length > 0 ? visibleSources.value : null;
+  return {
+    filter: conversationFilter(),
+    search: pendingSearch.value || null,
+    project: projectFilter.value === "" ? null : projectFilter.value,
+    sort: sort.value,
+    sources,
+    limit: null,
+    offset: null,
+  };
+}
+async function loadProjects(): Promise<void> {
+  try {
+    const options = await listConversationProjects(queryArgs());
+    projects.value = options;
+    if (projectFilter.value && !options.some((option) => option.name === projectFilter.value)) {
+      projectFilter.value = null;
+    }
+  } catch {
+    // 项目菜单失败只降级为「全部项目」，不阻断列表。
+    projects.value = [];
+    projectFilter.value = null;
+  }
+}
+
 async function load(): Promise<void> {
   const request = ++loadRequest;
   loading.value = true;
   unavailable.value = false;
   try {
     const result = await listConversations({
-      filter: {
-        from: null,
-        to: null,
-        source: usage.sourceFilter === "all" ? null : usage.sourceFilter,
-        model: null,
-        speed: null,
-      },
-      search: pendingSearch.value || null,
-      project: null,
-      sort: sort.value,
-      sources:
-        usage.sourceFilter === "all" && visibleSources.value.length > 0
-          ? visibleSources.value
-          : null,
+      ...queryArgs(),
       limit: PAGE_SIZE,
       offset: offset.value,
     });
     if (request === loadRequest) {
       page.value = result;
+      if (
+        selectedKey.value &&
+        !result.items.some((item) => item.conversationKey === selectedKey.value)
+      ) {
+        selectedKey.value = null;
+      }
     }
   } catch {
     if (request === loadRequest) {
@@ -90,17 +139,30 @@ async function load(): Promise<void> {
   }
 }
 
-function submitSearch(): void {
-  pendingSearch.value = search.value.trim();
+function reload(): void {
   offset.value = 0;
   void load();
+  void loadProjects();
 }
 
-function changeSort(event: Event): void {
-  sort.value = (event.target as HTMLSelectElement).value as UsageConversationSort;
-  offset.value = 0;
-  void load();
-}
+let searchTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** 即时搜索（对齐 cc-bar）：输入防抖后即过滤，无提交按钮。 */
+watch(search, (value) => {
+  if (searchTimer) clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    pendingSearch.value = value.trim();
+    reload();
+  }, 300);
+});
+
+watch(projectFilter, () => {
+  reload();
+});
+
+watch(sort, () => {
+  reload();
+});
 
 function goPrevious(): void {
   if (!hasPrevious.value) return;
@@ -114,8 +176,8 @@ function goNext(): void {
   void load();
 }
 
-function openDetail(conversation: UsageConversation): void {
-  void router.push({ name: "conversation-detail", params: { key: conversation.conversationKey } });
+function selectConversation(conversation: UsageConversation): void {
+  selectedKey.value = conversation.conversationKey;
 }
 
 function formatTime(value: string): string {
@@ -143,6 +205,13 @@ function costOf(conversation: UsageConversation): string {
   );
 }
 
+/** 速度徽标：Fast 专用、混合、其余不显示（对齐 cc-bar UsageSpeedBadge）。 */
+function speedBadge(conversation: UsageConversation): "fast" | "mixed" | null {
+  const fast = conversation.fast.rawTokens;
+  if (fast <= 0) return null;
+  return fast < conversation.tokens.totalTokens ? "mixed" : "fast";
+}
+
 function pageLabel(): string {
   if (total.value === 0) return "";
   const first = offset.value + 1;
@@ -153,6 +222,14 @@ function pageLabel(): string {
 onMounted(() => {
   if (visibleSources.value.length > 0) {
     void load();
+    void loadProjects();
+  }
+});
+
+onBeforeUnmount(() => {
+  if (searchTimer) {
+    clearTimeout(searchTimer);
+    searchTimer = null;
   }
 });
 
@@ -162,6 +239,17 @@ watch(
   () => {
     offset.value = 0;
     void load();
+    void loadProjects();
+  },
+);
+
+// 与用量页共享时间范围：范围变化时列表与项目菜单跟随刷新。
+watch(
+  () => usage.dashboardRange,
+  () => {
+    offset.value = 0;
+    void load();
+    void loadProjects();
   },
 );
 </script>
@@ -173,85 +261,132 @@ watch(
         <h1 id="conversations-title" tabindex="-1">{{ t("conversations.title") }}</h1>
       </header>
 
-      <div class="conversations__filters" role="group" :aria-label="t('conversations.filter')">
-        <form class="conversations__search" @submit.prevent="submitSearch">
-          <input
-            v-model="search"
-            type="search"
-            :placeholder="t('conversations.searchPlaceholder')"
-            :aria-label="t('conversations.searchPlaceholder')"
-            autocomplete="off"
-          />
-          <button type="submit" class="button">{{ t("conversations.search") }}</button>
-        </form>
+      <div class="conversations__split">
+        <section class="conversations__list-col" :aria-label="t('conversations.filter')">
+          <div class="conversations__filters" role="group">
+            <div class="conversations__search">
+              <svg class="conversations__search-icon" viewBox="0 0 16 16" aria-hidden="true">
+                <circle
+                  cx="7"
+                  cy="7"
+                  r="4.5"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                ></circle>
+                <path
+                  d="M10.5 10.5 14 14"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  stroke-linecap="round"
+                ></path>
+              </svg>
+              <input
+                v-model="search"
+                type="search"
+                :placeholder="t('conversations.searchPlaceholder')"
+                :aria-label="t('conversations.searchPlaceholder')"
+                autocomplete="off"
+              />
+            </div>
 
-        <label class="conversations__select">
-          <span class="visually-hidden">{{ t("conversations.sortLabel") }}</span>
-          <select :value="sort" @change="changeSort">
-            <option v-for="option in SORT_OPTIONS" :key="option.value" :value="option.value">
-              {{ t(option.label) }}
-            </option>
-          </select>
-        </label>
-      </div>
+            <MenuSelect
+              v-model="projectFilter"
+              :options="projectOptions"
+              :label="t('conversations.filterByProject')"
+              :empty-label="t('conversations.projectFilter')"
+            />
 
-      <p v-if="allServicesOff" class="conversations__notice">
-        {{ t("conversations.allServicesOff") }}
-      </p>
-      <p v-else-if="unavailable" class="conversations__notice">
-        {{ t("conversations.unavailable") }}
-      </p>
-      <p v-else-if="loading" class="conversations__notice">{{ t("conversations.loading") }}</p>
-      <p v-else-if="total === 0" class="conversations__notice">{{ t("conversations.empty") }}</p>
-
-      <template v-else-if="page">
-        <ul class="conversations__list">
-          <li v-for="conversation in page.items" :key="conversation.conversationKey">
-            <button
-              type="button"
-              class="conversations__row"
-              :data-provider="conversation.source"
-              @click="openDetail(conversation)"
-            >
-              <span class="conversations__dot" aria-hidden="true"></span>
-              <span class="conversations__main">
-                <strong class="conversations__title">
-                  {{ conversation.title ?? t("conversations.untitled") }}
-                </strong>
-                <small class="conversations__meta">
-                  <span v-if="conversation.projectHint">{{ conversation.projectHint }}</span>
-                  <span v-else-if="conversation.isSidechain">{{
-                    t("conversations.sidechain")
-                  }}</span>
-                  <span>{{ formatTime(conversation.lastAt) }}</span>
-                </small>
-              </span>
-              <span class="conversations__stats">
-                <span class="numeric">{{ conversation.entryCount }}</span>
-                <span class="numeric">{{ tokensOf(conversation) }}</span>
-                <strong class="numeric">{{ costOf(conversation) }}</strong>
-              </span>
-            </button>
-          </li>
-        </ul>
-
-        <footer class="conversations__footer">
-          <span class="conversations__page">{{ pageLabel() }}</span>
-          <div class="conversations__pager">
-            <button
-              type="button"
-              class="button button--quiet"
-              :disabled="!hasPrevious"
-              @click="goPrevious"
-            >
-              {{ t("conversations.previous") }}
-            </button>
-            <button type="button" class="button button--quiet" :disabled="!hasNext" @click="goNext">
-              {{ t("conversations.next") }}
-            </button>
+            <MenuSelect
+              v-model="sort"
+              :options="sortOptions"
+              :label="t('conversations.sortLabel')"
+            />
           </div>
-        </footer>
-      </template>
+
+          <p v-if="allServicesOff" class="conversations__notice">
+            {{ t("conversations.allServicesOff") }}
+          </p>
+          <p v-else-if="unavailable" class="conversations__notice">
+            {{ t("conversations.unavailable") }}
+          </p>
+          <p v-else-if="loading" class="conversations__notice">{{ t("conversations.loading") }}</p>
+          <p v-else-if="total === 0" class="conversations__notice">
+            {{ t("conversations.empty") }}
+          </p>
+
+          <template v-else-if="page">
+            <ul class="conversations__list">
+              <li v-for="conversation in page.items" :key="conversation.conversationKey">
+                <button
+                  type="button"
+                  class="conversations__row"
+                  :class="{ on: selectedKey === conversation.conversationKey }"
+                  :data-provider="conversation.source"
+                  :aria-current="selectedKey === conversation.conversationKey ? 'true' : undefined"
+                  @click="selectConversation(conversation)"
+                >
+                  <span class="conversations__dot" aria-hidden="true"></span>
+                  <span class="conversations__main">
+                    <strong class="conversations__title">
+                      {{ conversation.title ?? t("conversations.untitled") }}
+                    </strong>
+                    <small class="conversations__meta">
+                      <span v-if="conversation.projectHint">{{ conversation.projectHint }}</span>
+                      <span v-else-if="conversation.isSidechain">{{
+                        t("conversations.sidechain")
+                      }}</span>
+                      <span v-if="conversation.models.length > 0">{{
+                        conversation.models.join(", ")
+                      }}</span>
+                      <span v-if="speedBadge(conversation)" class="conversations__speed">
+                        {{
+                          speedBadge(conversation) === "fast"
+                            ? t("conversations.speedFast")
+                            : t("conversations.speedMixed")
+                        }}
+                      </span>
+                      <span>{{ formatTime(conversation.lastAt) }}</span>
+                    </small>
+                  </span>
+                  <span class="conversations__stats">
+                    <span class="numeric">{{ conversation.entryCount }}</span>
+                    <span class="numeric">{{ tokensOf(conversation) }}</span>
+                    <strong class="numeric">{{ costOf(conversation) }}</strong>
+                  </span>
+                </button>
+              </li>
+            </ul>
+
+            <footer class="conversations__footer">
+              <span class="conversations__page">{{ pageLabel() }}</span>
+              <div class="conversations__pager">
+                <button
+                  type="button"
+                  class="button button--quiet"
+                  :disabled="!hasPrevious"
+                  @click="goPrevious"
+                >
+                  {{ t("conversations.previous") }}
+                </button>
+                <button
+                  type="button"
+                  class="button button--quiet"
+                  :disabled="!hasNext"
+                  @click="goNext"
+                >
+                  {{ t("conversations.next") }}
+                </button>
+              </div>
+            </footer>
+          </template>
+        </section>
+
+        <aside class="conversations__detail-col" :aria-label="t('a11y.conversationDetailRegion')">
+          <ConversationDetailPane :conversation-key="selectedKey" />
+        </aside>
+      </div>
     </div>
   </main>
 </template>
@@ -277,21 +412,42 @@ watch(
   display: flex;
   align-items: baseline;
   gap: var(--space-4);
-  padding-block-end: 0.625rem;
+  padding-block-end: 0.75rem;
   border-block-end: 1px solid var(--usage-divider);
-  margin-block-end: 1rem;
+  margin-block-end: 1.25rem;
 }
 
 .conversations__header h1 {
   margin: 0;
-  font-size: 1.25rem;
-  font-weight: 680;
+  font-size: 1.5rem;
+  font-weight: 700;
   letter-spacing: -0.025em;
   line-height: 1.15;
 }
 
 .conversations__header h1[tabindex="-1"]:focus {
   outline: none;
+}
+
+.conversations__split {
+  display: grid;
+  grid-template-columns: minmax(24rem, 5fr) minmax(20rem, 4fr);
+  gap: 1.25rem;
+  align-items: start;
+}
+
+.conversations__list-col {
+  min-inline-size: 0;
+}
+
+.conversations__detail-col {
+  min-inline-size: 0;
+  position: sticky;
+  top: 0;
+  max-block-size: calc(100vh - 6.5rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-inline-start: 1px solid var(--usage-divider);
 }
 
 .conversations__filters {
@@ -302,30 +458,35 @@ watch(
   margin-block-end: 0.875rem;
 }
 
+/* 搜索框：放大镜图标内嵌，控件与 MenuSelect 同高、同边框家族（对齐用量页 date-input） */
 .conversations__search {
-  display: flex;
-  gap: 0.375rem;
+  position: relative;
+}
+
+.conversations__search-icon {
+  position: absolute;
+  inset-inline-start: 0.625rem;
+  inset-block-start: 50%;
+  inline-size: 0.875rem;
+  block-size: 0.875rem;
+  color: var(--text-secondary);
+  transform: translateY(-50%);
+  pointer-events: none;
 }
 
 .conversations__search input {
-  inline-size: 16rem;
+  inline-size: 14rem;
   min-block-size: 2.25rem;
-  padding: 0 0.625rem;
+  padding: 0 0.625rem 0 2rem;
   border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-control);
+  border-radius: 0.5625rem;
   color: var(--text-primary);
   background: var(--usage-surface);
   font-size: 0.75rem;
 }
 
-.conversations__select select {
-  min-block-size: 2.25rem;
-  padding: 0 0.5rem;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-control);
-  color: var(--text-primary);
-  background: var(--usage-surface);
-  font-size: 0.75rem;
+.conversations__search input::-webkit-search-cancel-button {
+  display: none;
 }
 
 .conversations__notice {
@@ -348,7 +509,7 @@ watch(
   inline-size: 100%;
   min-block-size: 3.5rem;
   padding: 0.5rem 0.875rem;
-  border: 1px solid var(--border-subtle);
+  border: 1px solid var(--border-hairline);
   border-block-start-width: 0;
   color: inherit;
   background: var(--usage-surface);
@@ -358,21 +519,24 @@ watch(
 
 .conversations__list li:first-child .conversations__row {
   border-block-start-width: 1px;
-  border-start-start-radius: 0.625rem;
-  border-start-end-radius: 0.625rem;
+  border-start-start-radius: 0.75rem;
+  border-start-end-radius: 0.75rem;
 }
 
 .conversations__list li:last-child .conversations__row {
-  border-end-start-radius: 0.625rem;
-  border-end-end-radius: 0.625rem;
+  border-end-start-radius: 0.75rem;
+  border-end-end-radius: 0.75rem;
 }
 
+/* hover 用中性浅底加深（去掉品牌色混合，与用量页 hover 同语法） */
 .conversations__row:hover {
-  background: color-mix(in srgb, var(--usage-surface) 94%, var(--cat-codex) 6%);
+  background: color-mix(in srgb, var(--text-primary) 5%, transparent);
 }
 
-.conversations__row[data-provider="claude"]:hover {
-  background: color-mix(in srgb, var(--usage-surface) 94%, var(--cat-claude) 6%);
+/* 选中：中性浅底 + 左侧 3px 主色竖条 + 描边保持，与侧边栏「蓝底白字」形成两级选中 */
+.conversations__row.on {
+  background: var(--action-soft);
+  box-shadow: inset 3px 0 0 0 var(--action-primary);
 }
 
 .conversations__dot {
@@ -387,6 +551,14 @@ watch(
   background: var(--cat-claude);
 }
 
+.conversations__row[data-provider="pi"] .conversations__dot {
+  background: var(--cat-pi);
+}
+
+.conversations__row[data-provider="opencode"] .conversations__dot {
+  background: var(--cat-opencode);
+}
+
 .conversations__main {
   display: flex;
   flex-direction: column;
@@ -397,17 +569,29 @@ watch(
 
 .conversations__title {
   overflow: hidden;
-  font-size: 0.78125rem;
-  font-weight: 620;
+  font-size: 0.8125rem;
+  font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .conversations__meta {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 0.625rem;
   color: var(--text-secondary);
-  font-size: 0.625rem;
+  font-size: 0.6875rem;
+}
+
+/* 速度徽标：中性胶囊（对齐 cc-bar UsageSpeedBadge），不占交互色 */
+.conversations__speed {
+  padding: 0.0625rem 0.375rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-secondary) 12%, transparent);
+  color: var(--text-secondary);
+  font-size: 0.65625rem;
+  font-weight: 600;
 }
 
 .conversations__stats {
@@ -416,7 +600,7 @@ watch(
   gap: 1rem;
   flex: 0 0 auto;
   color: var(--text-secondary);
-  font-size: 0.65625rem;
+  font-size: 0.6875rem;
   font-variant-numeric: tabular-nums;
 }
 
@@ -440,6 +624,19 @@ watch(
 .conversations__pager {
   display: flex;
   gap: 0.375rem;
+}
+
+@container (max-width: 860px) {
+  .conversations__split {
+    grid-template-columns: 1fr;
+  }
+
+  .conversations__detail-col {
+    position: static;
+    max-block-size: none;
+    border-inline-start: 0;
+    border-block-start: 1px solid var(--usage-divider);
+  }
 }
 
 @container (max-width: 640px) {

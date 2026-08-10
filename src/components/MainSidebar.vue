@@ -36,7 +36,6 @@ const views = computed(() => [
 
 const currentView = computed(() => {
   if (route.name === "settings") return "settings";
-  if (route.name === "conversation-detail") return "conversations";
   return views.value.find((view) => view.name === route.name)?.key ?? "usage";
 });
 
@@ -148,11 +147,15 @@ const sources = computed(() => usage.sourceFilterOptions);
   font-weight: 600;
   text-align: start;
   white-space: nowrap;
+  /* WKWebView 实机验证：仅靠全局 button 规则或本体声明，光标会不生效/闪烁；
+     必须在 :hover 规则里也显式声明 cursor: pointer 才稳定 */
+  cursor: pointer;
 }
 
 .sb-item:hover {
   color: var(--text-primary);
   background: var(--action-soft);
+  cursor: pointer;
 }
 
 .sb-item.on {
@@ -192,14 +195,5 @@ const sources = computed(() => usage.sourceFilterOptions);
 
 .sb-item--settings {
   font-weight: 600;
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .sb-item {
-    transition:
-      background-color var(--motion-fast) var(--ease-out),
-      color var(--motion-fast) var(--ease-out),
-      box-shadow var(--motion-fast) var(--ease-out);
-  }
 }
 </style>

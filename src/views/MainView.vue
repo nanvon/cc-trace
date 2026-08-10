@@ -3,11 +3,12 @@
  * 主窗口本地用量页。
  *
  * 页面只读取 Rust 本地用量摘要，不读取额度，也不把 Conversations、设置等后续能力
- * 提前塞进主窗口。布局基线来自 `prototypes/usage-page/index.html` 与 ADR-0020。
+ * 提前塞进主窗口。布局基线来自 `prototypes/usage-page/index.html` 与 ADR-0020；
+ * 顶栏（右上 range 分段＋扫描状态＋刷新）、KPI delta、Token 拆分与 Fast 汇总对齐 cc-bar。
  */
 import { DatePicker as VDatePicker } from "v-calendar";
 import "v-calendar/style.css";
-import { computed, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
 
@@ -66,12 +67,20 @@ const providerTotalTokens = computed(() => {
   return sourceSummary.value.tokens.totalTokens;
 });
 
+/** 前区间等长对比；无 previous（all/custom）或上一期无数据时返回 null。 */
+function deltaPercent(current: number, previous: number | null | undefined): number | null {
+  if (previous === null || previous === undefined || previous <= 0) return null;
+  if (current === previous) return 0;
+  return ((current - previous) / previous) * 100;
+}
+
 interface UsageKpiCard {
   key: string;
   label: string;
   text: string;
   unit?: string;
   provider?: UsageSource;
+  delta?: number | null;
 }
 
 const kpiCards = computed<UsageKpiCard[]>(() => {
@@ -79,6 +88,7 @@ const kpiCards = computed<UsageKpiCard[]>(() => {
   const noValue = t("main.noValue");
   const tokens = totalTokens.value;
   const cost = totalCost.value;
+  const previousSummary = usage.dashboardPrevious;
   const providerCost = (source: UsageSource): string => {
     const row = sourceSummary.value?.rows.find((candidate) => candidate.key === source);
     if (!ready || !row || row.entryCount === 0) return noValue;
@@ -86,19 +96,41 @@ const kpiCards = computed<UsageKpiCard[]>(() => {
       formatUsageCost(locale.value, row.cost, row.entryCount, t("main.lessThanCent")) ?? noValue
     );
   };
+  const previousProviderCost = (source: UsageSource): number | null => {
+    const row = previousSummary?.rows.find((candidate) => candidate.key === source);
+    if (!row || row.entryCount === 0) return null;
+    return row.cost.apiEquivalentCostNanos;
+  };
   return [
     {
       key: "total-tokens",
       label: t("main.totalTokens"),
       text: tokens?.value ?? noValue,
       ...(tokens?.unit ? { unit: tokens.unit } : {}),
+      delta: deltaPercent(
+        sourceSummary.value?.tokens.totalTokens ?? 0,
+        previousSummary?.tokens.totalTokens,
+      ),
     },
-    { key: "total-cost", label: t("main.totalCost"), text: cost ?? noValue },
+    {
+      key: "total-cost",
+      label: t("main.totalCost"),
+      text: cost ?? noValue,
+      delta: deltaPercent(
+        sourceSummary.value?.cost.apiEquivalentCostNanos ?? 0,
+        previousSummary?.cost.apiEquivalentCostNanos,
+      ),
+    },
     ...providerSources.value.map((source) => ({
       key: `provider-${source}`,
       label: t(`provider.${source}`),
       text: providerCost(source),
       provider: source,
+      delta: deltaPercent(
+        sourceSummary.value?.rows.find((candidate) => candidate.key === source)?.cost
+          .apiEquivalentCostNanos ?? 0,
+        previousProviderCost(source),
+      ),
     })),
   ];
 });
@@ -124,8 +156,54 @@ const totalCost = computed(() => {
   );
 });
 
+/** Token 拆分面板：堆叠条三段与命中率；数据同 KPI 口径（可见源）。 */
+const breakdown = computed(() => {
+  const summary = sourceSummary.value;
+  const ready = dashboardReady.value && !usage.dashboardUnavailable && !!summary;
+  const present = (value: number) => {
+    if (!ready) return t("main.noValue");
+    const display = presentUsageTokens(locale.value, value);
+    return display.unit ? `${display.value}${display.unit}` : display.value;
+  };
+  const tokens = summary?.tokens;
+  const total = tokens?.totalTokens ?? 0;
+  const input = tokens?.inputTokens ?? 0;
+  const output = tokens?.outputTokens ?? 0;
+  const cacheRead = tokens?.cacheReadInputTokens ?? 0;
+  const hitRate = ready && total > 0 ? Math.round((cacheRead / total) * 100) : null;
+  const fast = summary?.fast;
+  const fastTotal = fast?.rawTokens ?? 0;
+  const fastShare =
+    ready && fastTotal > 0 && total > 0 ? Math.round((fastTotal / total) * 100) : null;
+  const multiplier =
+    fast && fast.minimumMultiplier
+      ? fast.maximumMultiplier && fast.maximumMultiplier !== fast.minimumMultiplier
+        ? `${fast.minimumMultiplier}–${fast.maximumMultiplier}`
+        : fast.minimumMultiplier
+      : null;
+  return {
+    ready: Boolean(ready),
+    total,
+    totalText: present(total),
+    input: present(input),
+    output: present(output),
+    cacheRead: present(cacheRead),
+    hitRate,
+    fastTotal: present(fastTotal),
+    billingEquivalent: fast?.billingEquivalentTokens ?? "0",
+    multiplier,
+    hasFast: ready && fastTotal > 0,
+    fastShare,
+    segments: [
+      { tokens: input, opacity: "0.85" },
+      { tokens: output, opacity: "0.6" },
+      { tokens: cacheRead, opacity: "0.4" },
+    ],
+  };
+});
+
 const scanText = computed(() => {
-  if (usage.scanning) return t("main.loading");
+  if (usage.scanning) return t("main.scanningUsage");
   const finishedAt = usage.status?.finishedAt;
   if (!finishedAt) return t("main.neverScanned");
   return t("main.lastScan", { time: formatDateTime(finishedAt) });
@@ -138,6 +216,26 @@ const liveMessage = computed(() => {
   if (usage.partial) return t("main.partial");
   return "";
 });
+
+let refreshPoll: ReturnType<typeof setInterval> | null = null;
+
+/** 手动刷新：启动增量扫描并轮询，结束后重载当前范围。 */
+async function refreshUsage(): Promise<void> {
+  if (usage.scanning) return;
+  const started = await usage.startScan();
+  if (!started) return;
+  if (refreshPoll) clearInterval(refreshPoll);
+  refreshPoll = setInterval(async () => {
+    const stillScanning = await usage.poll();
+    if (!stillScanning) {
+      if (refreshPoll) {
+        clearInterval(refreshPoll);
+        refreshPoll = null;
+      }
+      await usage.loadDashboard(usage.dashboardRange);
+    }
+  }, 2000);
+}
 
 function formatDateTime(value: string): string {
   return new Intl.DateTimeFormat(locale.value, {
@@ -197,6 +295,13 @@ function openSettings(): void {
 onMounted(() => {
   void usage.loadDashboard(selectedRange.value);
 });
+
+onBeforeUnmount(() => {
+  if (refreshPoll) {
+    clearInterval(refreshPoll);
+    refreshPoll = null;
+  }
+});
 </script>
 
 <template>
@@ -207,24 +312,34 @@ onMounted(() => {
       <header class="usage-page__top">
         <div class="usage-page__heading">
           <h1 id="main-usage-title" tabindex="-1">{{ t("main.title") }}</h1>
+        </div>
+        <div class="usage-page__tools">
+          <div class="usage-page__segmented" role="group" :aria-label="t('main.filter')">
+            <button
+              v-for="preset in presets"
+              :key="preset"
+              type="button"
+              :aria-pressed="currentPreset === preset"
+              :data-selected="currentPreset === preset ? 'true' : undefined"
+              @click="selectPreset(preset)"
+            >
+              {{ t(`main.range.${preset}`) }}
+            </button>
+          </div>
           <span class="usage-page__scan">{{ scanText }}</span>
+          <button
+            type="button"
+            class="usage-page__refresh button button--quiet"
+            :disabled="usage.scanning"
+            @click="refreshUsage"
+          >
+            <span class="usage-page__refresh-icon" aria-hidden="true"></span>
+            {{ usage.scanning ? t("main.scanningUsage") : t("main.refreshUsage") }}
+          </button>
         </div>
       </header>
 
-      <div class="usage-page__filters" role="group" :aria-label="t('main.filter')">
-        <div class="usage-page__segmented" role="group">
-          <button
-            v-for="preset in presets"
-            :key="preset"
-            type="button"
-            :aria-pressed="currentPreset === preset"
-            :data-selected="currentPreset === preset ? 'true' : undefined"
-            @click="selectPreset(preset)"
-          >
-            {{ t(`main.range.${preset}`) }}
-          </button>
-        </div>
-
+      <div v-if="currentPreset === 'custom'" class="usage-page__custom-row">
         <VDatePicker
           v-model.range="customDates"
           :first-day-of-week="2"
@@ -262,6 +377,13 @@ onMounted(() => {
           </span>
           <span class="kpi-card__value numeric">
             {{ card.text }}<small v-if="card.unit">{{ tokenUnitSeparator }}{{ card.unit }}</small>
+            <small
+              v-if="card.delta !== null && card.delta !== undefined"
+              class="kpi-card__delta"
+              :data-up="card.delta >= 0 ? 'true' : undefined"
+              aria-hidden="true"
+              >{{ card.delta > 0 ? "↑" : "↓" }} {{ Math.abs(card.delta).toFixed(1) }}%</small
+            >
           </span>
         </div>
       </section>
@@ -277,6 +399,71 @@ onMounted(() => {
         <button type="button" class="button button--quiet" @click="openSettings">
           {{ t("main.openSettings") }}
         </button>
+      </section>
+
+      <section
+        v-if="!allServicesOff"
+        class="usage-page__block"
+        aria-labelledby="usage-breakdown-heading"
+      >
+        <div class="usage-page__block-head">
+          <h2 id="usage-breakdown-heading">{{ t("main.tokenBreakdownPanel") }}</h2>
+        </div>
+        <div class="usage-page__breakdown">
+          <div class="breakdown-hero">
+            <span class="breakdown-hero__label">{{ t("main.totalTokens") }}</span>
+            <span class="breakdown-hero__value numeric">{{
+              breakdown.ready ? breakdown.totalText : t("main.noValue")
+            }}</span>
+          </div>
+          <div class="breakdown-bar" role="img" :aria-label="t('main.tokenBreakdownPanel')">
+            <i
+              v-for="segment in breakdown.segments"
+              :key="segment.opacity"
+              :style="{
+                inlineSize:
+                  breakdown.total > 0 ? `${(segment.tokens / breakdown.total) * 100}%` : '0%',
+                opacity: segment.opacity,
+              }"
+            ></i>
+          </div>
+          <dl class="breakdown-stats">
+            <div>
+              <dt>{{ t("main.input") }}</dt>
+              <dd class="numeric">{{ breakdown.input }}</dd>
+            </div>
+            <div>
+              <dt>{{ t("main.output") }}</dt>
+              <dd class="numeric">{{ breakdown.output }}</dd>
+            </div>
+            <div>
+              <dt>{{ t("main.cacheHit") }}</dt>
+              <dd class="numeric">{{ breakdown.cacheRead }}</dd>
+            </div>
+            <div>
+              <dt>{{ t("main.cacheHitRate") }}</dt>
+              <dd class="numeric">{{ breakdown.hitRate ?? t("main.noValue") }}</dd>
+            </div>
+          </dl>
+          <dl v-if="breakdown.hasFast" class="breakdown-fast">
+            <div>
+              <dt>{{ t("main.fastTokens") }}</dt>
+              <dd class="numeric">{{ breakdown.fastTotal }}</dd>
+            </div>
+            <div>
+              <dt>{{ t("main.billingEquivalentTokens") }}</dt>
+              <dd class="numeric">{{ breakdown.billingEquivalent }}</dd>
+            </div>
+            <div v-if="breakdown.multiplier">
+              <dt>{{ t("main.fastMultiplier") }}</dt>
+              <dd class="numeric">{{ breakdown.multiplier }}</dd>
+            </div>
+            <div v-if="breakdown.fastShare !== null">
+              <dt>{{ t("main.fastShare") }}</dt>
+              <dd class="numeric">{{ breakdown.fastShare }}%</dd>
+            </div>
+          </dl>
+        </div>
       </section>
 
       <section class="usage-page__block" aria-labelledby="usage-provider-heading">
@@ -370,16 +557,18 @@ onMounted(() => {
 
 .usage-page__top,
 .usage-page__heading,
-.usage-page__filters,
+.usage-page__tools,
+.usage-page__custom-row,
 .usage-page__block-head {
   display: flex;
   align-items: center;
 }
 
 .usage-page__top {
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   gap: var(--space-4);
+  flex-wrap: wrap;
   padding-block-end: 0.75rem;
   border-block-end: 1px solid var(--usage-divider);
   margin-block-end: 1.25rem;
@@ -404,6 +593,13 @@ onMounted(() => {
   outline: none;
 }
 
+.usage-page__tools {
+  gap: 0.625rem;
+  min-inline-size: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .usage-page__scan {
   display: inline-flex;
   align-items: center;
@@ -423,6 +619,35 @@ onMounted(() => {
   opacity: 0.5;
 }
 
+.usage-page__refresh {
+  min-block-size: 2.25rem;
+  padding-inline: 0.625rem;
+  font-size: 0.75rem;
+}
+
+.usage-page__refresh-icon {
+  inline-size: 0.75rem;
+  block-size: 0.75rem;
+  border: 1.5px solid currentColor;
+  border-block-start-color: transparent;
+  border-radius: 50%;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .usage-page__refresh:not(:disabled) .usage-page__refresh-icon {
+    transition: transform var(--motion-base) var(--ease-out);
+  }
+
+  .usage-page__refresh:not(:disabled):hover .usage-page__refresh-icon {
+    transform: rotate(180deg);
+  }
+}
+
+.usage-page__custom-row {
+  gap: 0.625rem;
+  margin-block-end: 1.25rem;
+}
+
 .usage-page__empty {
   padding: 2.5rem 1rem;
   border: 1px dashed var(--border-subtle);
@@ -439,12 +664,6 @@ onMounted(() => {
 
 .usage-page__empty-hint {
   font-size: 0.6875rem;
-}
-
-.usage-page__filters {
-  flex-wrap: wrap;
-  gap: 0.625rem;
-  margin-block-end: 1.25rem;
 }
 
 /* KPI 总览行：数字是整页唯一的大字号，标签退到次文字层级（贴合式层级方向） */
@@ -515,6 +734,96 @@ onMounted(() => {
   font-weight: 550;
 }
 
+.kpi-card__value small.kpi-card__delta {
+  margin-inline-start: 0.375rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--status-success);
+}
+
+.kpi-card__value small.kpi-card__delta[data-up="true"] {
+  color: var(--status-danger);
+}
+
+/* Token 拆分面板：hero 大数字 + 堆叠条 + 分项 + Fast 汇总 */
+.usage-page__breakdown {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1rem 1.125rem;
+  background: var(--usage-surface, var(--surface-raised));
+  border: 1px solid var(--border-hairline);
+  border-radius: 0.875rem;
+}
+
+.breakdown-hero {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.breakdown-hero__label {
+  color: var(--text-secondary);
+  font-size: 0.6875rem;
+}
+
+.breakdown-hero__value {
+  color: var(--text-primary);
+  font-size: 1.375rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+
+.breakdown-bar {
+  display: flex;
+  block-size: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-primary) 18%, transparent);
+}
+
+.breakdown-bar > i {
+  display: block;
+  block-size: 100%;
+  background: var(--text-primary);
+}
+
+.breakdown-stats,
+.breakdown-fast {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
+  gap: 0.625rem 1.25rem;
+  margin: 0;
+}
+
+.breakdown-stats div,
+.breakdown-fast div {
+  min-inline-size: 0;
+}
+
+.breakdown-stats dt,
+.breakdown-fast dt {
+  color: var(--text-secondary);
+  font-size: 0.6875rem;
+}
+
+.breakdown-stats dd,
+.breakdown-fast dd {
+  margin: 0.125rem 0 0;
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.breakdown-fast {
+  padding-block-start: 0.75rem;
+  border-block-start: 1px solid var(--usage-divider);
+}
+
+.breakdown-fast dt {
+  color: var(--text-tertiary);
+}
+
 .usage-page__segmented {
   display: inline-flex;
   max-inline-size: 100%;
@@ -567,8 +876,6 @@ onMounted(() => {
   outline: 2px solid var(--action-primary);
   outline-offset: 2px;
 }
-
-/* 摘要信息已上移到 KPI 总览行，标题行只留标题 */
 
 .usage-page__providers {
   display: grid;

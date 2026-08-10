@@ -8,6 +8,7 @@ mod opencode;
 mod parser;
 pub mod pricing;
 mod pricing_remote;
+mod title_index;
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -23,9 +24,9 @@ use sha2::{Digest, Sha256};
 
 use crate::contracts::{
     PricingCatalogRefreshStatus, ProviderId, QuotaHistory, QuotaHistoryQuery, QuotaSnapshot,
-    UsageConversation, UsageConversationBreakdown, UsageConversationPage, UsageConversationQuery,
-    UsageFilter, UsageRepriceResult, UsageScanState, UsageScanStatus, UsageSource, UsageSummary,
-    UsageSummaryQuery,
+    UsageConversation, UsageConversationBreakdown, UsageConversationPage,
+    UsageConversationProjectOption, UsageConversationQuery, UsageFilter, UsageRepriceResult,
+    UsageScanState, UsageScanStatus, UsageSource, UsageSummary, UsageSummaryQuery,
 };
 use crate::storage::{UsageDb, UsageDbError};
 
@@ -34,6 +35,7 @@ use parser::{parse_claude_line, parse_codex_line, parse_pi_line};
 use pricing::{
     PricingCatalog, PricingCatalogStore, PricingRefreshMode, PricingRefreshOutcome, PricingUsageKey,
 };
+use title_index::TitleIndex;
 
 const MAX_LINE_BYTES: usize = 16 * 1024 * 1024;
 const BATCH_LINES: u64 = 2_000;
@@ -185,6 +187,19 @@ impl UsageService {
             .map_err(Into::into)
     }
 
+    pub fn conversation_projects(
+        &self,
+        mut query: UsageConversationQuery,
+    ) -> Result<Vec<UsageConversationProjectOption>, UsageError> {
+        normalize_filter(&mut query.filter)?;
+        if let Some(sources) = &query.sources
+            && sources.len() > 8
+        {
+            return Err(UsageError::InvalidQuery);
+        }
+        self.db.conversation_projects(&query).map_err(Into::into)
+    }
+
     pub fn quota_history(&self, mut query: QuotaHistoryQuery) -> Result<QuotaHistory, UsageError> {
         query.from = normalize_time(query.from.as_deref())?;
         query.to = normalize_time(query.to.as_deref())?;
@@ -300,6 +315,10 @@ impl UsageService {
             .pricing
             .load_for_known_usage(&known_usage)
             .map_err(|_| UsageError::Unavailable)?;
+        let titles = TitleIndex::load(
+            roots.codex_title_index.as_deref(),
+            roots.claude_history.as_deref(),
+        );
         let discovery = discover_files(&roots);
         let previous_states = self.db.scan_file_states()?;
         {
@@ -321,7 +340,7 @@ impl UsageService {
             }
 
             let previous = previous_states.get(&file.file_key).cloned();
-            if self.scan_file(&file, &catalog, previous).is_err() {
+            if self.scan_file(&file, &catalog, &titles, previous).is_err() {
                 let mut status = self.status.lock().expect("usage scan status");
                 status.failed_files = status.failed_files.saturating_add(1);
                 status.partial_failure = true;
@@ -425,6 +444,7 @@ impl UsageService {
         &self,
         file: &SourceFile,
         catalog: &PricingCatalog,
+        titles: &TitleIndex,
         previous: Option<model::ScanFileState>,
     ) -> Result<(), UsageError> {
         let metadata = fs::metadata(&file.path).map_err(|_| UsageError::Unavailable)?;
@@ -561,8 +581,12 @@ impl UsageService {
                 batch.invalid_lines += 1;
             } else {
                 let parsed = match file.source {
-                    UsageSource::Codex => parse_codex_line(&line, &mut codex_cursor, catalog),
-                    UsageSource::Claude => parse_claude_line(&line, &mut claude_cursor, catalog),
+                    UsageSource::Codex => {
+                        parse_codex_line(&line, &mut codex_cursor, catalog, &titles.codex)
+                    }
+                    UsageSource::Claude => {
+                        parse_claude_line(&line, &mut claude_cursor, catalog, &titles.claude)
+                    }
                     UsageSource::Pi => parse_pi_line(&line, &mut pi_cursor, &pi_filename_key),
                     // OpenCode 走库级扫描，不经过文件解析。
                     UsageSource::Opencode => ParsedLine::Ignored,
@@ -674,6 +698,8 @@ struct ScanRoots {
     claude_projects: Option<PathBuf>,
     pi_sessions: Option<PathBuf>,
     opencode_db: Option<PathBuf>,
+    codex_title_index: Option<PathBuf>,
+    claude_history: Option<PathBuf>,
 }
 
 impl ScanRoots {
@@ -691,6 +717,10 @@ impl ScanRoots {
             opencode_db: home
                 .as_ref()
                 .map(|path| path.join(".local/share/opencode/opencode.db")),
+            codex_title_index: home
+                .as_ref()
+                .map(|path| path.join(".codex/session_index.jsonl")),
+            claude_history: home.as_ref().map(|path| path.join(".claude/history.jsonl")),
         }
     }
 }
@@ -979,7 +1009,11 @@ mod tests {
     use super::*;
 
     const CODEX_FIXTURE: &[u8] = include_bytes!("../../../fixtures/usage/codex/session.jsonl");
+    const CODEX_INDEX_FIXTURE: &[u8] =
+        include_bytes!("../../../fixtures/usage/codex/session_index.jsonl");
     const CLAUDE_FIXTURE: &[u8] = include_bytes!("../../../fixtures/usage/claude/project.jsonl");
+    const CLAUDE_HISTORY_FIXTURE: &[u8] =
+        include_bytes!("../../../fixtures/usage/claude/history.jsonl");
     const PI_FIXTURE: &[u8] = include_bytes!("../../../fixtures/usage/pi/session.jsonl");
 
     fn fixture_roots(base: &Path) -> ScanRoots {
@@ -989,6 +1023,8 @@ mod tests {
             claude_projects: Some(base.join("claude/projects")),
             pi_sessions: Some(base.join("pi/sessions")),
             opencode_db: Some(base.join("opencode/opencode.db")),
+            codex_title_index: Some(base.join("codex/session_index.jsonl")),
+            claude_history: Some(base.join("claude/history.jsonl")),
         }
     }
 
@@ -1001,6 +1037,16 @@ mod tests {
         fs::write(codex.join("fixture-codex-session.jsonl"), CODEX_FIXTURE).expect("codex fixture");
         fs::write(claude.join("fixture-claude-session.jsonl"), CLAUDE_FIXTURE)
             .expect("claude fixture");
+        fs::write(
+            roots.codex_title_index.as_ref().expect("codex index"),
+            CODEX_INDEX_FIXTURE,
+        )
+        .expect("codex index fixture");
+        fs::write(
+            roots.claude_history.as_ref().expect("claude history"),
+            CLAUDE_HISTORY_FIXTURE,
+        )
+        .expect("claude history fixture");
     }
 
     fn seed_pi_root(base: &Path) {
@@ -1172,6 +1218,62 @@ mod tests {
                 .iter()
                 .all(|item| item.conversation_key.len() == 64)
         );
+        let codex_conversation = page
+            .items
+            .iter()
+            .find(|item| item.source == UsageSource::Codex)
+            .expect("codex conversation");
+        assert_eq!(
+            codex_conversation.title.as_deref(),
+            Some("索引标题：修复登录流程"),
+            "标题索引优先于 user_message 兜底"
+        );
+        assert_eq!(
+            codex_conversation.source_id.as_deref(),
+            Some("fixture-codex-session")
+        );
+        assert_eq!(codex_conversation.branch, None);
+        assert_eq!(
+            codex_conversation.models.as_slice(),
+            ["gpt-5.6-sol"],
+            "会话模型列表去重排序"
+        );
+        let claude_conversation = page
+            .items
+            .iter()
+            .find(|item| item.source == UsageSource::Claude)
+            .expect("claude conversation");
+        assert_eq!(
+            claude_conversation.title.as_deref(),
+            Some("索引标题：重构主窗口布局"),
+            "history.jsonl 的 display 优先于 user 行兜底"
+        );
+        assert_eq!(
+            claude_conversation.source_id.as_deref(),
+            Some("fixture-claude-session")
+        );
+        assert_eq!(
+            claude_conversation.branch.as_deref(),
+            Some("fix/login-flow")
+        );
+        assert_eq!(
+            claude_conversation.models.as_slice(),
+            ["claude-opus-5"],
+            "会话模型列表去重排序"
+        );
+
+        let projects = service
+            .conversation_projects(UsageConversationQuery {
+                filter: UsageFilter::default(),
+                sources: None,
+                ..UsageConversationQuery::default()
+            })
+            .expect("projects");
+        assert_eq!(projects.len(), 2);
+        assert_eq!(projects[0].name, "project-beta");
+        assert_eq!(projects[0].conversation_count, 1);
+        assert_eq!(projects[1].name, "project-alpha");
+        assert_eq!(projects[1].conversation_count, 1);
         let first = service
             .conversations(UsageConversationQuery {
                 filter: UsageFilter::default(),

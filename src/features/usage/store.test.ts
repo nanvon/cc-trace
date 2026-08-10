@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getUsageScanStatus, getUsageSummary } from "./api";
 import type { UsageScanStatus, UsageSummary } from "./contracts";
 import { useSettingsStore } from "../settings/store";
-import { usageChartRange, usageDashboardRanges } from "./ranges";
+import { usageChartRange, usageDashboardRanges, usagePreviousRange } from "./ranges";
 import { useUsageStore } from "./store";
 
 vi.mock("./api", () => ({
@@ -95,6 +95,7 @@ describe("usage store", () => {
 
     expect(vi.mocked(getUsageSummary).mock.calls.map(([query]) => query.groupBy)).toEqual([
       "source",
+      "source",
       "day",
       "day",
       "day",
@@ -130,7 +131,7 @@ describe("usage store", () => {
     expect(store.visibleSources).toEqual(["codex", "claude"]);
     const sources = vi
       .mocked(getUsageSummary)
-      .mock.calls.slice(1)
+      .mock.calls.slice(2)
       .map(([query]) => query.filter.source);
     expect(sources).toEqual(["codex", "claude", "codex", "claude"]);
   });
@@ -148,7 +149,7 @@ describe("usage store", () => {
 
     const sources = vi
       .mocked(getUsageSummary)
-      .mock.calls.slice(1)
+      .mock.calls.slice(2)
       .map(([query]) => query.filter.source);
     expect(sources).toEqual(["claude", "claude"]);
     expect(store.visibleSourceSummary).toBeNull();
@@ -183,14 +184,16 @@ describe("usage store", () => {
     await store.loadDashboard(today);
 
     const queries = vi.mocked(getUsageSummary).mock.calls.map(([query]) => query);
+    const previous = usagePreviousRange(today);
     expect(queries[0]?.filter.from).toBe(today.from);
-    expect(queries[1]?.filter.from).toBe(usageChartRange(today).from);
+    expect(queries[1]?.filter.from).toBe(previous?.from);
     expect(queries[2]?.filter.from).toBe(usageChartRange(today).from);
     expect(queries[3]?.filter.from).toBe(usageChartRange(today).from);
     expect(queries[4]?.filter.from).toBe(usageChartRange(today).from);
-    expect(queries[5]?.filter.from).toBe(today.from);
+    expect(queries[5]?.filter.from).toBe(usageChartRange(today).from);
     expect(queries[6]?.filter.from).toBe(today.from);
     expect(queries[7]?.filter.from).toBe(today.from);
     expect(queries[8]?.filter.from).toBe(today.from);
+    expect(queries[9]?.filter.from).toBe(today.from);
   });
 });

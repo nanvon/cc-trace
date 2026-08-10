@@ -215,6 +215,21 @@ pub struct UsageConversation {
     pub tokens: UsageTokenTotals,
     pub fast: UsageFastTotals,
     pub cost: UsageCostTotals,
+    /// 原始会话 id（会话 UUID），供详情页展示与复制；非账号明文。
+    pub source_id: Option<String>,
+    /// Claude 会话的 git 分支（JSONL `gitBranch`）；Codex 不提供。
+    pub branch: Option<String>,
+    /// 会话涉及的去重模型列表，按模型名排序；不受查询过滤影响。
+    pub models: Vec<String>,
+}
+
+/// 对话项目筛选选项：脱敏项目名与其可见对话数、最近活动时间。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageConversationProjectOption {
+    pub name: String,
+    pub conversation_count: i64,
+    pub last_at: String,
 }
 
 pub(crate) fn decimal_nanos_string(value: i64) -> String {

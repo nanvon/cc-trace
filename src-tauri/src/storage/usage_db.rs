@@ -14,10 +14,10 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 
 use crate::contracts::{
     ProviderId, QuotaHistoryEvent, QuotaSnapshot, QuotaWindowKind, UsageConversation,
-    UsageConversationBreakdown, UsageConversationPage, UsageConversationQuery,
-    UsageConversationSort, UsageCostTotals, UsageFastTotals, UsageGroupBy, UsageRepriceResult,
-    UsageSource, UsageSpeed, UsageSummary, UsageSummaryQuery, UsageSummaryRow, UsageTokenTotals,
-    decimal_nanos_string,
+    UsageConversationBreakdown, UsageConversationPage, UsageConversationProjectOption,
+    UsageConversationQuery, UsageConversationSort, UsageCostTotals, UsageFastTotals, UsageGroupBy,
+    UsageRepriceResult, UsageSource, UsageSpeed, UsageSummary, UsageSummaryQuery, UsageSummaryRow,
+    UsageTokenTotals, decimal_nanos_string,
 };
 use crate::usage::model::{
     InferenceGeo, OpencodeScanState, RepriceRow, ScanBatch, ScanFileState, TokenFacts,
@@ -25,7 +25,7 @@ use crate::usage::model::{
 use crate::usage::pricing::{PricingCatalog, PricingUsageKey};
 
 const DATABASE_FILE: &str = "usage.db";
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 
 #[derive(Debug)]
 pub enum UsageDbError {
@@ -254,14 +254,17 @@ impl UsageDb {
         {
             let mut statement = transaction.prepare_cached(
                 "INSERT INTO conversations (
-                   conversation_key, source, title, project_hint, is_sidechain, first_at, last_at
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)
+                   conversation_key, source, title, project_hint, is_sidechain, first_at, last_at,
+                   source_id, branch
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7, ?8)
                  ON CONFLICT(conversation_key) DO UPDATE SET
                    title = COALESCE(excluded.title, conversations.title),
                    project_hint = COALESCE(excluded.project_hint, conversations.project_hint),
                    is_sidechain = MAX(conversations.is_sidechain, excluded.is_sidechain),
                    first_at = MIN(conversations.first_at, excluded.first_at),
-                   last_at = MAX(conversations.last_at, excluded.last_at)",
+                   last_at = MAX(conversations.last_at, excluded.last_at),
+                   source_id = COALESCE(excluded.source_id, conversations.source_id),
+                   branch = COALESCE(excluded.branch, conversations.branch)",
             )?;
             for conversation in &batch.conversations {
                 statement.execute(params![
@@ -271,6 +274,8 @@ impl UsageDb {
                     conversation.project_hint,
                     i64::from(conversation.is_sidechain),
                     conversation.occurred_at,
+                    conversation.source_id,
+                    conversation.branch,
                 ])?;
             }
         }
@@ -537,7 +542,14 @@ impl UsageDb {
                     SUM(CASE WHEN e.source = 'claude' AND e.inference_geo = 'unknown'
                              AND e.api_equivalent_cost_nanos IS NOT NULL THEN 1 ELSE 0 END),
                     CASE WHEN COUNT(DISTINCT e.pricing_fingerprint) = 1
-                         THEN MAX(e.pricing_fingerprint) END
+                         THEN MAX(e.pricing_fingerprint) END,
+                    c.source_id, c.branch,
+                    (SELECT json_group_array(model) FROM (
+                        SELECT DISTINCT model FROM usage_entries
+                         WHERE conversation_key = c.conversation_key
+                           AND model IS NOT NULL AND model != ''
+                         ORDER BY model
+                    ))
                FROM conversations c
                JOIN usage_entries e ON e.conversation_key = c.conversation_key
               WHERE (?1 IS NULL OR e.occurred_at >= ?1)
@@ -577,6 +589,53 @@ impl UsageDb {
             limit,
             offset,
         })
+    }
+
+    /// 脱敏项目筛选选项：按当前过滤范围聚合项目名、对话数与最近活动时间。
+    pub fn conversation_projects(
+        &self,
+        query: &UsageConversationQuery,
+    ) -> Result<Vec<UsageConversationProjectOption>, UsageDbError> {
+        let connection = self.open_read()?;
+        let filter = &query.filter;
+        let source = filter.source.map(UsageSource::as_db);
+        let sources_json = query.sources.as_ref().map(|sources| {
+            serde_json::to_string(
+                &sources
+                    .iter()
+                    .map(|source| source.as_db())
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap_or_else(|_| "[]".to_owned())
+        });
+        let mut statement = connection.prepare(
+            "SELECT c.project_hint, COUNT(DISTINCT c.conversation_key), MAX(c.last_at)
+               FROM conversations c
+               JOIN usage_entries e ON e.conversation_key = c.conversation_key
+              WHERE c.project_hint IS NOT NULL
+                AND (?1 IS NULL OR e.occurred_at >= ?1)
+                AND (?2 IS NULL OR e.occurred_at < ?2)
+                AND (?3 IS NULL OR e.source = ?3)
+                AND (?4 IS NULL OR e.source IN (SELECT value FROM json_each(?4)))
+              GROUP BY c.project_hint
+              ORDER BY MAX(c.last_at) DESC, c.project_hint ASC",
+        )?;
+        let mapped = statement.query_map(
+            params![
+                filter.from.as_deref(),
+                filter.to.as_deref(),
+                source,
+                sources_json,
+            ],
+            |row| {
+                Ok(UsageConversationProjectOption {
+                    name: row.get(0)?,
+                    conversation_count: row.get(1)?,
+                    last_at: row.get(2)?,
+                })
+            },
+        )?;
+        mapped.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
     /// 单个对话的模型／速度拆分行，列布局与 `summary_row` 完全一致。
@@ -660,7 +719,14 @@ impl UsageDb {
                         SUM(CASE WHEN e.source = 'claude' AND e.inference_geo = 'unknown'
                                  AND e.api_equivalent_cost_nanos IS NOT NULL THEN 1 ELSE 0 END),
                         CASE WHEN COUNT(DISTINCT e.pricing_fingerprint) = 1
-                             THEN MAX(e.pricing_fingerprint) END
+                             THEN MAX(e.pricing_fingerprint) END,
+                        c.source_id, c.branch,
+                        (SELECT json_group_array(model) FROM (
+                            SELECT DISTINCT model FROM usage_entries
+                             WHERE conversation_key = c.conversation_key
+                               AND model IS NOT NULL AND model != ''
+                             ORDER BY model
+                        ))
                    FROM conversations c
                    JOIN usage_entries e ON e.conversation_key = c.conversation_key
                   WHERE c.conversation_key = ?1
@@ -1022,7 +1088,7 @@ impl UsageDb {
 }
 
 fn migrate(connection: &mut Connection, from: i64) -> Result<(), UsageDbError> {
-    if !matches!(from, 0..=3) {
+    if !matches!(from, 0..=4) {
         return Err(UsageDbError::UnsupportedSchema);
     }
     let transaction = connection.transaction()?;
@@ -1077,20 +1143,22 @@ fn migrate(connection: &mut Connection, from: i64) -> Result<(), UsageDbError> {
            id INTEGER PRIMARY KEY CHECK(id = 1),
            fingerprint TEXT NOT NULL
          );
-         CREATE TABLE conversations (
-           conversation_key TEXT PRIMARY KEY,
-           source TEXT NOT NULL CHECK(source IN ('codex', 'claude', 'pi', 'opencode')),
-           title TEXT,
-           project_hint TEXT,
-           is_sidechain INTEGER NOT NULL DEFAULT 0 CHECK(is_sidechain IN (0, 1)),
-           first_at TEXT NOT NULL,
-           last_at TEXT NOT NULL
-         );
-         CREATE INDEX ix_conversations_recent
-           ON conversations(last_at DESC);
-         CREATE INDEX ix_conversations_source_recent
-           ON conversations(source, last_at DESC);
-         CREATE TABLE quota_events (
+          CREATE TABLE conversations (
+            conversation_key TEXT PRIMARY KEY,
+            source TEXT NOT NULL CHECK(source IN ('codex', 'claude', 'pi', 'opencode')),
+            title TEXT,
+            project_hint TEXT,
+            is_sidechain INTEGER NOT NULL DEFAULT 0 CHECK(is_sidechain IN (0, 1)),
+            first_at TEXT NOT NULL,
+            last_at TEXT NOT NULL,
+            source_id TEXT,
+            branch TEXT
+          );
+          CREATE INDEX ix_conversations_recent
+            ON conversations(last_at DESC);
+          CREATE INDEX ix_conversations_source_recent
+            ON conversations(source, last_at DESC);
+          CREATE TABLE quota_events (
            id INTEGER PRIMARY KEY,
            provider TEXT NOT NULL CHECK(provider IN ('codex', 'claude')),
            identity_key TEXT NOT NULL,
@@ -1101,12 +1169,12 @@ fn migrate(connection: &mut Connection, from: i64) -> Result<(), UsageDbError> {
          );
           CREATE INDEX ix_quota_series
             ON quota_events(provider, identity_key, window_kind, window_id, observed_at);
-          CREATE TABLE opencode_state (
-            id INTEGER PRIMARY KEY CHECK(id = 1),
-            watermark_ms INTEGER NOT NULL DEFAULT 0,
-            seen_ids TEXT NOT NULL DEFAULT '[]'
-          );
-          PRAGMA user_version = 4;",
+           CREATE TABLE opencode_state (
+             id INTEGER PRIMARY KEY CHECK(id = 1),
+             watermark_ms INTEGER NOT NULL DEFAULT 0,
+             seen_ids TEXT NOT NULL DEFAULT '[]'
+           );
+           PRAGMA user_version = 5;",
         )?;
     } else {
         if from == 1 {
@@ -1121,7 +1189,15 @@ fn migrate(connection: &mut Connection, from: i64) -> Result<(), UsageDbError> {
                  );",
             )?;
         }
-        rebuild_source_constraints(&transaction)?;
+        if from < 4 {
+            rebuild_source_constraints(&transaction)?;
+        }
+        // v5：conversations 新增 source_id 与 branch 列。
+        transaction.execute_batch(
+            "ALTER TABLE conversations ADD COLUMN source_id TEXT;
+             ALTER TABLE conversations ADD COLUMN branch TEXT;
+             PRAGMA user_version = 5;",
+        )?;
     }
     transaction.commit()?;
     Ok(())
@@ -1284,6 +1360,10 @@ fn fast_totals(row: &rusqlite::Row<'_>, start: usize) -> rusqlite::Result<UsageF
 fn conversation_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<UsageConversation> {
     let source_value: String = row.get(1)?;
     let source = source_from_db(&source_value)?;
+    let models_json: Option<String> = row.get(26)?;
+    let models = models_json
+        .and_then(|value| serde_json::from_str::<Vec<String>>(&value).ok())
+        .unwrap_or_default();
     Ok(UsageConversation {
         conversation_key: row.get(0)?,
         source,
@@ -1302,6 +1382,9 @@ fn conversation_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<UsageConversati
             assumed_geo_entries: row.get(22)?,
             pricing_fingerprint: row.get(23)?,
         },
+        source_id: row.get(24)?,
+        branch: row.get(25)?,
+        models,
     })
 }
 
@@ -1504,6 +1587,8 @@ mod tests {
                 project_hint: None,
                 is_sidechain: false,
                 occurred_at: "2026-07-30T00:00:00Z".to_owned(),
+                source_id: None,
+                branch: None,
             }],
             ..ScanBatch::default()
         }
@@ -1538,7 +1623,7 @@ mod tests {
     }
 
     #[test]
-    fn schema_v1_migrates_to_v4_with_fast_pricing_columns_and_pi_opencode_sources() {
+    fn schema_v1_migrates_to_v5_with_fast_pricing_columns_and_pi_opencode_sources() {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join(DATABASE_FILE);
         let connection = Connection::open(&path).expect("open legacy");
@@ -1612,9 +1697,21 @@ mod tests {
             .collect::<Result<HashSet<_>, _>>()
             .expect("collect columns");
 
-        assert_eq!(version, 4);
+        assert_eq!(version, 5);
         assert!(columns.contains("billing_equivalent_tokens_nanos"));
         assert!(columns.contains("fast_multiplier_nanos"));
+        let conversation_columns = {
+            let mut statement = connection
+                .prepare("PRAGMA table_info(conversations)")
+                .expect("columns");
+            statement
+                .query_map([], |row| row.get::<_, String>(1))
+                .expect("query columns")
+                .collect::<Result<HashSet<_>, _>>()
+                .expect("collect columns")
+        };
+        assert!(conversation_columns.contains("source_id"));
+        assert!(conversation_columns.contains("branch"));
         connection
             .execute(
                 "INSERT INTO usage_entries (
@@ -1823,6 +1920,8 @@ mod tests {
                     "is_sidechain",
                     "first_at",
                     "last_at",
+                    "source_id",
+                    "branch",
                 ][..],
             ),
             (
@@ -2079,6 +2178,8 @@ mod tests {
                     project_hint: project.map(str::to_owned),
                     is_sidechain: false,
                     occurred_at: occurred_at.to_owned(),
+                    source_id: None,
+                    branch: None,
                 }],
                 ..ScanBatch::default()
             }
@@ -2225,6 +2326,8 @@ mod tests {
                 project_hint: None,
                 is_sidechain: false,
                 occurred_at: "2026-07-30T00:00:00Z".to_owned(),
+                source_id: None,
+                branch: None,
             }],
             ..ScanBatch::default()
         };

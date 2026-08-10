@@ -177,6 +177,19 @@ export interface UsageConversation {
   tokens: UsageTokenTotals;
   fast: UsageFastTotals;
   cost: UsageCostTotals;
+  /** 原始会话 id（会话 UUID），供详情页展示与复制；非账号明文。 */
+  sourceId: string | null;
+  /** Claude 会话的 git 分支；Codex 不提供。 */
+  branch: string | null;
+  /** 会话涉及的去重模型列表，按模型名排序；不受查询过滤影响。 */
+  models: string[];
+}
+
+/** 对话项目筛选选项：脱敏项目名与其可见对话数、最近活动时间。 */
+export interface UsageConversationProjectOption {
+  name: string;
+  conversationCount: number;
+  lastAt: string;
 }
 
 export interface UsageConversationPage {

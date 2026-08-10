@@ -6,6 +6,7 @@ import {
   usageChartRange,
   usageDashboardRanges,
   usageDatePickerRange,
+  usagePreviousRange,
   usageRangePresets,
 } from "./ranges";
 
@@ -92,5 +93,29 @@ describe("usageChartRange", () => {
   it("keeps multi-day ranges unchanged", () => {
     const month = usageDashboardRanges(new Date(2026, 6, 29)).thisMonth;
     expect(usageChartRange(month)).toEqual(month);
+  });
+});
+
+describe("usagePreviousRange", () => {
+  it("returns an equal-length range immediately before the current one", () => {
+    const now = new Date(2026, 6, 29);
+    const week = usageDashboardRanges(now).thisWeek;
+    const previous = usagePreviousRange(week);
+
+    expect(previous).not.toBeNull();
+    const from = new Date(previous?.from ?? "");
+    const to = new Date(previous?.to ?? "");
+    const currentFrom = new Date(week.from ?? "");
+    expect(new Date(previous?.to ?? "").getTime()).toBe(currentFrom.getTime());
+    expect(to.getTime() - from.getTime()).toBe(
+      new Date(week.to ?? "").getTime() - currentFrom.getTime(),
+    );
+  });
+
+  it("returns null for all-time and custom ranges", () => {
+    expect(usagePreviousRange(usageDashboardRanges(new Date(2026, 6, 29)).all)).toBeNull();
+    expect(
+      usagePreviousRange(customUsageRange(new Date(2026, 6, 1), new Date(2026, 6, 30))),
+    ).toBeNull();
   });
 });

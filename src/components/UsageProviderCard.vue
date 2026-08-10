@@ -84,12 +84,12 @@ const providerName = computed(() => t(`provider.${props.source}`));
       <i aria-hidden="true"></i>
       <h3 :id="titleId">{{ providerName }}</h3>
       <div class="pcard-meta">
-        <strong class="pcard-cost numeric">{{ cost ?? t("main.noValue") }}</strong>
         <span class="pcard-total numeric" :title="total.full">
           <b>{{ hasData ? total.value : t("main.noValue") }}</b
           ><small v-if="hasData && total.unit">{{ tokenUnitSeparator }}{{ total.unit }}</small>
           <span class="pcard-total__unit">{{ t("main.tokenUnit") }}</span>
         </span>
+        <strong class="pcard-cost numeric">{{ cost ?? t("main.noValue") }}</strong>
       </div>
     </div>
 
@@ -189,7 +189,7 @@ const providerName = computed(() => t(`provider.${props.source}`));
 .pcard-meta {
   display: flex;
   align-items: baseline;
-  gap: 0.5rem;
+  gap: 1rem;
   margin-inline-start: auto;
   min-inline-size: 0;
 }

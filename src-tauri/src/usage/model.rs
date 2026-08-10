@@ -85,6 +85,10 @@ pub struct ConversationFact {
     pub project_hint: Option<String>,
     pub is_sidechain: bool,
     pub occurred_at: String,
+    /// 原始会话 id（会话 UUID），供详情页对话 ID 与标题索引回查。
+    pub source_id: Option<String>,
+    /// Claude 会话的 git 分支；Codex 不提供。
+    pub branch: Option<String>,
 }
 
 #[derive(Clone, Default)]
@@ -119,15 +123,27 @@ pub struct ScanFileState {
 #[serde(rename_all = "camelCase")]
 pub struct CodexCursor {
     pub conversation_key: Option<String>,
+    /// session_meta 的原始会话 id，供标题索引查询；会话 UUID 非身份明文。
+    #[serde(default)]
+    pub source_id: Option<String>,
     pub model: Option<String>,
     pub speed: Option<UsageSpeed>,
     pub last_total_signature: Option<String>,
+    /// 首条 user_message 文本的标题兜底；只填首个非空值，消费后保留。
+    #[serde(default)]
+    pub pending_title: Option<String>,
+    /// 会话 cwd 的脱敏项目提示（惰性解析后缓存，避免逐行重复解析）。
+    #[serde(default)]
+    pub project_hint: Option<String>,
 }
 
 #[derive(Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClaudeCursor {
     pub conversation_key: Option<String>,
+    /// 首个非 sidechain user 行文本的标题兜底；只填首个非空值，消费后保留。
+    #[serde(default)]
+    pub pending_title: Option<String>,
 }
 
 #[derive(Default, Serialize, Deserialize)]

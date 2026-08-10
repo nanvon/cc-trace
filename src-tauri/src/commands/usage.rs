@@ -9,8 +9,9 @@ use tauri::State;
 use crate::app::AppCore;
 use crate::contracts::{
     PricingCatalogRefreshStatus, QuotaHistory, QuotaHistoryQuery, UsageConversation,
-    UsageConversationBreakdown, UsageConversationPage, UsageConversationQuery, UsageRepriceResult,
-    UsageScanStatus, UsageSource, UsageSummary, UsageSummaryQuery,
+    UsageConversationBreakdown, UsageConversationPage, UsageConversationProjectOption,
+    UsageConversationQuery, UsageRepriceResult, UsageScanStatus, UsageSource, UsageSummary,
+    UsageSummaryQuery,
 };
 use crate::usage::UsageError;
 
@@ -45,6 +46,16 @@ pub fn usage_list_conversations(
     query: UsageConversationQuery,
 ) -> Result<UsageConversationPage, CommandError> {
     core.usage().conversations(query).map_err(map_usage_error)
+}
+
+#[tauri::command]
+pub fn usage_list_conversation_projects(
+    core: State<'_, Arc<AppCore>>,
+    query: UsageConversationQuery,
+) -> Result<Vec<UsageConversationProjectOption>, CommandError> {
+    core.usage()
+        .conversation_projects(query)
+        .map_err(map_usage_error)
 }
 
 #[tauri::command]

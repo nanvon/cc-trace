@@ -3,7 +3,7 @@ import { computed, ref } from "vue";
 
 import type { ProviderId } from "../quota/contracts";
 import { useSettingsStore } from "../settings/store";
-import { getUsageScanStatus, getUsageSummary } from "./api";
+import { getUsageScanStatus, getUsageSummary, startUsageScan } from "./api";
 import type {
   UsageDashboardData,
   UsageDashboardRange,
@@ -16,7 +16,12 @@ import type {
 } from "./contracts";
 import { USAGE_SOURCES } from "./contracts";
 import { buildProviderCosts } from "./presentation";
-import { usageChartRange, usageCostRanges, usageDashboardRanges } from "./ranges";
+import {
+  usageChartRange,
+  usageCostRanges,
+  usageDashboardRanges,
+  usagePreviousRange,
+} from "./ranges";
 
 function summaryQuery(
   range: Pick<UsageDashboardRange, "from" | "to">,
@@ -67,6 +72,8 @@ export const useUsageStore = defineStore("usage", () => {
   const dashboardLoaded = ref(false);
   const dashboardLoading = ref(false);
   const dashboardUnavailable = ref(false);
+  /** 前一个等长区间（delta 对比用）；`all`/`custom` 时为 null。 */
+  const dashboardPrevious = ref<UsageSummary | null>(null);
   let dashboardRequest = 0;
 
   /** 统计服务过滤：设置页关闭的服务从用量页、图表与对话列表统一剔除。 */
@@ -226,12 +233,14 @@ export const useUsageStore = defineStore("usage", () => {
     dashboardUnavailable.value = false;
     dashboard.value = emptyDashboard();
     const chartRange = usageChartRange(range);
+    const previousRange = usagePreviousRange(range);
 
     await readStatus();
 
     const sources = dashboardSources.value;
     const queries = [
       getUsageSummary(summaryQuery(range, "source")),
+      ...(previousRange ? [getUsageSummary(summaryQuery(previousRange, "source"))] : []),
       ...sources.map((source) => getUsageSummary(summaryQuery(chartRange, "day", source))),
       ...sources.map((source) => getUsageSummary(summaryQuery(range, "model", source))),
     ];
@@ -250,8 +259,8 @@ export const useUsageStore = defineStore("usage", () => {
     const day: UsageDashboardData["day"] = emptyDashboard().day;
     const model: UsageDashboardData["model"] = emptyDashboard().model;
     sources.forEach((source, index) => {
-      day[source] = value(1 + index);
-      model[source] = value(1 + sources.length + index);
+      day[source] = value(2 + index);
+      model[source] = value(2 + sources.length + index);
     });
 
     dashboard.value = {
@@ -259,9 +268,22 @@ export const useUsageStore = defineStore("usage", () => {
       day,
       model,
     };
+    dashboardPrevious.value = previousRange ? value(1) : null;
     dashboardUnavailable.value = results.some((result) => result.status === "rejected");
     dashboardLoaded.value = true;
     dashboardLoading.value = false;
+  }
+
+  /** 手动触发一次增量扫描；返回是否已启动（扫描中或启动成功）。 */
+  async function startScan(): Promise<boolean> {
+    if (scanning.value) return false;
+    try {
+      status.value = await startUsageScan();
+      return true;
+    } catch {
+      statusUnavailable.value = true;
+      return false;
+    }
   }
 
   /** 扫描没有 event；可见期间只轮询状态，结束后再一次性采纳新的完整汇总。 */
@@ -301,8 +323,10 @@ export const useUsageStore = defineStore("usage", () => {
     dashboardLoaded,
     dashboardLoading,
     dashboardUnavailable,
+    dashboardPrevious,
     load,
     loadDashboard,
+    startScan,
     poll,
   };
 });

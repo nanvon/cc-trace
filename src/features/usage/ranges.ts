@@ -111,6 +111,27 @@ export function usageDatePickerRange(value: UsageDashboardRange): [Date, Date] |
 }
 
 /**
+ * 前一个等长区间（用于 KPI delta 对比）。`all` / `custom` 无法确定有业务意义的
+ * 前区间，返回 `null`（对齐 cc-bar `StatsRange.previousBounds`）。例如「本周」取上一自然周。
+ */
+export function usagePreviousRange(
+  value: UsageDashboardRange,
+): Pick<UsageDashboardRange, "preset" | "from" | "to"> | null {
+  if (value.preset === "all" || value.preset === "custom") return null;
+  if (!value.from || !value.to) return null;
+  const from = new Date(value.from);
+  const to = new Date(value.to);
+  const length = to.getTime() - from.getTime();
+  if (!Number.isFinite(length) || length <= 0) return null;
+  const previousEnd = from.getTime();
+  return {
+    preset: "custom",
+    from: new Date(previousEnd - length).toISOString(),
+    to: new Date(previousEnd).toISOString(),
+  };
+}
+
+/**
  * `to` 使用本地明日零点而不是当前时刻：扫描期间新写入的今日记录仍落在同一查询范围内。
  * 先用本地日历构造边界，再转 ISO UTC 交给 Rust，DST 切换日也不会硬算 24 小时。
  */

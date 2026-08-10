@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 
 use chrono::{DateTime, Local, Utc};
@@ -16,6 +17,7 @@ pub fn parse_codex_line(
     line: &[u8],
     cursor: &mut CodexCursor,
     catalog: &PricingCatalog,
+    titles: &HashMap<String, String>,
 ) -> ParsedLine {
     let Ok(value) = serde_json::from_slice::<Value>(line) else {
         return ParsedLine::Invalid;
@@ -31,10 +33,14 @@ pub fn parse_codex_line(
                 .and_then(Value::as_str)
                 .filter(|value| !value.is_empty())
             {
+                cursor.source_id = Some(id.to_owned());
                 cursor.conversation_key = Some(opaque_key("codex-conversation", id));
             }
             if let Some(model) = payload.get("model").and_then(Value::as_str) {
                 cursor.model = normalized_optional(model);
+            }
+            if let Some(cwd) = payload.get("cwd").and_then(Value::as_str) {
+                cursor.project_hint = project_hint(cwd);
             }
             ParsedLine::Ignored
         }
@@ -52,6 +58,16 @@ pub fn parse_codex_line(
             ParsedLine::Ignored
         }
         Some("event_msg") => {
+            if payload.get("type").and_then(Value::as_str) == Some("user_message") {
+                if cursor.pending_title.is_none() {
+                    cursor.pending_title = payload
+                        .get("message")
+                        .and_then(content_text)
+                        .or_else(|| payload.get("text_elements").and_then(text_elements_title));
+                }
+                return ParsedLine::Ignored;
+            }
+
             if payload.get("type").and_then(Value::as_str) == Some("thread_settings_applied") {
                 if let Some(model) = payload
                     .pointer("/thread_settings/model")
@@ -140,10 +156,17 @@ pub fn parse_codex_line(
                 conversation: Box::new(ConversationFact {
                     conversation_key,
                     source: UsageSource::Codex,
-                    title: None,
-                    project_hint: None,
+                    title: cursor
+                        .source_id
+                        .as_deref()
+                        .and_then(|id| titles.get(id))
+                        .cloned()
+                        .or_else(|| cursor.pending_title.clone()),
+                    project_hint: cursor.project_hint.clone(),
                     is_sidechain: false,
                     occurred_at,
+                    source_id: cursor.source_id.clone(),
+                    branch: None,
                 }),
             }
         }
@@ -155,10 +178,22 @@ pub fn parse_claude_line(
     line: &[u8],
     cursor: &mut ClaudeCursor,
     catalog: &PricingCatalog,
+    titles: &HashMap<String, String>,
 ) -> ParsedLine {
     let Ok(value) = serde_json::from_slice::<Value>(line) else {
         return ParsedLine::Invalid;
     };
+    if value.get("type").and_then(Value::as_str) == Some("user") {
+        if cursor.pending_title.is_none()
+            && !value
+                .get("isSidechain")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        {
+            cursor.pending_title = value.get("message").and_then(user_message_title);
+        }
+        return ParsedLine::Ignored;
+    }
     if value.get("type").and_then(Value::as_str) != Some("assistant") {
         return ParsedLine::Ignored;
     }
@@ -235,13 +270,21 @@ pub fn parse_claude_line(
         conversation: Box::new(ConversationFact {
             conversation_key,
             source: UsageSource::Claude,
-            title: None,
+            title: titles
+                .get(session_id)
+                .cloned()
+                .or_else(|| cursor.pending_title.clone()),
             project_hint,
             is_sidechain: value
                 .get("isSidechain")
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
             occurred_at,
+            source_id: Some(session_id.to_owned()),
+            branch: value
+                .get("gitBranch")
+                .and_then(Value::as_str)
+                .and_then(normalized_optional),
         }),
     }
 }
@@ -393,6 +436,8 @@ fn pi_usage_fact(
             project_hint,
             is_sidechain: false,
             occurred_at,
+            source_id: None,
+            branch: None,
         }),
     }
 }
@@ -463,26 +508,42 @@ fn filename_conversation_key(filename_key: &str) -> String {
     opaque_key("pi-conversation", filename_key)
 }
 
-/// 首条 user 消息的纯文本标题兜底：空白折叠、去掉 `<` 前缀、截 80 字符。
-fn user_message_title(message: &Value) -> Option<String> {
-    let content = message.get("content");
-    let text = content
-        .and_then(Value::as_str)
-        .or_else(|| {
-            content.and_then(Value::as_array).and_then(|items| {
-                items
-                    .iter()
-                    .find_map(|item| item.get("text").and_then(Value::as_str))
-            })
-        })
-        .map(str::trim)
-        .filter(|value| !value.is_empty())?;
-    let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
+/// 标题清理：空白折叠、去掉 `<` 前缀、截 80 字符；空结果返回 `None`。
+/// 语义对齐 cc-bar `ConversationTitleIndex.clean`，供标题索引与消息兜底共用。
+pub(crate) fn clean_title(raw: &str) -> Option<String> {
+    let collapsed = raw.split_whitespace().collect::<Vec<_>>().join(" ");
     let without_prefix = collapsed.strip_prefix('<').unwrap_or(&collapsed).trim();
     if without_prefix.is_empty() {
         return None;
     }
     Some(without_prefix.chars().take(80).collect())
+}
+
+/// 从消息节点的 `content` 提取纯文本标题兜底：字符串内容，或数组里首个 `text` 项。
+fn content_text(content: &Value) -> Option<String> {
+    content.as_str().and_then(clean_title).or_else(|| {
+        content.as_array().and_then(|items| {
+            items
+                .iter()
+                .find_map(|item| item.get("text").and_then(Value::as_str))
+                .and_then(clean_title)
+        })
+    })
+}
+
+/// Codex `user_message` 的 `text_elements` 数组标题兜底：取首个非空 `text` 项。
+fn text_elements_title(value: &Value) -> Option<String> {
+    value.as_array().and_then(|items| {
+        items
+            .iter()
+            .find_map(|item| item.get("text").and_then(Value::as_str))
+            .and_then(clean_title)
+    })
+}
+
+/// 首条 user 消息的纯文本标题兜底：`message.content` 的字符串或数组 `text` 项。
+fn user_message_title(message: &Value) -> Option<String> {
+    message.get("content").and_then(content_text)
 }
 
 fn codex_tokens(value: &Value) -> Option<TokenFacts> {
@@ -834,12 +895,16 @@ mod tests {
             model: Some("gpt-5.6-sol".to_owned()),
             speed: Some(UsageSpeed::Standard),
             last_total_signature: None,
+            ..CodexCursor::default()
         };
         let line = br#"{"timestamp":"2026-07-30T01:02:03Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"output_tokens":30,"cached_input_tokens":40,"cache_write_input_tokens":10,"reasoning_output_tokens":5,"total_tokens":130},"total_token_usage":{"input_tokens":100,"output_tokens":30,"cached_input_tokens":40,"cache_write_input_tokens":10,"reasoning_output_tokens":5,"total_tokens":130}}}}"#;
 
-        let ParsedLine::Fact { entry, .. } =
-            parse_codex_line(line, &mut cursor, &PricingCatalog::bundled())
-        else {
+        let ParsedLine::Fact { entry, .. } = parse_codex_line(
+            line,
+            &mut cursor,
+            &PricingCatalog::bundled(),
+            &HashMap::new(),
+        ) else {
             panic!("expected fact");
         };
 
@@ -857,15 +922,26 @@ mod tests {
             model: Some("gpt-5.6-sol".to_owned()),
             speed: Some(UsageSpeed::Standard),
             last_total_signature: None,
+            ..CodexCursor::default()
         };
         let line = br#"{"timestamp":"2026-07-30T01:02:03Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2},"total_token_usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}}"#;
 
         assert!(matches!(
-            parse_codex_line(line, &mut cursor, &PricingCatalog::bundled()),
+            parse_codex_line(
+                line,
+                &mut cursor,
+                &PricingCatalog::bundled(),
+                &HashMap::new()
+            ),
             ParsedLine::Fact { .. }
         ));
         assert!(matches!(
-            parse_codex_line(line, &mut cursor, &PricingCatalog::bundled()),
+            parse_codex_line(
+                line,
+                &mut cursor,
+                &PricingCatalog::bundled(),
+                &HashMap::new()
+            ),
             ParsedLine::Ignored
         ));
     }
@@ -880,6 +956,7 @@ mod tests {
             line,
             &mut ClaudeCursor::default(),
             &PricingCatalog::bundled(),
+            &HashMap::new(),
         )
         else {
             panic!("expected fact");
@@ -979,7 +1056,8 @@ mod tests {
             parse_codex_line(
                 br#"{"type":"session_meta","payload":{"id":"session","model":"gpt-5.6-sol"}}"#,
                 &mut cursor,
-                &catalog
+                &catalog,
+                &HashMap::new()
             ),
             ParsedLine::Ignored
         ));
@@ -987,7 +1065,8 @@ mod tests {
             parse_codex_line(
                 br#"{"type":"turn_context","payload":{"service_tier":"priority"}}"#,
                 &mut cursor,
-                &catalog
+                &catalog,
+                &HashMap::new()
             ),
             ParsedLine::Ignored
         ));
@@ -995,6 +1074,7 @@ mod tests {
             br#"{"timestamp":"2026-07-30T01:02:03Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2},"total_token_usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}}"#,
             &mut cursor,
             &catalog,
+            &HashMap::new(),
         ) else {
             panic!("expected fast fact");
         };
@@ -1004,7 +1084,8 @@ mod tests {
             parse_codex_line(
                 br#"{"type":"event_msg","payload":{"type":"thread_settings_applied","thread_settings":{"service_tier":"standard"}}}"#,
                 &mut cursor,
-                &catalog
+                &catalog,
+                &HashMap::new()
             ),
             ParsedLine::Ignored
         ));
@@ -1014,6 +1095,7 @@ mod tests {
             br#"{"timestamp":"2026-07-30T01:03:03Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":2,"output_tokens":2,"total_tokens":4},"total_token_usage":{"input_tokens":2,"output_tokens":2,"total_tokens":4}}}}"#,
             &mut cursor,
             &catalog,
+            &HashMap::new(),
         ) else {
             panic!("expected standard fact");
         };
@@ -1027,6 +1109,7 @@ mod tests {
             line,
             &mut ClaudeCursor::default(),
             &PricingCatalog::bundled(),
+            &HashMap::new(),
         ) else {
             panic!("expected fact");
         };
@@ -1043,9 +1126,179 @@ mod tests {
             parse_claude_line(
                 line,
                 &mut ClaudeCursor::default(),
-                &PricingCatalog::bundled()
+                &PricingCatalog::bundled(),
+                &HashMap::new()
             ),
             ParsedLine::Ignored
         ));
+    }
+
+    #[test]
+    fn codex_user_message_title_is_used_as_fallback_without_index() {
+        let mut cursor = CodexCursor::default();
+        let meta = br#"{"timestamp":"2026-07-30T01:00:00Z","type":"session_meta","payload":{"id":"session-a"}}"#;
+        assert!(matches!(
+            parse_codex_line(
+                meta,
+                &mut cursor,
+                &PricingCatalog::bundled(),
+                &HashMap::new()
+            ),
+            ParsedLine::Ignored
+        ));
+        let user_message = r#"{"timestamp":"2026-07-30T01:00:00Z","type":"event_msg","payload":{"type":"user_message","message":"  帮我重构一下  登录模块  "}}"#.as_bytes();
+        assert!(matches!(
+            parse_codex_line(
+                user_message,
+                &mut cursor,
+                &PricingCatalog::bundled(),
+                &HashMap::new()
+            ),
+            ParsedLine::Ignored
+        ));
+        assert_eq!(
+            cursor.pending_title.as_deref(),
+            Some("帮我重构一下 登录模块")
+        );
+
+        let token = r#"{"timestamp":"2026-07-30T01:01:00Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2},"total_token_usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}}"#.as_bytes();
+        let ParsedLine::Fact { conversation, .. } = parse_codex_line(
+            token,
+            &mut cursor,
+            &PricingCatalog::bundled(),
+            &HashMap::new(),
+        ) else {
+            panic!("expected fact");
+        };
+        assert_eq!(conversation.title.as_deref(), Some("帮我重构一下 登录模块"));
+    }
+
+    #[test]
+    fn codex_title_index_takes_priority_over_message_fallback() {
+        let mut cursor = CodexCursor::default();
+        let meta = br#"{"timestamp":"2026-07-30T01:00:00Z","type":"session_meta","payload":{"id":"session-a"}}"#;
+        assert!(matches!(
+            parse_codex_line(
+                meta,
+                &mut cursor,
+                &PricingCatalog::bundled(),
+                &HashMap::new()
+            ),
+            ParsedLine::Ignored
+        ));
+        let user_message = r#"{"timestamp":"2026-07-30T01:00:01Z","type":"event_msg","payload":{"type":"user_message","message":"兜底标题"}}"#.as_bytes();
+        assert!(matches!(
+            parse_codex_line(
+                user_message,
+                &mut cursor,
+                &PricingCatalog::bundled(),
+                &HashMap::new()
+            ),
+            ParsedLine::Ignored
+        ));
+        let titles = HashMap::from([("session-a".to_owned(), "索引标题".to_owned())]);
+        let token = br#"{"timestamp":"2026-07-30T01:01:00Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2},"total_token_usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}}"#;
+        let ParsedLine::Fact { conversation, .. } =
+            parse_codex_line(token, &mut cursor, &PricingCatalog::bundled(), &titles)
+        else {
+            panic!("expected fact");
+        };
+        assert_eq!(conversation.title.as_deref(), Some("索引标题"));
+    }
+
+    #[test]
+    fn codex_pending_title_keeps_first_non_empty_value() {
+        let mut cursor = CodexCursor::default();
+        let first =
+            r#"{"type":"event_msg","payload":{"type":"user_message","message":"<前缀注入标题"}}"#
+                .as_bytes();
+        assert!(matches!(
+            parse_codex_line(
+                first,
+                &mut cursor,
+                &PricingCatalog::bundled(),
+                &HashMap::new()
+            ),
+            ParsedLine::Ignored
+        ));
+        assert_eq!(cursor.pending_title.as_deref(), Some("前缀注入标题"));
+
+        let second = r#"{"type":"event_msg","payload":{"type":"user_message","message":"后续消息不应覆盖"}}"#.as_bytes();
+        assert!(matches!(
+            parse_codex_line(
+                second,
+                &mut cursor,
+                &PricingCatalog::bundled(),
+                &HashMap::new()
+            ),
+            ParsedLine::Ignored
+        ));
+        assert_eq!(cursor.pending_title.as_deref(), Some("前缀注入标题"));
+    }
+
+    #[test]
+    fn claude_user_line_title_is_used_as_fallback_and_skips_sidechain() {
+        let mut cursor = ClaudeCursor::default();
+        let user = r#"{"type":"user","sessionId":"session-a","isSidechain":false,"timestamp":"2026-07-30T02:00:00Z","message":{"role":"user","content":"分析一下 Page.vue 里的布局"}}"#.as_bytes();
+        assert!(matches!(
+            parse_claude_line(
+                user,
+                &mut cursor,
+                &PricingCatalog::bundled(),
+                &HashMap::new()
+            ),
+            ParsedLine::Ignored
+        ));
+        assert_eq!(
+            cursor.pending_title.as_deref(),
+            Some("分析一下 Page.vue 里的布局")
+        );
+
+        let sidechain = r#"{"type":"user","sessionId":"session-b","isSidechain":true,"timestamp":"2026-07-30T02:00:01Z","message":{"role":"user","content":"子任务消息不作为标题"}}"#.as_bytes();
+        assert!(matches!(
+            parse_claude_line(
+                sidechain,
+                &mut cursor,
+                &PricingCatalog::bundled(),
+                &HashMap::new()
+            ),
+            ParsedLine::Ignored
+        ));
+        assert_eq!(
+            cursor.pending_title.as_deref(),
+            Some("分析一下 Page.vue 里的布局")
+        );
+
+        let assistant = br#"{"type":"assistant","sessionId":"session-a","timestamp":"2026-07-30T02:01:00Z","message":{"id":"message-a","model":"claude-opus-5","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}}"#;
+        let ParsedLine::Fact { conversation, .. } = parse_claude_line(
+            assistant,
+            &mut cursor,
+            &PricingCatalog::bundled(),
+            &HashMap::new(),
+        ) else {
+            panic!("expected fact");
+        };
+        assert_eq!(
+            conversation.title.as_deref(),
+            Some("分析一下 Page.vue 里的布局")
+        );
+    }
+
+    #[test]
+    fn clean_title_collapses_whitespace_and_strips_angle_prefix_and_truncates() {
+        assert_eq!(
+            clean_title("  a   b\n\tc  ").as_deref(),
+            Some("a b c"),
+            "空白折叠"
+        );
+        assert_eq!(clean_title("<前缀").as_deref(), Some("前缀"), "去掉 < 前缀");
+        assert_eq!(clean_title("<prefix").as_deref(), Some("prefix"));
+        assert_eq!(clean_title("   "), None, "纯空白返回 None");
+        assert_eq!(clean_title(""), None);
+        let long = "字".repeat(90);
+        assert_eq!(
+            clean_title(&long).map(|value| value.chars().count()),
+            Some(80)
+        );
     }
 }
