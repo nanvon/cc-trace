@@ -1,9 +1,10 @@
 <script setup lang="ts">
 /**
- * Provider 矮宽卡：色点＋名称 / 费用＋总 Token / Token 分类（输入、输出、缓存读、缓存写）／缓存命中率条。
+ * Provider 矮宽卡：色点＋名称 / 费用＋总 Token / Token 分类（输入、输出、缓存读、缓存写）／Token 占比条。
  *
  * Token 分类对齐 cc-bar By service 卡片；Fast 等效 Token 与倍率不上卡。
- * 命中率条复用余量条形态（4px），染 Provider 品牌色降饱和版；命中率数值用 success 绿（「绿=好事」，与 cc-bar 一致）。
+ * 占比条复用余量条形态（4px），染 Provider 品牌色降饱和版，表达该源 Token 占可见源合计的比例；
+ * 缓存命中率只保留数字，常驻 success 绿（「绿=好事」，与 cc-bar 一致）。
  */
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
@@ -15,11 +16,13 @@ import {
   presentUsageTokens,
   usageCacheHitRate,
   usageCacheWriteTokens,
+  usageTokenShare,
 } from "../features/usage/presentation";
 
 const props = defineProps<{
   source: UsageSource;
   summary: UsageSummary | null;
+  totalTokens: number;
   loaded: boolean;
   unavailable: boolean;
 }>();
@@ -55,6 +58,7 @@ const cost = computed(() => {
   );
 });
 const hitRate = computed(() => usageCacheHitRate(tokens.value));
+const share = computed(() => usageTokenShare(tokens.value, props.totalTokens));
 
 const detail = computed(() => {
   const format = (n: number) => {
@@ -114,13 +118,19 @@ const providerName = computed(() => t(`provider.${props.source}`));
 
     <div class="pcard-hit">
       <div class="pcard-hit-label">
+        <span>{{ t("main.tokenShare") }}</span>
+        <b class="pcard-hit-share numeric">{{
+          hasData ? formatUsagePercent(locale, share) : t("main.noValue")
+        }}</b>
+      </div>
+      <div class="bar" aria-hidden="true">
+        <i :style="{ inlineSize: `${hasData ? (share ?? 0) : 0}%` }"></i>
+      </div>
+      <div class="pcard-hit-label">
         <span>{{ t("main.cacheHitRate") }}</span>
         <b class="numeric">{{
           hasData ? formatUsagePercent(locale, hitRate) : t("main.noValue")
         }}</b>
-      </div>
-      <div class="bar" aria-hidden="true">
-        <i :style="{ inlineSize: `${hasData ? (hitRate ?? 0) : 0}%` }"></i>
       </div>
     </div>
   </article>
@@ -269,6 +279,10 @@ const providerName = computed(() => t(`provider.${props.source}`));
   color: var(--status-success);
   font-size: 0.78125rem;
   font-weight: 600;
+}
+
+.pcard-hit-label b.pcard-hit-share {
+  color: var(--text-primary);
 }
 
 .bar {

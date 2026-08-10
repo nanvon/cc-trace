@@ -108,6 +108,12 @@ export function usageCacheHitRate(tokens: UsageTokenTotals): number | null {
   return Math.min(100, (tokens.cacheReadInputTokens / tokens.inputTokens) * 100);
 }
 
+/** 该源 Token 占可见源合计的比例（0~100）；合计为 0 时返回 null，展示为「—」。 */
+export function usageTokenShare(tokens: UsageTokenTotals, totalTokens: number): number | null {
+  if (totalTokens <= 0) return null;
+  return Math.min(100, (tokens.totalTokens / totalTokens) * 100);
+}
+
 export function formatUsagePercent(locale: string, value: number | null): string {
   if (value === null) return "—";
   return new Intl.NumberFormat(locale, {

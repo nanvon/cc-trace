@@ -8,6 +8,7 @@ import {
   presentUsageCost,
   presentUsageTokens,
   usageCacheHitRate,
+  usageTokenShare,
 } from "./presentation";
 
 const EMPTY_TOKENS = {
@@ -132,6 +133,14 @@ describe("main usage presentation", () => {
     });
     expect(usageCacheHitRate(tokens)).toBe(84);
     expect(formatUsagePercent("en", usageCacheHitRate(tokens))).toBe("84.0%");
+  });
+
+  it("shares each source's tokens against the visible total", () => {
+    const tokens = { ...EMPTY_TOKENS, totalTokens: 300_000 };
+
+    expect(usageTokenShare(tokens, 1_200_000)).toBe(25);
+    expect(formatUsagePercent("zh-CN", usageTokenShare(tokens, 1_200_000))).toBe("25.0%");
+    expect(usageTokenShare(tokens, 0)).toBeNull();
   });
 
   it("does not turn an empty or tiny priced range into a false zero", () => {

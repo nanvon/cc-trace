@@ -61,6 +61,10 @@ const chartUsesContextWindow = computed(
 const sourceSummary = computed(() => usage.visibleSourceSummary);
 const allServicesOff = computed(() => usage.visibleSources.length === 0);
 const dashboardReady = computed(() => usage.dashboardLoaded && !usage.dashboardLoading);
+const providerTotalTokens = computed(() => {
+  if (!dashboardReady.value || usage.dashboardUnavailable || !sourceSummary.value) return 0;
+  return sourceSummary.value.tokens.totalTokens;
+});
 
 interface UsageKpiCard {
   key: string;
@@ -288,6 +292,7 @@ onMounted(() => {
             :key="source"
             :source="source"
             :summary="sourceSummary"
+            :total-tokens="providerTotalTokens"
             :loaded="dashboardReady"
             :unavailable="usage.dashboardUnavailable"
           />

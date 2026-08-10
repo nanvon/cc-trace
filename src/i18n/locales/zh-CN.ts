@@ -137,6 +137,7 @@ export default {
     cacheHit: "缓存命中",
     cacheWrite: "缓存写入",
     cacheHitRate: "缓存命中率",
+    tokenShare: "Token 占比",
     total: "总 Token",
     cost: "花费",
     lessThanCent: "<$0.01",

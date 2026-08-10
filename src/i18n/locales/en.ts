@@ -137,6 +137,7 @@ export default {
     cacheHit: "Cache read",
     cacheWrite: "Cache write",
     cacheHitRate: "Cache hit rate",
+    tokenShare: "Token share",
     total: "Total Token",
     cost: "Cost",
     lessThanCent: "<$0.01",
