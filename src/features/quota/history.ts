@@ -74,6 +74,21 @@ export function latestEvent(series: QuotaSeries): QuotaHistoryEvent {
   return series.points[series.points.length - 1];
 }
 
+/** 表格行模型：事件点与其相对前一点的整数变化；第一点（无前值）为 `null`。 */
+export interface QuotaEventRow {
+  event: QuotaHistoryEvent;
+  deltaPercent: number | null;
+}
+
+/** 序列内每个点相对前一点的整数变化，与 cc-bar `QuotaChangeEvent.deltaPercent` 同口径。 */
+export function eventRows(series: QuotaSeries): QuotaEventRow[] {
+  return series.points.map((point, index) => ({
+    event: point,
+    deltaPercent:
+      index === 0 ? null : point.remainingPercent - series.points[index - 1].remainingPercent,
+  }));
+}
+
 /** 今日 delta：当日最早的序列点与最新点的差值；当天没有点返回 `null`。 */
 export function todayDelta(series: QuotaSeries, now: Date): number | null {
   const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());

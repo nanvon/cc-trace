@@ -177,12 +177,15 @@ export default {
 
   timeline: {
     title: "额度历史",
+    subtitle: "仅展示额度发生变化的时间点",
     current: "当前",
-    todayDelta: "今日变化",
-    events: "事件数",
+    todayDelta: "今日",
+    latest: "最近",
     observedAt: "时间",
+    change: "变动值",
+    after: "变动后剩余",
     remaining: "剩余",
-    noChangeToday: "今日无变化",
+    reset: "重置时间",
     loading: "正在读取额度历史",
     unavailable: "额度历史暂不可用",
     empty: "暂无额度历史",

@@ -138,6 +138,8 @@ export interface QuotaHistoryEvent {
   remainingPercent: number;
   /** ISO 8601 UTC。 */
   observedAt: string;
+  /** 事件时点该窗口的重置时间（ISO 8601 UTC）；缺失或旧数据为 null。 */
+  resetsAt: string | null;
 }
 
 export interface QuotaHistoryQuery {

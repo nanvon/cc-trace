@@ -742,7 +742,7 @@ onBeforeUnmount(() => {
 }
 
 .kpi-card__value small.kpi-card__delta[data-up="true"] {
-  color: var(--status-danger);
+  color: var(--status-error);
 }
 
 /* Token 拆分面板：hero 大数字 + 堆叠条 + 分项 + Fast 汇总 */

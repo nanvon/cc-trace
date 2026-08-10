@@ -178,12 +178,15 @@ export default {
 
   timeline: {
     title: "Quota history",
+    subtitle: "Only quota changes are shown",
     current: "Current",
-    todayDelta: "Today change",
-    events: "Events",
+    todayDelta: "Today",
+    latest: "Latest",
     observedAt: "Time",
+    change: "Change",
+    after: "After",
     remaining: "Remaining",
-    noChangeToday: "No change today",
+    reset: "Reset",
     loading: "Reading quota history",
     unavailable: "Quota history is temporarily unavailable",
     empty: "No quota history yet",

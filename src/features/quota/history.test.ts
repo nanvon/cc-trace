@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import type { QuotaHistoryEvent } from "../usage/contracts";
-import { activeSeriesByProvider, groupSeries, latestEvent, seriesKey, todayDelta } from "./history";
+import {
+  activeSeriesByProvider,
+  eventRows,
+  groupSeries,
+  latestEvent,
+  seriesKey,
+  todayDelta,
+} from "./history";
 
 function event(
   overrides: Partial<QuotaHistoryEvent> &
@@ -12,6 +19,7 @@ function event(
     identityKey: "identity",
     windowKind: "fiveHour",
     windowId: "window",
+    resetsAt: null,
     ...overrides,
   };
 }
@@ -98,5 +106,29 @@ describe("quota history series", () => {
     ])[0];
     const now = new Date("2026-08-01T10:00:00");
     expect(todayDelta(series, now)).toBeNull();
+  });
+
+  it("computes per-row deltas relative to the previous point", () => {
+    const series = groupSeries([
+      event({ observedAt: "2026-07-30T00:00:00Z", remainingPercent: 80 }),
+      event({ observedAt: "2026-07-30T06:00:00Z", remainingPercent: 72 }),
+      event({ observedAt: "2026-07-30T12:00:00Z", remainingPercent: 75 }),
+    ])[0];
+
+    const rows = eventRows(series);
+    expect(rows.map((row) => row.deltaPercent)).toEqual([null, -8, 3]);
+    expect(rows[1].event.remainingPercent).toBe(72);
+    expect(rows[2].event.remainingPercent).toBe(75);
+  });
+
+  it("keeps rows in the series' chronological order", () => {
+    const series = groupSeries([
+      event({ observedAt: "2026-07-30T02:00:00Z", remainingPercent: 70 }),
+      event({ observedAt: "2026-07-30T00:00:00Z", remainingPercent: 80 }),
+    ])[0];
+
+    const rows = eventRows(series);
+    expect(rows.map((row) => row.event.remainingPercent)).toEqual([80, 70]);
+    expect(rows[1].deltaPercent).toBe(-10);
   });
 });

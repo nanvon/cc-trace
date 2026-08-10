@@ -304,6 +304,8 @@ pub struct QuotaHistoryEvent {
     pub remaining_percent: i64,
     /// ISO 8601 UTC。
     pub observed_at: String,
+    /// 事件时点该窗口的重置时间（ISO 8601 UTC）；缺失或旧数据为 `None`。
+    pub resets_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

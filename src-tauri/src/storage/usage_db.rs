@@ -25,7 +25,7 @@ use crate::usage::model::{
 use crate::usage::pricing::{PricingCatalog, PricingUsageKey};
 
 const DATABASE_FILE: &str = "usage.db";
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 
 #[derive(Debug)]
 pub enum UsageDbError {
@@ -65,6 +65,7 @@ struct QuotaEventBackup {
     window_id: Option<String>,
     remaining_percent: i64,
     observed_at: String,
+    resets_at: Option<String>,
 }
 
 pub struct UsageDb {
@@ -887,10 +888,10 @@ impl UsageDb {
         let connection = self.open_read()?;
         let mut statement = connection.prepare(
             "SELECT provider, identity_key, window_kind, window_id,
-                    remaining_percent, observed_at
+                    remaining_percent, observed_at, resets_at
                FROM (
                  SELECT id, provider, identity_key, window_kind, window_id,
-                        remaining_percent, observed_at
+                        remaining_percent, observed_at, resets_at
                    FROM quota_events
                   WHERE (?1 IS NULL OR provider = ?1)
                     AND (?2 IS NULL OR observed_at >= ?2)
@@ -910,6 +911,7 @@ impl UsageDb {
                     window_id: row.get(3)?,
                     remaining_percent: row.get(4)?,
                     observed_at: row.get(5)?,
+                    resets_at: row.get(6)?,
                 })
             },
         )?;
@@ -982,8 +984,8 @@ impl UsageDb {
             transaction.execute(
                 "INSERT INTO quota_events (
                    provider, identity_key, window_kind, window_id,
-                   remaining_percent, observed_at
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                   remaining_percent, observed_at, resets_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 params![
                     provider_db(provider),
                     identity_key,
@@ -991,6 +993,7 @@ impl UsageDb {
                     window.id,
                     remaining,
                     snapshot.captured_at,
+                    window.resets_at,
                 ],
             )?;
         }
@@ -1069,8 +1072,8 @@ impl UsageDb {
                 transaction.execute(
                     "INSERT INTO quota_events (
                        provider, identity_key, window_kind, window_id,
-                       remaining_percent, observed_at
-                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                       remaining_percent, observed_at, resets_at
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                     params![
                         event.provider,
                         event.identity_key,
@@ -1078,6 +1081,7 @@ impl UsageDb {
                         event.window_id,
                         event.remaining_percent,
                         event.observed_at,
+                        event.resets_at,
                     ],
                 )?;
             }
@@ -1088,7 +1092,7 @@ impl UsageDb {
 }
 
 fn migrate(connection: &mut Connection, from: i64) -> Result<(), UsageDbError> {
-    if !matches!(from, 0..=4) {
+    if !matches!(from, 0..=5) {
         return Err(UsageDbError::UnsupportedSchema);
     }
     let transaction = connection.transaction()?;
@@ -1165,7 +1169,8 @@ fn migrate(connection: &mut Connection, from: i64) -> Result<(), UsageDbError> {
            window_kind TEXT NOT NULL,
            window_id TEXT,
            remaining_percent INTEGER NOT NULL CHECK(remaining_percent BETWEEN 0 AND 100),
-           observed_at TEXT NOT NULL
+           observed_at TEXT NOT NULL,
+           resets_at TEXT
          );
           CREATE INDEX ix_quota_series
             ON quota_events(provider, identity_key, window_kind, window_id, observed_at);
@@ -1174,7 +1179,7 @@ fn migrate(connection: &mut Connection, from: i64) -> Result<(), UsageDbError> {
              watermark_ms INTEGER NOT NULL DEFAULT 0,
              seen_ids TEXT NOT NULL DEFAULT '[]'
            );
-           PRAGMA user_version = 5;",
+           PRAGMA user_version = 6;",
         )?;
     } else {
         if from == 1 {
@@ -1193,11 +1198,20 @@ fn migrate(connection: &mut Connection, from: i64) -> Result<(), UsageDbError> {
             rebuild_source_constraints(&transaction)?;
         }
         // v5：conversations 新增 source_id 与 branch 列。
-        transaction.execute_batch(
-            "ALTER TABLE conversations ADD COLUMN source_id TEXT;
-             ALTER TABLE conversations ADD COLUMN branch TEXT;
-             PRAGMA user_version = 5;",
-        )?;
+        if from < 5 {
+            transaction.execute_batch(
+                "ALTER TABLE conversations ADD COLUMN source_id TEXT;
+                 ALTER TABLE conversations ADD COLUMN branch TEXT;
+                 PRAGMA user_version = 5;",
+            )?;
+        }
+        // v6：quota_events 记录事件时点的窗口重置时间（重置时间列，旧行保持 NULL）。
+        if from < 6 {
+            transaction.execute_batch(
+                "ALTER TABLE quota_events ADD COLUMN resets_at TEXT;
+                 PRAGMA user_version = 6;",
+            )?;
+        }
     }
     transaction.commit()?;
     Ok(())
@@ -1508,7 +1522,7 @@ fn export_quota_events(path: &Path) -> Vec<QuotaEventBackup> {
     }
     let Ok(mut statement) = connection.prepare(
         "SELECT provider, identity_key, window_kind, window_id,
-                remaining_percent, observed_at
+                remaining_percent, observed_at, resets_at
            FROM quota_events",
     ) else {
         return Vec::new();
@@ -1521,6 +1535,7 @@ fn export_quota_events(path: &Path) -> Vec<QuotaEventBackup> {
             window_id: row.get(3)?,
             remaining_percent: row.get(4)?,
             observed_at: row.get(5)?,
+            resets_at: row.get(6)?,
         })
     }) else {
         return Vec::new();
@@ -1623,7 +1638,7 @@ mod tests {
     }
 
     #[test]
-    fn schema_v1_migrates_to_v5_with_fast_pricing_columns_and_pi_opencode_sources() {
+    fn schema_v1_migrates_to_latest_with_fast_pricing_pi_opencode_and_quota_resets() {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join(DATABASE_FILE);
         let connection = Connection::open(&path).expect("open legacy");
@@ -1697,7 +1712,7 @@ mod tests {
             .collect::<Result<HashSet<_>, _>>()
             .expect("collect columns");
 
-        assert_eq!(version, 5);
+        assert_eq!(version, SCHEMA_VERSION);
         assert!(columns.contains("billing_equivalent_tokens_nanos"));
         assert!(columns.contains("fast_multiplier_nanos"));
         let conversation_columns = {
@@ -1712,6 +1727,17 @@ mod tests {
         };
         assert!(conversation_columns.contains("source_id"));
         assert!(conversation_columns.contains("branch"));
+        let quota_columns = {
+            let mut statement = connection
+                .prepare("PRAGMA table_info(quota_events)")
+                .expect("columns");
+            statement
+                .query_map([], |row| row.get::<_, String>(1))
+                .expect("query columns")
+                .collect::<Result<HashSet<_>, _>>()
+                .expect("collect columns")
+        };
+        assert!(quota_columns.contains("resets_at"));
         connection
             .execute(
                 "INSERT INTO usage_entries (
@@ -1934,6 +1960,7 @@ mod tests {
                     "window_id",
                     "remaining_percent",
                     "observed_at",
+                    "resets_at",
                 ][..],
             ),
         ];
@@ -2115,7 +2142,7 @@ mod tests {
                 display_name: None,
                 used_percent: 32.0,
                 remaining_percent: 68.0,
-                resets_at: None,
+                resets_at: Some("2026-07-30T06:00:00Z".to_owned()),
                 window_seconds: Some(18_000),
                 is_active: true,
                 is_primary: true,
@@ -2129,6 +2156,7 @@ mod tests {
             .record_quota_snapshot(ProviderId::Codex, "identity", &snapshot)
             .expect("duplicate");
         snapshot.windows[0].remaining_percent = 67.0;
+        snapshot.windows[0].resets_at = None;
         snapshot.captured_at = "2026-07-30T00:10:00Z".to_owned();
         database
             .record_quota_snapshot(ProviderId::Codex, "identity", &snapshot)
@@ -2139,6 +2167,66 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM quota_events", [], |row| row.get(0))
             .expect("count");
         assert_eq!(count, 2);
+
+        let events = database
+            .quota_history(None, None, None, 100)
+            .expect("history");
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].resets_at.as_deref(), Some("2026-07-30T06:00:00Z"));
+        assert_eq!(events[1].resets_at, None);
+    }
+
+    #[test]
+    fn schema_v5_migrates_to_v6_preserving_existing_quota_rows() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join(DATABASE_FILE);
+        let connection = Connection::open(&path).expect("open legacy");
+        connection
+            .execute_batch(
+                "CREATE TABLE quota_events (
+                   id INTEGER PRIMARY KEY,
+                   provider TEXT NOT NULL CHECK(provider IN ('codex', 'claude')),
+                   identity_key TEXT NOT NULL,
+                   window_kind TEXT NOT NULL,
+                   window_id TEXT,
+                   remaining_percent INTEGER NOT NULL CHECK(remaining_percent BETWEEN 0 AND 100),
+                   observed_at TEXT NOT NULL
+                 );
+                 CREATE INDEX ix_quota_series
+                   ON quota_events(provider, identity_key, window_kind, window_id, observed_at);
+                 INSERT INTO quota_events (
+                   provider, identity_key, window_kind, window_id,
+                   remaining_percent, observed_at
+                 ) VALUES ('codex', 'identity', 'five_hour', NULL, 68, '2026-07-30T00:00:00Z');
+                 PRAGMA user_version = 5;",
+            )
+            .expect("seed v5");
+        drop(connection);
+
+        let database = UsageDb::new(dir.path().to_path_buf());
+        database.initialize().expect("migrate");
+        let connection = Connection::open(&path).expect("open migrated");
+        let version: i64 = connection
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .expect("version");
+        assert_eq!(version, SCHEMA_VERSION);
+        let resets_at: Option<String> = connection
+            .query_row(
+                "SELECT resets_at FROM quota_events WHERE observed_at = '2026-07-30T00:00:00Z'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("legacy row keeps null resets_at");
+        assert_eq!(resets_at, None);
+
+        let database = UsageDb::new(dir.path().to_path_buf());
+        database.initialize().expect("reopen");
+        let events = database
+            .quota_history(None, None, None, 100)
+            .expect("history reads migrated rows");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].remaining_percent, 68);
+        assert_eq!(events[0].resets_at, None);
     }
 
     #[test]

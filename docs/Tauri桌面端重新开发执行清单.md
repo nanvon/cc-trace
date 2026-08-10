@@ -378,6 +378,14 @@
       schema 升至 v5（`conversations` 增 `source_id`／`branch`）。Rust 241 项与全量 vitest 108 项
       通过，vue-tsc／eslint／prettier 通过；浏览器与实机验证待门禁。存量标题修复需设置页
       「重新计算用量」一次补齐。
+- [x] 时间线（Timeline）页面对齐 cc-bar `QuotaTimelineAccountPanel`（2026-08-10）：页面副标题
+      「仅展示额度发生变化的时间点」＋今日日期；面板 header 加窗口徽标（5H／WK／MODEL／CURRENT，
+      固定短标签不翻译）并将指标改为 Current／Today／Latest（事件数移除）；图表数据点改余量
+      四档状态色（`quotaChartColor`，分档仍归 `quotaTone.ts`）、Y 轴只留四档边界刻度
+      （0／20／50／80／100）；表格扩为 Time／Change／After／Reset 四列（Change 红涨绿跌、After
+      状态色、Reset 为事件时点重置时间）；schema 升至 v6（`quota_events` 增 `resets_at` 列，
+      存量行 NULL 显示 `—`）。Rust 全量 242 项与全量 vitest 110 项通过，cargo fmt／clippy、
+      vue-tsc／eslint／prettier 通过；浏览器与实机验证待门禁。
 
 ## 14. 完成首次初始化
 

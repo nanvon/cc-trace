@@ -5,6 +5,11 @@
  * 基于 `usage.db` 的 `quota_events` 表：每个 Provider 只展示其**活动序列**（最新事件点
  * 所属的身份与窗口），旧身份／旧窗口的序列不展示，对应 cc-bar F-18 的「主账号镜像去重」。
  * 这里是历史读数，不是当前额度读数；不订阅额度事件，只读一次查询。
+ *
+ * 功能与信息层级对齐 cc-bar `QuotaTimelineAccountPanel`：面板 header 的
+ * 窗口徽标（5H／WK／MODEL／CURRENT）与 Current／Today／Latest 三指标、
+ * 状态色数据点、Y 轴四档边界刻度、四列事件表（Time／Change／After／Reset）。
+ * 视觉收敛进主窗口现行语法（贴合式弱化卡片、hairline 描边、radius-medium）。
  */
 import type { EChartsOption } from "echarts";
 import { LineChart } from "echarts/charts";
@@ -20,13 +25,15 @@ use([LineChart, GridComponent, TooltipComponent, CanvasRenderer]);
 import { PROVIDER_ORDER, type ProviderId, type QuotaWindowKind } from "../features/quota/contracts";
 import {
   activeSeriesByProvider,
+  eventRows,
   latestEvent,
   todayDelta,
   type QuotaSeries,
 } from "../features/quota/history";
 import { getQuotaHistory } from "../features/usage/api";
 import type { QuotaHistoryEvent } from "../features/usage/contracts";
-import { usageChartColors } from "../lib/chartTheme";
+import { quotaChartColor, usageChartColors } from "../lib/chartTheme";
+import { quotaTone } from "../lib/quotaTone";
 
 const { t, locale } = useI18n();
 
@@ -46,15 +53,35 @@ const sections = computed(() =>
   PROVIDER_ORDER.map((provider) => {
     const series = seriesByProvider.value.get(provider);
     if (!series) return null;
-    return { provider, series };
+    return { provider, series, rows: [...eventRows(series)].reverse() };
   }).filter((section): section is NonNullable<typeof section> => section !== null),
 );
 
-function windowLabel(kind: QuotaWindowKind, windowId: string | null): string {
-  if (kind === "modelWeekly") {
-    return t("quota.window.modelWeekly", { model: windowId ?? t("quota.window.unknown") });
+/** 窗口徽标短标签：固定不翻译（对齐 cc-bar `limitKindLabel`）。 */
+function windowBadge(kind: QuotaWindowKind): string {
+  switch (kind) {
+    case "fiveHour":
+      return "5H";
+    case "weekly":
+      return "WK";
+    case "modelWeekly":
+      return "MODEL";
+    default:
+      return "CURRENT";
   }
-  return t(`quota.window.${kind}`);
+}
+
+/** 只有 `modelWeekly` 需要把模型名带出来（徽标无法表达）；其余窗口由徽标承担。 */
+function windowHint(kind: QuotaWindowKind, windowId: string | null): string | null {
+  if (kind !== "modelWeekly") return null;
+  return windowId ?? t("quota.window.unknown");
+}
+
+function formatDate(date: Date): string {
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, "0");
+  const day = `${date.getDate()}`.padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function formatTime(value: string): string {
@@ -66,15 +93,33 @@ function formatTime(value: string): string {
   }).format(new Date(value));
 }
 
+function formatClock(value: string): string {
+  return new Intl.DateTimeFormat(locale.value, {
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
+}
+
 function formatPercent(value: number): string {
   return new Intl.NumberFormat(locale.value, { maximumFractionDigits: 0 }).format(value);
 }
 
+/** Today 指标：当日净变化；当天没有事件点时为不可得（`—`）。 */
 function deltaText(series: QuotaSeries, now: Date): string {
   const delta = todayDelta(series, now);
-  if (delta === null) return t("timeline.noChangeToday");
-  const sign = delta > 0 ? "+" : "";
-  return `${sign}${delta}%`;
+  if (delta === null) return "—";
+  return `${delta > 0 ? "+" : ""}${delta}%`;
+}
+
+/** Change 列：相对前一点的整数差；第一点无前值。 */
+function changeText(delta: number | null): string {
+  if (delta === null) return "—";
+  return `${delta > 0 ? "+" : ""}${delta}%`;
+}
+
+/** After 列的余量分档（ok 档中性，与图表数据点同一分档源）。 */
+function toneClass(remainingPercent: number): string {
+  return `timeline__tone-${quotaTone(remainingPercent)}`;
 }
 
 function chartOption(series: QuotaSeries, provider: ProviderId): EChartsOption {
@@ -82,6 +127,7 @@ function chartOption(series: QuotaSeries, provider: ProviderId): EChartsOption {
   const colors = usageChartColors();
   const points = series.points;
   const providerColor = colors[provider];
+  const xInterval = points.length > 5 ? Math.ceil(points.length / 5) : 0;
   return {
     animation: false,
     color: [providerColor],
@@ -108,6 +154,7 @@ function chartOption(series: QuotaSeries, provider: ProviderId): EChartsOption {
         fontFamily: colors.fontFamily,
         fontSize: 10,
         hideOverlap: true,
+        interval: xInterval,
       },
       axisLine: { lineStyle: { color: colors.border } },
       axisTick: { show: false },
@@ -121,21 +168,28 @@ function chartOption(series: QuotaSeries, provider: ProviderId): EChartsOption {
         fontFamily: colors.fontFamily,
         fontSize: 10,
         formatter: (value: number) => `${formatPercent(value)}%`,
+        /* 只显示四档分档边界刻度（对齐 cc-bar `[0, 20, 50, 80, 100]`） */
+        interval: (value: number) => [0, 20, 50, 80, 100].includes(value),
       },
       axisLine: { show: false },
       axisTick: { show: false },
-      splitLine: { lineStyle: { color: colors.border, type: "solid" } },
+      splitLine: { interval: 20, lineStyle: { color: colors.border, type: "solid" } },
       max: 100,
       min: 0,
       type: "value",
     },
     series: [
       {
-        data: points.map((point) => [formatTime(point.observedAt), point.remainingPercent]),
+        data: points.map((point) => ({
+          value: [formatTime(point.observedAt), point.remainingPercent],
+          itemStyle: { color: quotaChartColor(point.remainingPercent) },
+        })),
         itemStyle: { color: providerColor },
         lineStyle: { color: providerColor, width: 2 },
         name: t("timeline.remaining"),
         showSymbol: points.length <= 40,
+        symbol: "circle",
+        symbolSize: 7,
         type: "line",
       },
     ],
@@ -176,7 +230,11 @@ onBeforeUnmount(() => {
   <main class="timeline" :aria-label="t('a11y.timelineRegion')">
     <div class="timeline__inner">
       <header class="timeline__header">
-        <h1 id="timeline-title" tabindex="-1">{{ t("timeline.title") }}</h1>
+        <div class="timeline__heading">
+          <h1 id="timeline-title" tabindex="-1">{{ t("timeline.title") }}</h1>
+          <p class="timeline__subtitle">{{ t("timeline.subtitle") }}</p>
+        </div>
+        <span class="timeline__date" aria-hidden="true">{{ formatDate(new Date()) }}</span>
       </header>
 
       <p v-if="unavailable" class="timeline__notice">{{ t("timeline.unavailable") }}</p>
@@ -194,7 +252,10 @@ onBeforeUnmount(() => {
           <h2>
             <span class="timeline__dot" aria-hidden="true"></span>
             {{ t(`provider.${section.provider}`) }}
-            <small>{{ windowLabel(section.series.windowKind, section.series.windowId) }}</small>
+            <span class="timeline__badge">{{ windowBadge(section.series.windowKind) }}</span>
+            <small v-if="windowHint(section.series.windowKind, section.series.windowId)">
+              {{ windowHint(section.series.windowKind, section.series.windowId) }}
+            </small>
           </h2>
           <dl class="timeline__kpis">
             <div>
@@ -208,8 +269,8 @@ onBeforeUnmount(() => {
               <dd class="numeric">{{ deltaText(section.series, new Date()) }}</dd>
             </div>
             <div>
-              <dt>{{ t("timeline.events") }}</dt>
-              <dd class="numeric">{{ section.series.points.length }}</dd>
+              <dt>{{ t("timeline.latest") }}</dt>
+              <dd class="numeric">{{ formatTime(latestEvent(section.series).observedAt) }}</dd>
             </div>
           </dl>
         </div>
@@ -228,28 +289,49 @@ onBeforeUnmount(() => {
           </div>
 
           <div class="timeline__table-wrap">
-            <table class="timeline__table">
-              <caption class="visually-hidden">
-                {{
-                  t("a11y.timelineTable", { provider: t(`provider.${section.provider}`) })
-                }}
-              </caption>
-              <thead>
-                <tr>
-                  <th scope="col">{{ t("timeline.observedAt") }}</th>
-                  <th scope="col">{{ t("timeline.remaining") }}</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr
-                  v-for="point in [...section.series.points].reverse()"
-                  :key="`${point.windowId ?? ''}-${point.observedAt}`"
-                >
-                  <td class="numeric">{{ formatTime(point.observedAt) }}</td>
-                  <td class="numeric">{{ formatPercent(point.remainingPercent) }}%</td>
-                </tr>
-              </tbody>
-            </table>
+            <div
+              class="timeline__table-scroll"
+              :class="{ 'timeline__table-scroll--limit': section.rows.length > 8 }"
+            >
+              <table class="timeline__table">
+                <caption class="visually-hidden">
+                  {{
+                    t("a11y.timelineTable", { provider: t(`provider.${section.provider}`) })
+                  }}
+                </caption>
+                <thead>
+                  <tr>
+                    <th scope="col">{{ t("timeline.observedAt") }}</th>
+                    <th scope="col">{{ t("timeline.change") }}</th>
+                    <th scope="col">{{ t("timeline.after") }}</th>
+                    <th scope="col">{{ t("timeline.reset") }}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr
+                    v-for="row in section.rows"
+                    :key="`${row.event.windowId ?? ''}-${row.event.observedAt}`"
+                  >
+                    <td class="numeric">{{ formatTime(row.event.observedAt) }}</td>
+                    <td
+                      class="numeric"
+                      :data-direction="
+                        row.deltaPercent !== null && row.deltaPercent < 0 ? 'down' : 'up'
+                      "
+                      :data-change="row.deltaPercent !== null ? 'true' : undefined"
+                    >
+                      {{ changeText(row.deltaPercent) }}
+                    </td>
+                    <td class="numeric" :class="toneClass(row.event.remainingPercent)">
+                      {{ formatPercent(row.event.remainingPercent) }}%
+                    </td>
+                    <td class="numeric">
+                      {{ row.event.resetsAt ? formatClock(row.event.resetsAt) : "—" }}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       </section>
@@ -276,11 +358,19 @@ onBeforeUnmount(() => {
 
 .timeline__header {
   display: flex;
-  align-items: baseline;
+  align-items: flex-end;
+  justify-content: space-between;
   gap: var(--space-4);
   padding-block-end: 0.625rem;
   border-block-end: 1px solid var(--usage-divider);
   margin-block-end: 1rem;
+}
+
+.timeline__heading {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  min-inline-size: 0;
 }
 
 .timeline__header h1 {
@@ -295,6 +385,20 @@ onBeforeUnmount(() => {
   outline: none;
 }
 
+.timeline__subtitle {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.6875rem;
+}
+
+.timeline__date {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+  font-family: var(--font-data);
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+}
+
 .timeline__notice {
   padding: 2.5rem 1rem;
   color: var(--text-secondary);
@@ -307,7 +411,7 @@ onBeforeUnmount(() => {
   padding: 0.9375rem 1rem 1rem;
   background: var(--usage-surface);
   border: 1px solid var(--border-hairline);
-  border-radius: 0.625rem;
+  border-radius: var(--radius-medium);
 }
 
 .timeline__section-head {
@@ -322,15 +426,19 @@ onBeforeUnmount(() => {
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
+  min-inline-size: 0;
   margin: 0;
   font-size: 0.875rem;
   font-weight: 680;
+  white-space: nowrap;
 }
 
 .timeline__section-head h2 small {
+  overflow: hidden;
   color: var(--text-secondary);
   font-size: 0.6875rem;
   font-weight: 550;
+  text-overflow: ellipsis;
 }
 
 .timeline__dot {
@@ -345,9 +453,21 @@ onBeforeUnmount(() => {
   background: var(--cat-claude);
 }
 
+/* 窗口徽标：中性胶囊，语法对齐对话页速度徽标（不占交互色） */
+.timeline__badge {
+  padding: 0.0625rem 0.375rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-secondary) 12%, transparent);
+  color: var(--text-secondary);
+  font-size: 0.65625rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
 .timeline__kpis {
   display: flex;
   gap: 1.25rem;
+  flex: 0 0 auto;
   margin: 0;
 }
 
@@ -359,13 +479,14 @@ onBeforeUnmount(() => {
 
 .timeline__kpis dt {
   color: var(--text-secondary);
-  font-size: 0.59375rem;
+  font-size: 0.6875rem;
 }
 
 .timeline__kpis dd {
   margin: 0.125rem 0 0;
   font-size: 0.8125rem;
-  font-weight: 650;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 
 .timeline__body {
@@ -390,6 +511,16 @@ onBeforeUnmount(() => {
   border-radius: 0.5rem;
 }
 
+/* 表体内部滚动（对齐 cc-bar maxVisibleRows=8）：行数不超过 8 时自然高度，超过后固定高度 */
+.timeline__table-scroll {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.timeline__table-scroll--limit {
+  max-block-size: calc(8 * 2.0625rem);
+}
+
 .timeline__table {
   inline-size: 100%;
   border-collapse: collapse;
@@ -400,22 +531,59 @@ onBeforeUnmount(() => {
 .timeline__table td {
   block-size: 2rem;
   padding: 0 0.625rem;
-  border-block-end: 1px solid var(--border-subtle);
-  font-size: 0.65625rem;
+  border-block-end: 1px solid color-mix(in srgb, var(--border-subtle) 55%, transparent);
+  font-size: 0.75rem;
   font-variant-numeric: tabular-nums;
   text-align: right;
   white-space: nowrap;
 }
 
 .timeline__table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--usage-surface);
   color: var(--text-secondary);
-  font-size: 0.59375rem;
-  font-weight: 550;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-align: left;
+  border-block-end-color: var(--border-subtle);
+}
+
+.timeline__table td:first-child,
+.timeline__table thead th:first-child {
   text-align: left;
 }
 
-.timeline__table td {
-  font-weight: 500;
+/* Change 列：红涨绿跌（对齐主窗口 KPI delta 与 cc-bar 表内着色） */
+.timeline__table td[data-change="true"] {
+  font-weight: 600;
+}
+
+.timeline__table td[data-direction="up"] {
+  color: var(--status-success);
+}
+
+.timeline__table td[data-direction="down"] {
+  color: var(--status-error);
+}
+
+/* After 列：余量四档分档（ok 档中性灰，不随服务色） */
+.timeline__tone-ok {
+  color: var(--text-secondary);
+}
+
+.timeline__tone-warning {
+  color: var(--status-warning);
+}
+
+.timeline__tone-low {
+  color: var(--status-low);
+}
+
+.timeline__tone-danger {
+  color: var(--status-error);
 }
 
 @container (max-width: 760px) {
