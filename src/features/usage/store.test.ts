@@ -176,6 +176,51 @@ describe("usage store", () => {
     expect(store.sourceFilterOptions).toEqual(["all", "codex"]);
   });
 
+  it("maps day and model summaries correctly when previous range is absent (all)", async () => {
+    vi.mocked(getUsageScanStatus).mockResolvedValue(idleStatus("2026-07-30T10:00:00Z"));
+    const store = useUsageStore();
+    const labeled = (key: string): UsageSummary => ({
+      ...emptySummary,
+      rows: [
+        { key, entryCount: 1, tokens: emptySummary.tokens, fast: emptySummary.fast, cost: emptySummary.cost },
+      ],
+    });
+
+    vi.mocked(getUsageSummary)
+      .mockResolvedValueOnce(labeled("source-all"))
+      .mockResolvedValueOnce(labeled("day-codex"))
+      .mockResolvedValueOnce(labeled("day-claude"))
+      .mockResolvedValueOnce(labeled("day-pi"))
+      .mockResolvedValueOnce(labeled("day-opencode"))
+      .mockResolvedValueOnce(labeled("model-codex"))
+      .mockResolvedValueOnce(labeled("model-claude"))
+      .mockResolvedValueOnce(labeled("model-pi"))
+      .mockResolvedValueOnce(labeled("model-opencode"));
+
+    await store.loadDashboard(usageDashboardRanges(new Date(2026, 6, 30)).all);
+
+    expect(vi.mocked(getUsageSummary).mock.calls.map(([query]) => query.groupBy)).toEqual([
+      "source",
+      "day",
+      "day",
+      "day",
+      "day",
+      "model",
+      "model",
+      "model",
+      "model",
+    ]);
+    expect(store.dashboardPrevious).toBeNull();
+    expect(store.dashboard.day.codex?.rows[0]?.key).toBe("day-codex");
+    expect(store.dashboard.day.claude?.rows[0]?.key).toBe("day-claude");
+    expect(store.dashboard.day.pi?.rows[0]?.key).toBe("day-pi");
+    expect(store.dashboard.day.opencode?.rows[0]?.key).toBe("day-opencode");
+    expect(store.dashboard.model.codex?.rows[0]?.key).toBe("model-codex");
+    expect(store.dashboard.model.claude?.rows[0]?.key).toBe("model-claude");
+    expect(store.dashboard.model.pi?.rows[0]?.key).toBe("model-pi");
+    expect(store.dashboard.model.opencode?.rows[0]?.key).toBe("model-opencode");
+  });
+
   it("uses the wider context only for daily summaries in a single-day range", async () => {
     vi.mocked(getUsageScanStatus).mockResolvedValue(idleStatus("2026-07-30T10:00:00Z"));
     const store = useUsageStore();

@@ -258,9 +258,12 @@ export const useUsageStore = defineStore("usage", () => {
 
     const day: UsageDashboardData["day"] = emptyDashboard().day;
     const model: UsageDashboardData["model"] = emptyDashboard().model;
+    // `previousRange` 只在有业务意义时存在（`all`/`custom` 为 null），
+    // 结果数组因此少一项，索引必须按实际偏移，不能写死从 2 开始。
+    const previousOffset = previousRange ? 1 : 0;
     sources.forEach((source, index) => {
-      day[source] = value(2 + index);
-      model[source] = value(2 + sources.length + index);
+      day[source] = value(1 + previousOffset + index);
+      model[source] = value(1 + previousOffset + sources.length + index);
     });
 
     dashboard.value = {
