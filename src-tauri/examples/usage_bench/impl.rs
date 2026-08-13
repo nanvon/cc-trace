@@ -1,11 +1,9 @@
-//! 阶段 0 性能基线：B1/B2/B5/B8 场景测量（docs/性能与功耗优化方案.md 阶段 0）。
-//!
-//! 只使用脱敏数据集与显式临时目录，不触碰真实用户目录。必须带 perf-baseline feature
-//! 编译以获得 quick_check／批次计数：
-//!   cargo run --release --example usage_bench --features perf-baseline --
-//!     --dataset-dir /tmp/cc-trace-datasets/M --scenario B1 --work-dir /tmp/cc-trace-bench
-//!
-//! 输出每轮 JSON；汇总给出中位数与范围。B0/B7 的能耗指标不在本工具范围（见文档）。
+// 只使用脱敏数据集与显式临时目录，不触碰真实用户目录。必须带 perf-baseline feature
+// 编译以获得 quick_check／批次计数：
+//   cargo run --release --example usage_bench --features perf-baseline --
+//     --dataset-dir /tmp/cc-trace-datasets/M --scenario B1 --work-dir /tmp/cc-trace-bench
+//
+// 输出每轮 JSON；汇总给出中位数与范围。B0/B7 的能耗指标不在本工具范围（见文档）。
 
 use std::env;
 use std::fs;

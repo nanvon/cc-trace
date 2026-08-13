@@ -1,12 +1,10 @@
-//! 阶段 0 性能基线：从脱敏 Fixture 机械派生 M/L/R 数据集。
-//!
-//! 见 docs/性能与功耗优化方案.md 阶段 0：M/L 只机械复制并改写脱敏 ID 与时间，
-//! 不引入真实标题、路径、账号或消息正文；输出目录不入仓库。
-//!
-//! 用法：
-//!   cargo run --release --example usage_dataset -- --kind M --out /tmp/cc-trace-datasets/M
-//!   cargo run --release --example usage_dataset -- --kind L --out /tmp/cc-trace-datasets/L
-//!   cargo run --release --example usage_dataset -- --kind R --out /tmp/cc-trace-datasets/R
+// 见 docs/性能与功耗优化方案.md 阶段 0：M/L 只机械复制并改写脱敏 ID 与时间，
+// 不引入真实标题、路径、账号或消息正文；输出目录不入仓库。
+//
+// 用法：
+//   cargo run --release --example usage_dataset -- --kind M --out /tmp/cc-trace-datasets/M
+//   cargo run --release --example usage_dataset -- --kind L --out /tmp/cc-trace-datasets/L
+//   cargo run --release --example usage_dataset -- --kind R --out /tmp/cc-trace-datasets/R
 
 use std::env;
 use std::fs;
@@ -16,11 +14,11 @@ use std::process::ExitCode;
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde_json::{Value, json};
 
-const CODEX_SESSION: &[u8] = include_bytes!("../../fixtures/usage/codex/session.jsonl");
-const CODEX_INDEX: &[u8] = include_bytes!("../../fixtures/usage/codex/session_index.jsonl");
-const CLAUDE_HISTORY: &[u8] = include_bytes!("../../fixtures/usage/claude/history.jsonl");
-const CLAUDE_PROJECT: &[u8] = include_bytes!("../../fixtures/usage/claude/project.jsonl");
-const PI_SESSION: &[u8] = include_bytes!("../../fixtures/usage/pi/session.jsonl");
+const CODEX_SESSION: &[u8] = include_bytes!("../../../fixtures/usage/codex/session.jsonl");
+const CODEX_INDEX: &[u8] = include_bytes!("../../../fixtures/usage/codex/session_index.jsonl");
+const CLAUDE_HISTORY: &[u8] = include_bytes!("../../../fixtures/usage/claude/history.jsonl");
+const CLAUDE_PROJECT: &[u8] = include_bytes!("../../../fixtures/usage/claude/project.jsonl");
+const PI_SESSION: &[u8] = include_bytes!("../../../fixtures/usage/pi/session.jsonl");
 
 const BASE_EPOCH: i64 = 1_752_912_000; // 2026-07-20T00:00:00Z 附近
 
