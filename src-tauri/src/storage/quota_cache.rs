@@ -174,6 +174,35 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_save_keeps_the_previous_valid_cache() {
+        let (dir, store) = store();
+        let cache = QuotaCache::new(vec![cached(ProviderId::Codex)]);
+        store.save(&cache).expect("first save succeeds");
+
+        // 把临时文件位置占位成目录，让下一次原子写入在写临时文件时失败。
+        fs::create_dir(dir.path().join(TEMP_FILE)).expect("block temp path");
+
+        assert!(store.save(&cache).is_err(), "save must fail");
+        assert_eq!(
+            store.load(),
+            Some(cache),
+            "the previous valid cache survives a failed write"
+        );
+    }
+
+    #[test]
+    fn a_corrupt_cache_is_deleted_and_rebuilt_by_the_next_save() {
+        let (dir, store) = store();
+        fs::write(dir.path().join(CACHE_FILE), "{ not json").expect("write corrupt");
+
+        assert_eq!(store.load(), None, "corrupt cache is discarded");
+
+        let cache = QuotaCache::new(vec![cached(ProviderId::Claude)]);
+        store.save(&cache).expect("rebuild succeeds");
+        assert_eq!(store.load(), Some(cache), "next save rebuilds the cache");
+    }
+
+    #[test]
     fn an_unknown_schema_version_is_discarded_in_both_directions() {
         let (dir, store) = store();
 
