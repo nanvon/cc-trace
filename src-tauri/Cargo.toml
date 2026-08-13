@@ -79,3 +79,13 @@ objc2 = "0.6"
 
 [dev-dependencies]
 tempfile = "3"
+
+# 本地只做 `cargo check` / clippy 校验，打包交给 .github/workflows/release.yml，
+# 因此 dev profile 按「不产出可分发二进制」调优，避免 target/ 无限膨胀。
+[profile.dev]
+# Cargo 从不回收 incremental 快照，本地曾堆到 236 份共 7.4G。关掉后每次校验
+# 稍慢，但目录不再增长；需要频繁改一行重编时可临时用 CARGO_INCREMENTAL=1。
+incremental = false
+# 完整调试符号是 .rlib/.o 体积的大头（单个 objc2-app-kit 的 rlib 曾达 182M）。
+# 只留行号表足够看 panic 回溯，断点调试才需要改回 true。
+debug = "line-tables-only"
