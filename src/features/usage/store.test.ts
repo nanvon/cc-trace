@@ -182,7 +182,13 @@ describe("usage store", () => {
     const labeled = (key: string): UsageSummary => ({
       ...emptySummary,
       rows: [
-        { key, entryCount: 1, tokens: emptySummary.tokens, fast: emptySummary.fast, cost: emptySummary.cost },
+        {
+          key,
+          entryCount: 1,
+          tokens: emptySummary.tokens,
+          fast: emptySummary.fast,
+          cost: emptySummary.cost,
+        },
       ],
     });
 
