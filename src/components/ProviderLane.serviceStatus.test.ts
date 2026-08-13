@@ -111,11 +111,12 @@ describe("ProviderLane service status dot (ADR-0026)", () => {
   });
 
   it("prefers the description and appends the page update age to the tooltip", async () => {
+    const fetchedAt = new Date();
     const wrapper = render({
       indicator: "major",
       description: "We are investigating elevated errors",
-      updatedAt: "2026-08-09T08:00:00Z",
-      fetchedAt: "2026-08-09T08:05:00Z",
+      updatedAt: new Date(fetchedAt.getTime() - 5 * 60_000).toISOString(),
+      fetchedAt: fetchedAt.toISOString(),
     });
     await flushPromises();
     const dot = wrapper.get(".lane-status");
