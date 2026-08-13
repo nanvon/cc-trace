@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="design/brand/cc-trace-app-icon-1024.png" width="128" alt="CC Trace icon">
+  <img src="design/brand/app-icons/app-icon-master-1024.png" width="128" alt="CC Trace icon">
 </p>
 
 <h1 align="center">CC Trace</h1>
