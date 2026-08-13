@@ -1,4 +1,4 @@
-//! 阶段 0 性能基线：B1/B2/B5 场景测量（docs/性能与功耗优化方案.md 阶段 0）。
+//! 阶段 0 性能基线：B1/B2/B5/B8 场景测量（docs/性能与功耗优化方案.md 阶段 0）。
 //!
 //! 只使用脱敏数据集与显式临时目录，不触碰真实用户目录。必须带 perf-baseline feature
 //! 编译以获得 quick_check／批次计数：
@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Instant;
 
+use cc_trace_lib::contracts::{UsageFilter, UsageGroupBy, UsageSource, UsageSummaryQuery};
 use cc_trace_lib::storage::PerfStats;
 use cc_trace_lib::usage::{BenchmarkRoots, UsageService};
 
@@ -74,6 +75,7 @@ fn run(dataset_dir: &Path, scenario: &str, work_dir: &Path, repeat: usize) -> Re
         "B1" => run_b1(roots, work_dir, repeat),
         "B2" => run_b2(roots, work_dir, repeat),
         "B5" => run_b5(work_dir),
+        "B8" => run_b8(roots, work_dir, repeat),
         other => Err(format!("unknown scenario: {other}")),
     }
 }
@@ -159,6 +161,109 @@ fn run_b2(roots: BenchmarkRoots, work_dir: &Path, repeat: usize) -> Result<(), S
     }
     report("B2", &rounds);
     Ok(())
+}
+
+/// B8：模拟主窗口 Dashboard 的 10 个聚合查询（4 源可见 + previous 区间，见文档 §4.3）。
+/// 只测 Rust 侧查询耗时；IPC 与前端渲染不在本工具范围。
+fn run_b8(roots: BenchmarkRoots, work_dir: &Path, repeat: usize) -> Result<(), String> {
+    let config = work_dir.join("b8-config");
+    if config.exists() {
+        fs::remove_dir_all(&config).map_err(|error| error.to_string())?;
+    }
+    let service = UsageService::new(config);
+    service
+        .run_benchmark_scan(roots)
+        .map_err(|error| format!("{error:?}"))?;
+
+    let sources = [
+        UsageSource::Codex,
+        UsageSource::Claude,
+        UsageSource::Pi,
+        UsageSource::Opencode,
+    ];
+    let range_from = "2026-07-01T00:00:00Z".to_owned();
+    let range_to = "2026-12-31T00:00:00Z".to_owned();
+    let previous_from = "2026-06-01T00:00:00Z".to_owned();
+    let previous_to = "2026-07-01T00:00:00Z".to_owned();
+
+    let mut total_times = Vec::new();
+    for round in 0..repeat {
+        let mut queries = Vec::new();
+        queries.push(summary_query(
+            &range_from,
+            &range_to,
+            UsageGroupBy::Source,
+            None,
+        ));
+        queries.push(summary_query(
+            &previous_from,
+            &previous_to,
+            UsageGroupBy::Source,
+            None,
+        ));
+        for source in &sources {
+            queries.push(summary_query(
+                &range_from,
+                &range_to,
+                UsageGroupBy::Day,
+                Some(*source),
+            ));
+        }
+        for source in &sources {
+            queries.push(summary_query(
+                &range_from,
+                &range_to,
+                UsageGroupBy::Model,
+                Some(*source),
+            ));
+        }
+        let mut per_query_ms = Vec::new();
+        let started = Instant::now();
+        for query in &queries {
+            let single = Instant::now();
+            service
+                .summary(query.clone())
+                .map_err(|error| format!("{error:?}"))?;
+            per_query_ms.push(single.elapsed().as_millis());
+        }
+        let total_ms = started.elapsed().as_millis();
+        total_times.push(total_ms);
+        println!(
+            "{}",
+            serde_json::json!({
+                "scenario": "B8",
+                "round": round,
+                "query_count": queries.len(),
+                "total_ms": total_ms,
+                "per_query_ms": per_query_ms,
+            })
+        );
+    }
+    total_times.sort_unstable();
+    println!(
+        "B8 summary: total_ms min={} median={} max={}",
+        total_times.first().copied().unwrap_or(0),
+        total_times[total_times.len() / 2],
+        total_times.last().copied().unwrap_or(0)
+    );
+    Ok(())
+}
+
+fn summary_query(
+    from: &str,
+    to: &str,
+    group_by: UsageGroupBy,
+    source: Option<UsageSource>,
+) -> UsageSummaryQuery {
+    UsageSummaryQuery {
+        filter: UsageFilter {
+            from: Some(from.to_owned()),
+            to: Some(to.to_owned()),
+            source,
+            ..UsageFilter::default()
+        },
+        group_by,
+    }
 }
 
 /// B5：OpenCode 无新增／少量新增／全量重建。
