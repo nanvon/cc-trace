@@ -415,14 +415,15 @@ impl AppCore {
         let core = Arc::clone(self);
         let app = app.clone();
         tauri::async_runtime::spawn(async move {
-            let codex = crate::providers::service_status::fetch_status(
-                crate::providers::service_status::OPENAI_STATUS_URL,
-            )
-            .await;
-            let claude = crate::providers::service_status::fetch_status(
-                crate::providers::service_status::ANTHROPIC_STATUS_URL,
-            )
-            .await;
+            // 两个请求并发发起；单请求超时互不影响（共享 HTTP Client、15 秒超时不变）。
+            let (codex, claude) = tokio::join!(
+                crate::providers::service_status::fetch_status(
+                    crate::providers::service_status::OPENAI_STATUS_URL,
+                ),
+                crate::providers::service_status::fetch_status(
+                    crate::providers::service_status::ANTHROPIC_STATUS_URL,
+                ),
+            );
 
             {
                 let mut state = core.service_status.lock().expect("service status lock");

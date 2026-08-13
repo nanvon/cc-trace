@@ -5,7 +5,7 @@
 //! 官方 `cost` 为费用总额真值、不走价格表。库缺失、打开失败或表结构不符一律 no-op，
 //! 返回原状态不报错。
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
 
 use chrono::{DateTime, Local, SecondsFormat};
@@ -31,7 +31,7 @@ pub struct OpencodeScanOutcome {
 pub fn scan_opencode(db: &UsageDb, db_path: &Path) -> Result<OpencodeScanOutcome, UsageDbError> {
     let state = db.opencode_state()?;
     let mut seen: HashSet<String> = state.seen_ids.iter().cloned().collect();
-    let mut seen_order: Vec<String> = state.seen_ids;
+    let mut seen_order: VecDeque<String> = state.seen_ids.into_iter().collect();
 
     let Ok(connection) = Connection::open_with_flags(
         db_path,
@@ -71,12 +71,14 @@ pub fn scan_opencode(db: &UsageDb, db_path: &Path) -> Result<OpencodeScanOutcome
         });
     };
 
-    let part_titles = load_part_titles(&connection);
-
     let mut batch = ScanBatch::default();
     let mut watermark_ms = state.watermark_ms;
     // 会话内最近一条 user 消息继承的模型标签。
     let mut inherited_model: HashMap<String, Option<String>> = HashMap::new();
+    // 标题为空、本轮有新增 assistant 的会话：循环结束后只对这些候选查询首 part。
+    let mut needs_part_title: HashSet<String> = HashSet::new();
+    // 回填标题需要知道每个 conversation 对应的 session id 与其在 batch 中的位置。
+    let mut pending_title: Vec<(String, usize)> = Vec::new();
 
     for row in rows.flatten() {
         let (id, session_id, time_created, data_json, session_title, directory) = row;
@@ -85,7 +87,7 @@ pub fn scan_opencode(db: &UsageDb, db_path: &Path) -> Result<OpencodeScanOutcome
             continue;
         }
         seen.insert(id.clone());
-        seen_order.push(id.clone());
+        seen_order.push_back(id.clone());
 
         let Ok(data) = serde_json::from_str::<Value>(&data_json) else {
             continue;
@@ -114,7 +116,9 @@ pub fn scan_opencode(db: &UsageDb, db_path: &Path) -> Result<OpencodeScanOutcome
                 };
                 let conversation_key = opaque_key("opencode-conversation", &session_id);
                 let title = if session_title.trim().is_empty() {
-                    part_titles.get(&session_id).cloned().flatten()
+                    needs_part_title.insert(session_id.clone());
+                    pending_title.push((session_id.clone(), batch.conversations.len()));
+                    None
                 } else {
                     Some(session_title.trim().to_owned())
                 };
@@ -150,6 +154,16 @@ pub fn scan_opencode(db: &UsageDb, db_path: &Path) -> Result<OpencodeScanOutcome
         }
     }
 
+    // 只对候选 session 查询首 part，不扫整张表；回填空标题对话。
+    if !needs_part_title.is_empty() {
+        let part_titles = load_part_titles(&connection, &needs_part_title);
+        for (session_id, index) in pending_title {
+            if let Some(title) = part_titles.get(&session_id).cloned().flatten() {
+                batch.conversations[index].title = Some(title);
+            }
+        }
+    }
+
     let mut inserted = 0_u64;
     let mut duplicates = 0_u64;
     if !batch.entries.is_empty() {
@@ -168,14 +182,14 @@ pub fn scan_opencode(db: &UsageDb, db_path: &Path) -> Result<OpencodeScanOutcome
         duplicates = result.duplicates;
     }
 
-    // seen 集合按最近插入顺序保留上限。
+    // seen 集合按最近插入顺序保留上限；VecDeque 队头出队是 O(1)，不再反复移动 2 万长度数组。
     while seen_order.len() > SEEN_CAP {
-        let removed = seen_order.remove(0);
+        let removed = seen_order.pop_front().expect("len > cap");
         seen.remove(&removed);
     }
     db.save_opencode_state(&OpencodeScanState {
         watermark_ms,
-        seen_ids: seen_order,
+        seen_ids: seen_order.into_iter().collect(),
     })?;
 
     Ok(OpencodeScanOutcome {
@@ -184,46 +198,60 @@ pub fn scan_opencode(db: &UsageDb, db_path: &Path) -> Result<OpencodeScanOutcome
     })
 }
 
-/// 空标题会话的标题兜底：每个会话 `(time_created, id)` 最早的一条 part，`type == "text"`
-/// 时取 `text` 字段（非 text 即跳过，不继续找下一条）。
-fn load_part_titles(connection: &Connection) -> HashMap<String, Option<String>> {
+/// 空标题会话的标题兜底：只查询候选 session 中每个 `(time_created, id)` 最早的一条 part，
+/// `type == "text"` 时取 `text` 字段（非 text 即跳过，不继续找下一条）。session id 分块
+/// 绑定参数，不拼进 SQL；`session_ids` 为空时不发起查询。
+fn load_part_titles(
+    connection: &Connection,
+    session_ids: &HashSet<String>,
+) -> HashMap<String, Option<String>> {
+    // 保守低于 SQLite 参数上限（默认 999）。
+    const CHUNK: usize = 400;
     let mut titles = HashMap::new();
-    let Ok(mut statement) = connection.prepare(
-        "SELECT session_id, data
-           FROM (
-             SELECT session_id, data,
-                    ROW_NUMBER() OVER (
-                      PARTITION BY session_id
-                      ORDER BY time_created, id
-                    ) AS row_num
-               FROM part
-           )
-          WHERE row_num = 1",
-    ) else {
-        return titles;
-    };
-    let Ok(rows) = statement.query_map([], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-    }) else {
-        return titles;
-    };
-    for row in rows.flatten() {
-        let Ok(data) = serde_json::from_str::<Value>(&row.1) else {
-            continue;
+    let ids: Vec<&str> = session_ids.iter().map(String::as_str).collect();
+    for chunk in ids.chunks(CHUNK) {
+        let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+        let sql = format!(
+            "SELECT session_id, data
+               FROM (
+                 SELECT session_id, data,
+                        ROW_NUMBER() OVER (
+                          PARTITION BY session_id
+                          ORDER BY time_created, id
+                        ) AS row_num
+                   FROM part
+                  WHERE session_id IN ({placeholders})
+               )
+              WHERE row_num = 1"
+        );
+        let Ok(mut statement) = connection.prepare(&sql) else {
+            return HashMap::new();
         };
-        if data.get("type").and_then(Value::as_str) != Some("text") {
-            continue;
-        }
-        let text = data
-            .get("text")
-            .and_then(Value::as_str)
-            .map(|value| {
-                let collapsed = value.split_whitespace().collect::<Vec<_>>().join(" ");
-                let without_prefix = collapsed.strip_prefix('<').unwrap_or(&collapsed).trim();
-                without_prefix.chars().take(80).collect::<String>()
+        let Ok(rows) = statement
+            .query_map(rusqlite::params_from_iter(chunk.iter().copied()), |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
             })
-            .filter(|value| !value.is_empty());
-        titles.entry(row.0).or_insert(text);
+        else {
+            return HashMap::new();
+        };
+        for row in rows.flatten() {
+            let Ok(data) = serde_json::from_str::<Value>(&row.1) else {
+                continue;
+            };
+            if data.get("type").and_then(Value::as_str) != Some("text") {
+                continue;
+            }
+            let text = data
+                .get("text")
+                .and_then(Value::as_str)
+                .map(|value| {
+                    let collapsed = value.split_whitespace().collect::<Vec<_>>().join(" ");
+                    let without_prefix = collapsed.strip_prefix('<').unwrap_or(&collapsed).trim();
+                    without_prefix.chars().take(80).collect::<String>()
+                })
+                .filter(|value| !value.is_empty());
+            titles.entry(row.0).or_insert(text);
+        }
     }
     titles
 }
@@ -513,5 +541,118 @@ mod tests {
         assert_eq!(outcome.inserted, 0);
         let state = db.opencode_state().expect("state");
         assert_eq!(state.watermark_ms, 0);
+    }
+
+    fn seed_empty_title_sessions(path: &Path) {
+        let connection = Connection::open(path).expect("open opencode db");
+        connection
+            .execute_batch(
+                "CREATE TABLE session (
+                   id TEXT PRIMARY KEY, title TEXT, directory TEXT, workspace_id TEXT
+                 );
+                 CREATE TABLE workspace (
+                   id TEXT PRIMARY KEY, branch TEXT
+                 );
+                 CREATE TABLE message (
+                   id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER, data TEXT
+                 );
+                 CREATE TABLE part (
+                   session_id TEXT, time_created INTEGER, id TEXT, data TEXT
+                 );",
+            )
+            .expect("create schema");
+        // session-c：首 part 非 text（screenshot），随后的 text part 不应被采用。
+        connection
+            .execute(
+                "INSERT INTO session (id, title, directory, workspace_id) VALUES ('sess-c', '', '/fixture/bench-c', 'ws-c')",
+                [],
+            )
+            .expect("session c");
+        connection
+            .execute(
+                "INSERT INTO message (id, session_id, time_created, data) VALUES ('m-c1', 'sess-c', 1750000004000, '{\"role\":\"assistant\",\"providerID\":\"deepseek\",\"modelID\":\"deepseek-v4-flash\",\"tokens\":{\"input\":1,\"output\":1,\"cache\":{\"read\":0,\"write\":0},\"total\":2},\"cost\":\"0.000001\"}')",
+                [],
+            )
+            .expect("message c");
+        connection
+            .execute(
+                "INSERT INTO part (session_id, time_created, id, data) VALUES ('sess-c', 1750000003500, 'p-c1', '{\"type\":\"screenshot\",\"text\":\"\"}')",
+                [],
+            )
+            .expect("first part non text");
+        connection
+            .execute(
+                "INSERT INTO part (session_id, time_created, id, data) VALUES ('sess-c', 1750000003600, 'p-c2', '{\"type\":\"text\",\"text\":\"<plan>不应采用\"}')",
+                [],
+            )
+            .expect("later text part");
+        // session-d：首 part 为 text，一次扫描新增 3 条 assistant，标题只查询一次、全部回填。
+        connection
+            .execute(
+                "INSERT INTO session (id, title, directory, workspace_id) VALUES ('sess-d', '', '/fixture/bench-d', 'ws-d')",
+                [],
+            )
+            .expect("session d");
+        for index in 0..3 {
+            connection
+                .execute(
+                    "INSERT INTO message (id, session_id, time_created, data) VALUES (?1, 'sess-d', ?2, '{\"role\":\"assistant\",\"providerID\":\"deepseek\",\"modelID\":\"deepseek-v4-flash\",\"tokens\":{\"input\":1,\"output\":1,\"cache\":{\"read\":0,\"write\":0},\"total\":2},\"cost\":\"0.000001\"}')",
+                    rusqlite::params![format!("m-d{index}"), 1750000005000 + index as i64],
+                )
+                .expect("message d");
+        }
+        connection
+            .execute(
+                "INSERT INTO part (session_id, time_created, id, data) VALUES ('sess-d', 1750000004500, 'p-d1', '{\"type\":\"text\",\"text\":\"<plan>共享标题\"}')",
+                [],
+            )
+            .expect("first part text");
+        connection.close().expect("close");
+    }
+
+    #[test]
+    fn part_title_fallback_ignores_non_text_first_part_and_keeps_state_on_noop() {
+        let config = tempfile::tempdir().expect("config");
+        let db = UsageDb::new(config.path().to_path_buf());
+        let db_path = config.path().join("opencode.db");
+        seed_empty_title_sessions(&db_path);
+
+        let first = scan_opencode(&db, &db_path).expect("first scan");
+        assert_eq!(first.inserted, 4, "sess-c 1 条 + sess-d 3 条");
+
+        let conversations = db
+            .conversations(
+                &crate::contracts::UsageConversationQuery::default(),
+                50,
+                0,
+                None,
+                None,
+            )
+            .expect("conversations");
+        assert_eq!(conversations.total, 2);
+        let sess_c = conversations
+            .items
+            .iter()
+            .find(|item| item.project_hint.as_deref() == Some("bench-c"))
+            .expect("sess c");
+        assert_eq!(
+            sess_c.title, None,
+            "首 part 非 text 不提供标题，后续 text part 不采用"
+        );
+        let sess_d = conversations
+            .items
+            .iter()
+            .find(|item| item.project_hint.as_deref() == Some("bench-d"))
+            .expect("sess d");
+        assert_eq!(sess_d.title.as_deref(), Some("plan>共享标题"));
+        assert_eq!(sess_d.entry_count, 3, "多条 assistant 合并为一个对话");
+
+        // 无新增重扫：watermark 与 seen 不变化（不重复查询 part）。
+        let state_before = db.opencode_state().expect("state before");
+        let second = scan_opencode(&db, &db_path).expect("rescan");
+        assert_eq!(second.inserted, 0);
+        let state_after = db.opencode_state().expect("state after");
+        assert_eq!(state_before.watermark_ms, state_after.watermark_ms);
+        assert_eq!(state_before.seen_ids, state_after.seen_ids);
     }
 }
