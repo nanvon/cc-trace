@@ -94,6 +94,10 @@ pub fn install(app: &App, lang: Lang) -> tauri::Result<()> {
 
     let tray = builder.build(app)?;
 
+    // Windows 托盘由运行时持有，句柄无需存活；macOS 的 expanded 分支下面还要用。
+    #[cfg(not(target_os = "macos"))]
+    drop(tray);
+
     #[cfg(target_os = "macos")]
     if expanded {
         let handle = app.handle().clone();
