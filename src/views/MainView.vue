@@ -8,6 +8,8 @@
  */
 import { DatePicker as VDatePicker } from "v-calendar";
 import "v-calendar/style.css";
+import type { UnlistenFn } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
@@ -15,7 +17,7 @@ import { useRouter } from "vue-router";
 import UsageDailyChart from "../components/UsageDailyChart.vue";
 import UsageModelTable from "../components/UsageModelTable.vue";
 import UsageProviderCard from "../components/UsageProviderCard.vue";
-import { navigateMain } from "../features/app/navigation";
+import { navigateMain, onMainNavigation } from "../features/app/navigation";
 import type { UsageDashboardRange, UsageSource } from "../features/usage/contracts";
 import {
   customUsageRange,
@@ -292,11 +294,50 @@ function openSettings(): void {
   void navigateMain(router, "settings", "settings-title");
 }
 
-onMounted(() => {
+let unlistenShown: UnlistenFn | undefined;
+let dashboardLoadedOnce = false;
+let lastLoadedScanAt: string | null = null;
+
+/** 主窗口可见性探测；纯浏览器预览没有 Tauri 窗口桥，视为可见。 */
+async function windowVisible(): Promise<boolean> {
+  try {
+    return await getCurrentWindow().isVisible();
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * 主窗口真正显示后才加载 Dashboard（预创建隐藏窗口不做 10 个聚合查询）。
+ * 重新显示时若后台扫描已完成（finishedAt 前进）则刷新一次，避免长期显示隐藏前旧汇总。
+ */
+function handleWindowShown(): void {
+  if (dashboardLoadedOnce) {
+    const finishedAt = usage.status?.finishedAt ?? null;
+    if (finishedAt !== lastLoadedScanAt) {
+      lastLoadedScanAt = finishedAt;
+      void usage.loadDashboard(selectedRange.value);
+    }
+    return;
+  }
+  dashboardLoadedOnce = true;
+  lastLoadedScanAt = usage.status?.finishedAt ?? null;
   void usage.loadDashboard(selectedRange.value);
+}
+
+onMounted(async () => {
+  try {
+    unlistenShown = await onMainNavigation(() => handleWindowShown());
+  } catch {
+    // 纯浏览器预览没有 Tauri 事件桥。
+  }
+  if (await windowVisible()) {
+    handleWindowShown();
+  }
 });
 
 onBeforeUnmount(() => {
+  unlistenShown?.();
   if (refreshPoll) {
     clearInterval(refreshPoll);
     refreshPoll = null;

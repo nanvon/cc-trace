@@ -1,12 +1,15 @@
 import { createRouter, createWebHashHistory } from "vue-router";
 
-import CompactView from "../views/CompactView.vue";
-import ConversationsView from "../views/ConversationsView.vue";
-import MainView from "../views/MainView.vue";
 import MainWindowView from "../views/MainWindowView.vue";
-import OnboardingView from "../views/OnboardingView.vue";
-import SettingsView from "../views/SettingsView.vue";
-import TimelineView from "../views/TimelineView.vue";
+
+// 页面组件按路由动态导入：compact/onboarding WebView 不解析主窗口图表、日期选择器与
+// 对话页代码；chunk 全部来自本地 dist，不引入网络依赖。
+const MainView = () => import("../views/MainView.vue");
+const ConversationsView = () => import("../views/ConversationsView.vue");
+const SettingsView = () => import("../views/SettingsView.vue");
+const TimelineView = () => import("../views/TimelineView.vue");
+const CompactView = () => import("../views/CompactView.vue");
+const OnboardingView = () => import("../views/OnboardingView.vue");
 
 /**
  * 紧凑面板与首次启动仍各自通过 hash 载入独立表面。

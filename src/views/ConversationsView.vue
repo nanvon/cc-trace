@@ -139,7 +139,14 @@ async function load(): Promise<void> {
   }
 }
 
+/** 只重载列表：搜索、排序与分页不影响项目集合（conversation_projects 不使用这些条件）。 */
 function reload(): void {
+  offset.value = 0;
+  void load();
+}
+
+/** 列表与项目集合一起重载：时间范围、数据源或当前项目选择变化时使用。 */
+function reloadWithProjects(): void {
   offset.value = 0;
   void load();
   void loadProjects();
@@ -156,8 +163,9 @@ watch(search, (value) => {
   }, 300);
 });
 
+// projectFilter 变化必须重载项目集合：loadProjects 内含「选中项目已不在新选项中则清空筛选」。
 watch(projectFilter, () => {
-  reload();
+  reloadWithProjects();
 });
 
 watch(sort, () => {
@@ -233,7 +241,7 @@ onBeforeUnmount(() => {
   }
 });
 
-// 侧边栏数据源组是全局状态（ADR-0024）：变化时重新加载对话列表。
+// 侧边栏数据源组是全局状态（ADR-0024）：变化时重新加载对话列表与项目集合。
 watch(
   () => usage.sourceFilter,
   () => {
