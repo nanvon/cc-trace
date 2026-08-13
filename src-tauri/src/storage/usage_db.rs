@@ -7,6 +7,8 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+#[cfg(feature = "perf-baseline")]
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use chrono::Utc;
@@ -72,6 +74,29 @@ pub struct UsageDb {
     directory: PathBuf,
     write_lock: Mutex<()>,
     initialized: AtomicBool,
+    #[cfg(feature = "perf-baseline")]
+    perf: PerfCounters,
+}
+
+/// 性能基线统计快照（`perf-baseline` feature 门控，见 docs/性能与功耗优化方案.md 阶段 0）。
+#[cfg(feature = "perf-baseline")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PerfStats {
+    pub write_opens: u64,
+    pub quick_checks: u64,
+    pub batch_commits: u64,
+    pub batch_commit_nanos: u64,
+    pub quota_snapshots: u64,
+}
+
+#[cfg(feature = "perf-baseline")]
+#[derive(Default)]
+struct PerfCounters {
+    write_opens: AtomicU64,
+    quick_checks: AtomicU64,
+    batch_commits: AtomicU64,
+    batch_commit_nanos: AtomicU64,
+    quota_snapshots: AtomicU64,
 }
 
 impl UsageDb {
@@ -80,6 +105,8 @@ impl UsageDb {
             directory,
             write_lock: Mutex::new(()),
             initialized: AtomicBool::new(false),
+            #[cfg(feature = "perf-baseline")]
+            perf: PerfCounters::default(),
         }
     }
 
@@ -87,6 +114,8 @@ impl UsageDb {
         self.directory.join(DATABASE_FILE)
     }
 
+    /// 一次性初始化：已有库执行一次 `quick_check`（失败走损坏恢复）、校验并迁移 schema、
+    /// 设置 WAL／synchronous／foreign_keys。幂等；之后的写连接不再重复检查与迁移。
     pub fn initialize(&self) -> Result<(), UsageDbError> {
         if self.initialized.load(Ordering::Acquire) {
             return Ok(());
@@ -95,7 +124,37 @@ impl UsageDb {
         if self.initialized.load(Ordering::Acquire) {
             return Ok(());
         }
-        self.open_write()?;
+        fs::create_dir_all(&self.directory)?;
+        #[cfg(feature = "perf-baseline")]
+        self.perf.write_opens.fetch_add(1, Ordering::Relaxed);
+        let existed = self.path().exists();
+        let mut connection = Connection::open(self.path())?;
+        connection.busy_timeout(std::time::Duration::from_secs(5))?;
+
+        if existed {
+            #[cfg(feature = "perf-baseline")]
+            self.perf.quick_checks.fetch_add(1, Ordering::Relaxed);
+            let check = connection
+                .query_row("PRAGMA quick_check", [], |row| row.get::<_, String>(0))
+                .unwrap_or_else(|_| "failed".to_owned());
+            if check != "ok" {
+                drop(connection);
+                self.recover_corrupt_database()?;
+                connection = Connection::open(self.path())?;
+                connection.busy_timeout(std::time::Duration::from_secs(5))?;
+            }
+        }
+
+        let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        if version > SCHEMA_VERSION {
+            return Err(UsageDbError::UnsupportedSchema);
+        }
+        if version < SCHEMA_VERSION {
+            migrate(&mut connection, version)?;
+        }
+        connection.pragma_update(None, "journal_mode", "WAL")?;
+        connection.pragma_update(None, "synchronous", "NORMAL")?;
+        connection.pragma_update(None, "foreign_keys", "ON")?;
         self.initialized.store(true, Ordering::Release);
         Ok(())
     }
@@ -161,8 +220,11 @@ impl UsageDb {
         reset_file: bool,
         batch: &ScanBatch,
     ) -> Result<CommitResult, UsageDbError> {
+        self.initialize()?;
         let _guard = self.write_lock.lock().expect("usage db write lock");
-        let mut connection = self.open_write()?;
+        #[cfg(feature = "perf-baseline")]
+        let batch_started = std::time::Instant::now();
+        let mut connection = self.open_write_unchecked()?;
         let transaction = connection.transaction()?;
         let mut inserted = 0_u64;
 
@@ -307,6 +369,15 @@ impl UsageDb {
         )?;
         transaction.commit()?;
 
+        #[cfg(feature = "perf-baseline")]
+        {
+            self.perf.batch_commits.fetch_add(1, Ordering::Relaxed);
+            let elapsed = u64::try_from(batch_started.elapsed().as_nanos()).unwrap_or(0);
+            self.perf
+                .batch_commit_nanos
+                .fetch_add(elapsed, Ordering::Relaxed);
+        }
+
         Ok(CommitResult {
             inserted,
             duplicates: batch.entries.len() as u64 - inserted,
@@ -319,8 +390,9 @@ impl UsageDb {
         &self,
         sources: Option<&[UsageSource]>,
     ) -> Result<RebuildResult, UsageDbError> {
+        self.initialize()?;
         let _guard = self.write_lock.lock().expect("usage db write lock");
-        let mut connection = self.open_write()?;
+        let mut connection = self.open_write_unchecked()?;
         let transaction = connection.transaction()?;
         // source 值为静态枚举常量，不来自 command 输入，拼接无注入风险。
         let condition = match sources.filter(|list| !list.is_empty()) {
@@ -350,6 +422,7 @@ impl UsageDb {
             transaction.execute("DELETE FROM opencode_state", [])?;
         }
         transaction.commit()?;
+        self.verify_after_logical_write_locked()?;
         Ok(RebuildResult {
             entries_removed: u64::try_from(entries_removed).map_err(|_| UsageDbError::Sql)?,
             conversations_removed: u64::try_from(conversations_removed)
@@ -740,8 +813,9 @@ impl UsageDb {
     }
 
     pub fn reprice(&self, catalog: &PricingCatalog) -> Result<UsageRepriceResult, UsageDbError> {
+        self.initialize()?;
         let _guard = self.write_lock.lock().expect("usage db write lock");
-        let mut connection = self.open_write()?;
+        let mut connection = self.open_write_unchecked()?;
         let transaction = connection.transaction()?;
         let entries = {
             let mut statement = transaction.prepare(
@@ -805,6 +879,7 @@ impl UsageDb {
             [catalog.fingerprint()],
         )?;
         transaction.commit()?;
+        self.verify_after_logical_write_locked()?;
 
         Ok(UsageRepriceResult {
             updated_entries: updated,
@@ -940,8 +1015,9 @@ impl UsageDb {
     }
 
     pub fn save_opencode_state(&self, state: &OpencodeScanState) -> Result<(), UsageDbError> {
+        self.initialize()?;
         let _guard = self.write_lock.lock().expect("usage db write lock");
-        let connection = self.open_write()?;
+        let connection = self.open_write_unchecked()?;
         connection.execute(
             "INSERT INTO opencode_state (id, watermark_ms, seen_ids) VALUES (1, ?1, ?2)
              ON CONFLICT(id) DO UPDATE SET watermark_ms = excluded.watermark_ms,
@@ -960,8 +1036,11 @@ impl UsageDb {
         identity_key: &str,
         snapshot: &QuotaSnapshot,
     ) -> Result<(), UsageDbError> {
+        self.initialize()?;
         let _guard = self.write_lock.lock().expect("usage db write lock");
-        let mut connection = self.open_write()?;
+        #[cfg(feature = "perf-baseline")]
+        self.perf.quota_snapshots.fetch_add(1, Ordering::Relaxed);
+        let mut connection = self.open_write_unchecked()?;
         let transaction = connection.transaction()?;
 
         for window in &snapshot.windows {
@@ -998,6 +1077,7 @@ impl UsageDb {
             )?;
         }
         transaction.commit()?;
+        self.verify_after_logical_write_locked()?;
         Ok(())
     }
 
@@ -1012,37 +1092,64 @@ impl UsageDb {
         Ok(connection)
     }
 
-    fn open_write(&self) -> Result<Connection, UsageDbError> {
-        fs::create_dir_all(&self.directory)?;
-        let path = self.path();
-        let existed = path.exists();
-        let mut connection = Connection::open(&path)?;
-        connection.busy_timeout(std::time::Duration::from_secs(5))?;
-
-        if existed {
-            let check = connection
-                .query_row("PRAGMA quick_check", [], |row| row.get::<_, String>(0))
-                .unwrap_or_else(|_| "failed".to_owned());
-            if check != "ok" {
-                drop(connection);
-                self.recover_corrupt_database()?;
-                connection = Connection::open(&path)?;
-                connection.busy_timeout(std::time::Duration::from_secs(5))?;
-            }
+    /// 返回 perf-baseline 累积计数快照（feature 门控，生产构建不存在）。
+    #[cfg(feature = "perf-baseline")]
+    pub fn perf_stats(&self) -> PerfStats {
+        PerfStats {
+            write_opens: self.perf.write_opens.load(Ordering::Relaxed),
+            quick_checks: self.perf.quick_checks.load(Ordering::Relaxed),
+            batch_commits: self.perf.batch_commits.load(Ordering::Relaxed),
+            batch_commit_nanos: self.perf.batch_commit_nanos.load(Ordering::Relaxed),
+            quota_snapshots: self.perf.quota_snapshots.load(Ordering::Relaxed),
         }
+    }
+
+    /// 打开写连接：不重复 `quick_check` 与迁移（`initialize` 已一次性完成）。
+    /// 调用方必须已持有 `write_lock`，或保证无并发写者。
+    fn open_write_unchecked(&self) -> Result<Connection, UsageDbError> {
+        #[cfg(feature = "perf-baseline")]
+        self.perf.write_opens.fetch_add(1, Ordering::Relaxed);
+        fs::create_dir_all(&self.directory)?;
+        let connection = Connection::open(self.path())?;
+        connection.busy_timeout(std::time::Duration::from_secs(5))?;
 
         let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
         if version > SCHEMA_VERSION {
             return Err(UsageDbError::UnsupportedSchema);
-        }
-        if version < SCHEMA_VERSION {
-            migrate(&mut connection, version)?;
         }
 
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.pragma_update(None, "synchronous", "NORMAL")?;
         connection.pragma_update(None, "foreign_keys", "ON")?;
         Ok(connection)
+    }
+
+    /// 逻辑写操作完成后的健康检查：一次完整扫描、一次重计价、一次重建或一次额度历史写入
+    /// 的边界执行 `quick_check`。扫描的 2000 行／8 MiB 批次只是同一逻辑操作的事务边界，
+    /// 不逐批重复全库检查。
+    pub fn verify_after_logical_write(&self) -> Result<(), UsageDbError> {
+        let _guard = self.write_lock.lock().expect("usage db write lock");
+        self.verify_after_logical_write_locked()
+    }
+
+    /// 调用方已持有 `write_lock` 时使用（各逻辑写路径的事务边界）。
+    /// 只执行 `quick_check`：先检查后取版本号，与旧 `open_write` 的检查顺序一致，
+    /// 保证非数据库文件在版本查询前先被识别为损坏并恢复。
+    fn verify_after_logical_write_locked(&self) -> Result<(), UsageDbError> {
+        #[cfg(feature = "perf-baseline")]
+        self.perf.write_opens.fetch_add(1, Ordering::Relaxed);
+        let connection = Connection::open(self.path())?;
+        connection.busy_timeout(std::time::Duration::from_secs(5))?;
+        #[cfg(feature = "perf-baseline")]
+        self.perf.quick_checks.fetch_add(1, Ordering::Relaxed);
+        let check = connection
+            .query_row("PRAGMA quick_check", [], |row| row.get::<_, String>(0))
+            .unwrap_or_else(|_| "failed".to_owned());
+        if check != "ok" {
+            drop(connection);
+            self.recover_corrupt_database()?;
+        }
+        Ok(())
     }
 
     fn recover_corrupt_database(&self) -> Result<(), UsageDbError> {
@@ -2054,6 +2161,42 @@ mod tests {
             .filter_map(|entry| entry.file_name().into_string().ok())
             .collect::<Vec<_>>();
         assert!(names.iter().any(|name| name == DATABASE_FILE));
+        assert!(
+            names
+                .iter()
+                .any(|name| name.starts_with("usage.db.corrupt-")),
+            "the broken database must be retained for diagnosis"
+        );
+        assert_eq!(
+            database
+                .summary(&UsageSummaryQuery {
+                    filter: UsageFilter::default(),
+                    group_by: UsageGroupBy::Source,
+                })
+                .expect("empty rebuilt database")
+                .entry_count,
+            0
+        );
+    }
+
+    #[test]
+    fn verify_after_logical_write_recovers_a_database_corrupted_after_initialization() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let database = UsageDb::new(dir.path().to_path_buf());
+        database.initialize().expect("init");
+
+        fs::write(dir.path().join(DATABASE_FILE), b"not a sqlite database").expect("corrupt");
+
+        database.verify_after_logical_write().expect("recover");
+        database
+            .verify_after_logical_write()
+            .expect("healthy after recovery");
+
+        let names = fs::read_dir(dir.path())
+            .expect("read directory")
+            .filter_map(Result::ok)
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .collect::<Vec<_>>();
         assert!(
             names
                 .iter()

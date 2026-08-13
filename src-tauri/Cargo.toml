@@ -14,6 +14,11 @@ edition = "2024"
 name = "cc_trace_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+# 阶段 0 性能基线的统计计数器与基准扫描入口（docs/性能与功耗优化方案.md）。
+# 不带该 feature 时全部编译掉，release 生产构建零影响。
+perf-baseline = []
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

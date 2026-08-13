@@ -28,6 +28,8 @@ use crate::contracts::{
     UsageConversationProjectOption, UsageConversationQuery, UsageFilter, UsageRepriceResult,
     UsageScanState, UsageScanStatus, UsageSource, UsageSummary, UsageSummaryQuery,
 };
+#[cfg(feature = "perf-baseline")]
+use crate::storage::PerfStats;
 use crate::storage::{UsageDb, UsageDbError};
 
 use model::{ClaudeCursor, CodexCursor, ParsedLine, PiCursor, ScanBatch};
@@ -127,6 +129,19 @@ impl UsageService {
 
     pub fn scan_status(&self) -> UsageScanStatus {
         self.status.lock().expect("usage scan status").clone()
+    }
+
+    /// perf-baseline 统计快照（feature 门控，生产构建不存在）。
+    #[cfg(feature = "perf-baseline")]
+    pub fn perf_stats(&self) -> PerfStats {
+        self.db.perf_stats()
+    }
+
+    /// 性能基线的同步扫描入口（`perf-baseline` feature 门控，见 docs/性能与功耗优化方案.md 阶段 0）。
+    /// 路径由基准工具显式提供，不触碰真实用户目录。
+    #[cfg(feature = "perf-baseline")]
+    pub fn run_benchmark_scan(&self, roots: BenchmarkRoots) -> Result<(), UsageError> {
+        self.run_scan_inner(roots.into_scan_roots())
     }
 
     pub fn summary(&self, mut query: UsageSummaryQuery) -> Result<UsageSummary, UsageError> {
@@ -360,6 +375,8 @@ impl UsageService {
                     status.duplicate_entries.saturating_add(outcome.duplicates);
             }
         }
+        // 一次完整扫描是同一逻辑操作；批次只是其事务边界，扫描结束后统一健康检查一次。
+        self.db.verify_after_logical_write()?;
         Ok(())
     }
 
@@ -689,6 +706,35 @@ impl UsageService {
         // 大文件每批提交后主动让出时间片，降低后台扫描连续占用 CPU 的概率。
         std::thread::yield_now();
         Ok(())
+    }
+}
+
+/// 性能基线用的扫描根（`perf-baseline` feature 门控）。与产品入口 `ScanRoots` 等价，
+/// 但所有路径由基准工具显式提供，不读环境变量、不触碰真实用户目录。
+#[cfg(feature = "perf-baseline")]
+#[derive(Debug, Clone, Default)]
+pub struct BenchmarkRoots {
+    pub codex_sessions: Option<PathBuf>,
+    pub codex_archived: Option<PathBuf>,
+    pub claude_projects: Option<PathBuf>,
+    pub pi_sessions: Option<PathBuf>,
+    pub opencode_db: Option<PathBuf>,
+    pub codex_title_index: Option<PathBuf>,
+    pub claude_history: Option<PathBuf>,
+}
+
+#[cfg(feature = "perf-baseline")]
+impl BenchmarkRoots {
+    fn into_scan_roots(self) -> ScanRoots {
+        ScanRoots {
+            codex_sessions: self.codex_sessions,
+            codex_archived: self.codex_archived,
+            claude_projects: self.claude_projects,
+            pi_sessions: self.pi_sessions,
+            opencode_db: self.opencode_db,
+            codex_title_index: self.codex_title_index,
+            claude_history: self.claude_history,
+        }
     }
 }
 
@@ -1556,5 +1602,50 @@ mod tests {
         service.status.lock().expect("status").state = UsageScanState::Running;
 
         assert_eq!(service.rebuild(None), Err(UsageError::ScanBusy));
+    }
+
+    #[cfg(feature = "perf-baseline")]
+    #[test]
+    fn perf_baseline_scan_checks_once_per_logical_write_not_per_batch() {
+        let config = tempfile::tempdir().expect("config");
+        let sources = tempfile::tempdir().expect("sources");
+        seed_fixture_roots(sources.path());
+        seed_pi_root(sources.path());
+        let roots = fixture_roots(sources.path());
+        let service = UsageService::new(config.path().to_path_buf());
+        service
+            .run_benchmark_scan(BenchmarkRoots {
+                codex_sessions: roots.codex_sessions.clone(),
+                codex_archived: roots.codex_archived.clone(),
+                claude_projects: roots.claude_projects.clone(),
+                pi_sessions: roots.pi_sessions.clone(),
+                opencode_db: roots.opencode_db.clone(),
+                codex_title_index: roots.codex_title_index.clone(),
+                claude_history: roots.claude_history.clone(),
+            })
+            .expect("scan");
+        let first = service.perf_stats();
+        assert_eq!(
+            first.quick_checks, 1,
+            "全新库：初始化不检查，仅扫描结束边界检查 1 次"
+        );
+        assert!(first.batch_commits >= 1, "扫描至少产生一个批次");
+
+        service
+            .run_benchmark_scan(BenchmarkRoots {
+                codex_sessions: roots.codex_sessions,
+                codex_archived: roots.codex_archived,
+                claude_projects: roots.claude_projects,
+                pi_sessions: roots.pi_sessions,
+                opencode_db: roots.opencode_db,
+                codex_title_index: roots.codex_title_index,
+                claude_history: roots.claude_history,
+            })
+            .expect("unchanged rescan");
+        let second = service.perf_stats();
+        assert_eq!(
+            second.quick_checks, 2,
+            "已有库：初始化只 1 次（幂等），第二次扫描仍只有 1 次边界检查"
+        );
     }
 }
