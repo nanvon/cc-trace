@@ -1,34 +1,25 @@
 # CC Trace App Icon System
 
-核心规则：圆角矩形是 App 图标容器，不是 Logo 本体。所有平台继续复用同一组同心双 C 路径。
+桌面 App 图标已按 [ADR-0030](../../../docs/决策/ADR-0030-App图标改用仓鼠用量轨迹插画.md) 改为仓鼠查看彩色用量轨迹的插画。Logo 与 App 图标不再强制共用同一图形；Tray／Menu Bar 仍使用双 `C` 微型符号。
 
-## Apple
+## 当前母版与生成规则
 
-- `apple-app-icon-master.svg`：1024 × 1024 全出血方形母版，不预切圆角；由系统应用最终遮罩。
-- `apple-app-icon-master-1024.png`：Apple 平台使用的 1024 × 1024 PNG 导出。
-- 双 `C` 约占画布宽度 `62%`，在几何居中基础上轻微向右、向下修正视觉重心。
-- 背景使用极轻的中性炭黑明暗变化，不使用彩色渐变、玻璃高光或霓虹。
+- `app-icon-master-1024.png`：当前唯一的桌面 App 图标生成母版，1024 × 1024 RGBA PNG。
+- 原稿为 1254 × 1254 RGB PNG；处理只清除与四角连通的近黑外底并缩放为 1024 × 1024，不重绘仓鼠、轨迹面板、颜色或构图。
+- 使用 Tauri CLI 从该母版生成 `src-tauri/icons/` 下的 PNG、ICNS、ICO 与 Windows Square／Store 资产。
+- `src-tauri/icons/tray-symbol.png` 不参与这次生成，避免应用图标替换破坏系统区域的高对比识别。
 
-## Android
+## 平台职责
 
-- `android/ic_launcher_background.svg`：108 × 108 背景层。
-- `android/ic_launcher_foreground.svg`：108 × 108 前景层，Logo 位于中央 66 × 66 安全区域。
-- `android/ic_launcher_monochrome.svg`：Android 主题图标单色层。
-- 双 `C` 可见宽度约 `60dp`，完整位于中央 `66 × 66dp` 安全区，并加入不影响安全区的轻微光学校正。
-- 前景、背景不包含圆角遮罩，由 Launcher 决定圆形、Squircle 或其他外形。
+- macOS Dock 与 Bundle：`src-tauri/icons/icon.icns`。
+- Windows 应用、Start、任务栏与安装包：`src-tauri/icons/icon.ico` 及 `Square*Logo.png`／`StoreLogo.png`。
+- Tauri 通用窗口图标：`32x32.png`、`64x64.png`、`128x128.png`、`128x128@2x.png`、`icon.png`。
+- macOS Menu Bar／Windows Tray：继续使用 `tray-symbol.png` 与既有平台逻辑，不复用复杂插画。
 
-## Windows
+## 历史资产
 
-- `windows/windows-plated.svg`：Start / Store 等场景的带底板版本。
-- `windows/windows-unplated-light.svg`：浅色表面使用的深色透明底版本。
-- `windows/windows-unplated-dark.svg`：深色表面使用的暖白透明底版本。
-- 带底板版本的双 `C` 约占画布宽度 `63%`；无底板版本约占 `70%`。
-- 正式实现时应从矢量母版导出 16、24、32、48、256px 等目标尺寸，并逐级做光学校正。
-
-## Tray / Menu Bar
-
-- `tray-symbol.svg`：32 × 32 加粗微型符号，不带圆角矩形，约占画布宽度 `75%`。
-- Tray / Menu Bar 版本按双 `C` 视觉重心校正，并针对 16–32px 使用更粗笔画。
+- `apple-app-icon-master.svg`、`apple-app-icon-master-1024.png`、`android/` 与 `windows/` 下的双 `C` 资产保留用于设计回溯，不再作为当前桌面 Bundle 图标的生成输入。
+- `tray-symbol.svg` 仍是当前系统区域微型符号源。
 
 ## 官方规范
 

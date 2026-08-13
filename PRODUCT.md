@@ -78,7 +78,7 @@ CC Trace 是本机优先、权限克制的跨平台额度观察工具，不是 P
 - 正式产品名为 CC Trace，应用标识为 `com.nanvon.cctrace`。
 - CC Trace 使用独立品牌，不复刻 Swift 版 cc-bar 的页面和视觉。
 - 已确认的品牌符号为无尾巴双 `C`：两个外层 `C` 代表 Codex 与 Claude，内部使用同心的长短圆弧形成左向凝视。
-- Logo、字标、App 图标以及 Tray／Menu Bar 微型图标均由 `design/brand/` 中的品牌母版派生。
+- Logo、字标与 Tray／Menu Bar 微型图标继续使用双 `C`；App 图标改用仓鼠查看彩色用量轨迹的插画，并由 `design/brand/app-icons/app-icon-master-1024.png` 生成桌面平台资产，见 [ADR-0030](docs/决策/ADR-0030-App图标改用仓鼠用量轨迹插画.md)。
 - 产品表达应优先准确、快速、克制和可信，不使用旧数据伪装成功，也不通过夸张文案掩盖状态。
 
 ## Evidence on Hand
