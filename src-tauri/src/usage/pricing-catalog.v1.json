@@ -480,24 +480,11 @@
       "source": "claude",
       "modelPrefix": "claude-sonnet-5",
       "speed": "standard",
-      "effectiveUntil": "2026-09-01T00:00:00Z",
       "uncachedInputUsdPerMTok": "2",
       "cacheReadUsdPerMTok": "0.2",
       "cacheWrite5mUsdPerMTok": "2.5",
       "cacheWrite1hUsdPerMTok": "4",
       "outputUsdPerMTok": "10",
-      "usInferenceMultiplierBps": 11000
-    },
-    {
-      "source": "claude",
-      "modelPrefix": "claude-sonnet-5",
-      "speed": "standard",
-      "effectiveFrom": "2026-09-01T00:00:00Z",
-      "uncachedInputUsdPerMTok": "3",
-      "cacheReadUsdPerMTok": "0.3",
-      "cacheWrite5mUsdPerMTok": "3.75",
-      "cacheWrite1hUsdPerMTok": "6",
-      "outputUsdPerMTok": "15",
       "usInferenceMultiplierBps": 11000
     },
     {

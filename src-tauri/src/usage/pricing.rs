@@ -640,7 +640,8 @@ fn local_priority(item: &CatalogEntry) -> u8 {
         && (item.effective_from.is_some()
             || item.effective_until.is_some()
             || item.long_context_threshold_tokens.is_some()
-            || item.model_prefix == "gpt-5.5-pro");
+            || item.model_prefix == "gpt-5.5-pro"
+            || item.model_prefix == "claude-sonnet-5");
     let fixed_fast = item.speed == UsageSpeed::Fast
         && matches!(
             item.model_prefix.as_str(),
@@ -1137,7 +1138,7 @@ mod tests {
     }
 
     #[test]
-    fn sonnet_5_price_switches_at_the_effective_time_boundary() {
+    fn sonnet_5_keeps_the_permanent_standard_price_after_sep_1() {
         let catalog = PricingCatalog::bundled();
         let mut usage = entry(UsageSource::Claude, "claude-sonnet-5", UsageSpeed::Standard);
         usage.occurred_at = "2026-08-31T23:59:59Z".to_owned();
@@ -1149,7 +1150,7 @@ mod tests {
         usage.occurred_at = "2026-09-01T00:00:00Z".to_owned();
         assert_eq!(
             catalog.estimate_entry(&usage).cost_nanos,
-            Some(18_000_000_000)
+            Some(12_000_000_000)
         );
     }
 
