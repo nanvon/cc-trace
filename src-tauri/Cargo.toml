@@ -1,6 +1,6 @@
 [package]
 name = "cc-trace"
-version = "0.1.21"
+version = "0.1.22"
 description = "Cross-platform Codex and Claude Code quota monitor"
 authors = ["nanvon"]
 edition = "2024"
