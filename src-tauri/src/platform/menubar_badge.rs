@@ -234,7 +234,12 @@ mod tests {
     fn something_gets_drawn_into_the_alpha_channel() {
         let image = render(&[segment(ProviderId::Codex, "62%")]).expect("badge renders");
         assert!(
-            image.rgba.chunks_exact(4).any(|pixel| pixel[3] > 0),
+            image
+                .rgba
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|pixel| pixel[3] > 0),
             "template image needs a non-empty alpha mask"
         );
     }
