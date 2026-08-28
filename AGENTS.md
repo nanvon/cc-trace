@@ -123,6 +123,8 @@
 - CI 只做编译、类型、格式、lint 和测试；不打包、不签名、不发起真实 Provider 请求、不依赖 `../cc-bar`。
 - GitHub Release workflow 与 CI 分离，只在 `v*` tag 上构建并直接公开 Release；公开 Release 不等于平台实机验收或首版正式发布。
 - 改版本号时 `package.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json` 三处一起改。
+- 每个版本的 Release 正文来自手写的 `release-notes/v<version>.md`，缺失时 CI 直接失败、不创建 Release；格式见 [release-notes/README.md](release-notes/README.md)，流程见 `docs/工程与发布.md` 第 3.2～3.3 节。
+- 用户说「发版」时按 `docs/工程与发布.md` 第 3.3 节的四步执行，不用逐步等确认；推完 tag 即结束，**不查询或轮询** CI、Release 与产物状态。
 - 发布前逐项走 `docs/工程与发布.md` 的发布检查单；许可证由产品所有者决定，不代选。
 - **不得提出任何以购买 Apple 开发者账号或代码签名证书为前提的方案**，见 [ADR-0016](docs/决策/ADR-0016-不购买Apple开发者账号.md)。macOS 开发期使用免费 Apple ID 的 Apple Development 证书稳定钥匙串 ACL；GitHub macOS 产物使用 ad-hoc 签名，不上传个人证书；Windows 产物不签名。
 

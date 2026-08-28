@@ -27,6 +27,16 @@ jobs:
       - name: Check tag and application versions
         run: node scripts/check-release-version.mjs "${GITHUB_REF_NAME}"
 
+      - name: Check release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          notes_path="release-notes/${GITHUB_REF_NAME}.md"
+          if [[ ! -s "$notes_path" ]] || ! grep -q '[^[:space:]]' "$notes_path"; then
+            echo "缺少 ${notes_path}；请在创建发布 tag 前补充面向用户的更新说明。" >&2
+            exit 1
+          fi
+
   package:
     name: ${{ matrix.name }}
     needs: prepare
@@ -60,6 +70,31 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Compose release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          notes_path="release-notes/${GITHUB_REF_NAME}.md"
+          if [[ ! -s "$notes_path" ]]; then
+            echo "缺少 ${notes_path}" >&2
+            exit 1
+          fi
+          # Release 正文 = 手写的本版更新说明 + 每版重复的平台与签名尾注
+          {
+            echo 'RELEASE_BODY<<CC_TRACE_RELEASE_BODY_EOF'
+            cat "$notes_path"
+            printf '\n---\n\n'
+            printf '%s\n' \
+              '- macOS Apple Silicon：下载文件名含 `macOS-Apple-Silicon` 的 DMG 与 ZIP' \
+              '- macOS Intel：下载文件名含 `macOS-Intel` 的 DMG 与 ZIP' \
+              '- Windows x64：下载 `Windows-x64-Setup.exe`' \
+              '' \
+              'macOS 产物使用 ad-hoc 签名且未经过 Apple 公证，首次打开需要在系统设置中手动放行。安装新版本后，首次读取 Claude Code 钥匙串凭据时可能再次出现授权弹窗。' \
+              '' \
+              'Windows 产物未做代码签名，首次安装可能触发 SmartScreen 提示。'
+            echo 'CC_TRACE_RELEASE_BODY_EOF'
+          } >> "$GITHUB_ENV"
 
       - name: Select Xcode 26
         if: runner.os == 'macOS'
@@ -115,18 +150,9 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "CC Trace ${{ github.ref_name }}"
-          releaseBody: |
-            自动构建产物：
-
-            - macOS Apple Silicon：下载文件名含 `macOS-Apple-Silicon` 的 DMG 与 ZIP
-            - macOS Intel：下载文件名含 `macOS-Intel` 的 DMG 与 ZIP
-            - Windows x64：下载 `Windows-x64-Setup.exe`
-
-            macOS 产物使用 ad-hoc 签名且未经过 Apple 公证，首次打开需要在系统设置中手动放行。安装新版本后，首次读取 Claude Code 钥匙串凭据时可能再次出现授权弹窗。
-
-            Windows 产物未做代码签名，首次安装可能触发 SmartScreen 提示。
+          releaseBody: ${{ env.RELEASE_BODY }}
           prerelease: false
-          generateReleaseNotes: true
+          generateReleaseNotes: false
           args: "--target ${{ matrix.target }} --bundles ${{ matrix.bundles }}"
           releaseAssetNamePattern: ${{ matrix.asset_name_pattern }}
 
