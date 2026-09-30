@@ -157,7 +157,7 @@ pub fn read(slot: &str) -> SecretRead {
     // SAFETY: `CredReadW` 成功时返回一个已初始化的 `CREDENTIALW`。
     let blob = unsafe {
         let credential = &*credential;
-        let bytes = if credential.CredentialBlobSize == 0 || credential.CredentialBlob.is_null() {
+        if credential.CredentialBlobSize == 0 || credential.CredentialBlob.is_null() {
             Vec::new()
         } else {
             std::slice::from_raw_parts(
@@ -165,8 +165,7 @@ pub fn read(slot: &str) -> SecretRead {
                 credential.CredentialBlobSize as usize,
             )
             .to_vec()
-        };
-        bytes
+        }
     };
     unsafe { CredFree(credential.cast()) };
 
@@ -193,7 +192,7 @@ pub fn write(slot: &str, value: &Secret) -> SecretWrite {
         return SecretWrite::Failed;
     }
 
-    let mut credential = CREDENTIALW {
+    let credential = CREDENTIALW {
         Flags: 0,
         Type: CRED_TYPE_GENERIC,
         TargetName: target.as_ptr() as *mut u16,
@@ -209,7 +208,7 @@ pub fn write(slot: &str, value: &Secret) -> SecretWrite {
     };
 
     // SAFETY: 各指针指向在调用期间有效的缓冲，且 `Type` 与 blob 编码一致。
-    let ok = unsafe { CredWriteW(&mut credential, 0) };
+    let ok = unsafe { CredWriteW(&credential, 0) };
     if ok != 0 {
         return SecretWrite::Ok;
     }
@@ -274,8 +273,10 @@ fn encode_blob(value: &str) -> Vec<u8> {
 #[cfg(windows)]
 fn decode_blob(blob: &[u8]) -> String {
     let units: Vec<u16> = blob
-        .chunks_exact(2)
-        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| u16::from_le_bytes(*pair))
         .collect();
     String::from_utf16_lossy(&units)
         .trim_end_matches('\0')

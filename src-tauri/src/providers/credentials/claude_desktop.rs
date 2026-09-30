@@ -464,7 +464,7 @@ fn dpapi_unprotect(ciphertext: &[u8]) -> Option<Vec<u8>> {
         return None;
     }
 
-    let mut input = CRYPT_INTEGER_BLOB {
+    let input = CRYPT_INTEGER_BLOB {
         cbData: ciphertext.len() as u32,
         pbData: ciphertext.as_ptr() as *mut u8,
     };
@@ -476,7 +476,7 @@ fn dpapi_unprotect(ciphertext: &[u8]) -> Option<Vec<u8>> {
     // SAFETY: 输入指针指向在调用期间有效的缓冲；输出由系统分配，成功后必须 `LocalFree`。
     let ok = unsafe {
         CryptUnprotectData(
-            &mut input,
+            &input,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
             std::ptr::null_mut(),
