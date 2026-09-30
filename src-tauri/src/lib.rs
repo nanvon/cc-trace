@@ -136,6 +136,7 @@ pub fn run() {
         commands::status::app_get_status,
         commands::quota::quota_get_snapshot,
         commands::quota::quota_refresh,
+        commands::codex_accounts::codex_reset_credits,
         commands::codex_accounts::codex_accounts_get,
         commands::codex_accounts::codex_accounts_import,
         commands::codex_accounts::codex_accounts_update,

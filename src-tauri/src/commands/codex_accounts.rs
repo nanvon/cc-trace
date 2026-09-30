@@ -81,6 +81,31 @@ fn classify(payload: &str) -> Option<ImportInput> {
     Some(ImportInput::PersonalAccessToken(trimmed.to_owned()))
 }
 
+/// 查某个 Codex 主体的额外重置 credit。
+///
+/// 省略 `subject_id` 时查主账号。这条命令**不接入调度**：只有用户点开设置里的
+/// 「其他 Codex 账号」区域时才发请求，并且结果不写进任何缓存。
+#[tauri::command]
+pub async fn codex_reset_credits(
+    core: State<'_, Arc<AppCore>>,
+    subject_id: Option<String>,
+) -> Result<crate::providers::codex_reset_credits::CodexResetCredits, CommandError> {
+    let subject_id = subject_id.unwrap_or_else(|| "codex".to_owned());
+    let imported = Arc::clone(core.imported_codex_store());
+    let credentials = match codex::discover_credentials_for_subject(&subject_id, &imported) {
+        Discovery::Found(credentials) => credentials,
+        Discovery::Missing => return Err(CommandError::CODEX_ACCOUNT_INVALID),
+        Discovery::Expired | Discovery::Unreadable => {
+            return Err(CommandError::CODEX_ACCOUNT_UNREADABLE);
+        }
+        Discovery::Unsupported => return Err(CommandError::CODEX_ACCOUNT_INVALID),
+    };
+
+    crate::providers::codex_reset_credits::fetch(&credentials)
+        .await
+        .map_err(CommandError::from_fetch_outcome)
+}
+
 #[tauri::command]
 pub fn codex_accounts_get(core: State<'_, Arc<AppCore>>) -> Vec<ImportedCodexAccountView> {
     views(&core.imported_codex_accounts())

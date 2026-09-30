@@ -9,6 +9,7 @@
 
 pub mod claude;
 pub mod codex;
+pub mod codex_reset_credits;
 pub mod command_code;
 pub mod credentials;
 pub mod cursor;

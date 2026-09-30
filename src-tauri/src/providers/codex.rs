@@ -634,6 +634,37 @@ pub async fn fetch_usage_with_token(
     })
 }
 
+/// 按额度主体取当前的 Codex 凭据。
+///
+/// 给「查询额外重置 credit」这类按需操作复用：它们不需要完整刷新流程，
+/// 但需要和 Provider 完全相同的凭据来源判定。
+pub fn discover_credentials_for_subject(
+    subject_id: &str,
+    imported_codex: &Arc<ImportedCodexStore>,
+) -> Discovery<CodexCredentials> {
+    let Some(hash) = subject_id.strip_prefix("codex:imported:") else {
+        return credentials::codex::discover();
+    };
+    let Some(account) = imported_codex
+        .load()
+        .into_iter()
+        .find(|account| account.identity_hash() == hash)
+    else {
+        return Discovery::Missing;
+    };
+
+    match imported_codex.load_credentials(hash) {
+        crate::platform::secret_store::SecretRead::Found(secret) => {
+            let account_id =
+                (!account.personal_access_token).then(|| account.chatgpt_account_id().to_owned());
+            credentials::codex::parse_imported(secret.expose(), account_id.as_deref())
+        }
+        crate::platform::secret_store::SecretRead::Missing => Discovery::Missing,
+        crate::platform::secret_store::SecretRead::Denied
+        | crate::platform::secret_store::SecretRead::Failed => Discovery::Unreadable,
+    }
+}
+
 fn is_invalid_grant(status: reqwest::StatusCode, body: &str) -> bool {
     status == reqwest::StatusCode::BAD_REQUEST && body.contains("invalid_grant")
 }
