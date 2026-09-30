@@ -11,6 +11,7 @@
 //! 结构整体写进日志或 panic 信息也不会泄露内容，见 `docs/日志与诊断.md` 第 5 节。
 
 pub mod claude;
+pub mod claude_desktop;
 pub mod codex;
 pub mod command_code;
 pub mod cursor;

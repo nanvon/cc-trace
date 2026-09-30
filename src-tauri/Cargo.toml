@@ -60,6 +60,12 @@ sha2 = "0.10"
 rusqlite = { version = "0.32", features = ["bundled"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+# 解 Claude Desktop 的 Electron safeStorage 缓存（ADR-0035）：
+# AES-128-CBC 密文 + PBKDF2-SHA1 密钥。只用于解密缓存，不参与任何凭据派生。
+aes = "0.8"
+cbc = { version = "0.1", features = ["alloc"] }
+hmac = "0.12"
+sha1 = "0.10"
 # Claude Code 的凭据可能只存在于系统钥匙串，见 ADR-0013。使用系统 API 读写，
 # 不启动 `security` 子进程。
 security-framework = "3"
@@ -84,6 +90,7 @@ objc2 = "0.6"
 windows-sys = { version = "0.61", features = [
   "Win32_Foundation",
   "Win32_Security_Credentials",
+  "Win32_Security_Cryptography",
 ] }
 
 [dev-dependencies]

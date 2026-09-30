@@ -475,7 +475,7 @@ impl ClaudeProvider {
     }
 
     async fn fetch_once(&self) -> ProviderFetchOutcome {
-        let credentials = match credentials::claude::discover() {
+        let credentials = match self.discover_credentials() {
             Discovery::Found(credentials) => credentials,
             Discovery::Missing => return ProviderFetchOutcome::NoCredentials,
             Discovery::Unsupported => return ProviderFetchOutcome::Unsupported,
@@ -542,6 +542,26 @@ impl ClaudeProvider {
         }
     }
 
+    /// 发现凭据：CLI 文件／钥匙串优先，完全缺失时看 Claude Desktop。
+    ///
+    /// Claude Desktop 是**平等来源**而不是备胎：订阅用户的日常客户端往往是它，
+    /// Claude Code 的 8 小时 token 早就过期，而聊天不会去刷新它。
+    fn discover_credentials(&self) -> Discovery<ClaudeCredentials> {
+        match credentials::claude::discover() {
+            Discovery::Found(credentials) => Discovery::Found(credentials),
+            Discovery::Missing => desktop_credentials(None, Utc::now()),
+            other => other,
+        }
+    }
+
+    /// 借 Claude Desktop 的 access token：只借不刷，永不触碰它的 refresh token。
+    fn borrow_desktop_credentials(
+        &self,
+        existing: &ClaudeCredentials,
+    ) -> Discovery<ClaudeCredentials> {
+        desktop_credentials(Some(existing), Utc::now())
+    }
+
     async fn ensure_fresh_credentials(
         &self,
         credentials: ClaudeCredentials,
@@ -572,9 +592,14 @@ impl ClaudeProvider {
             Some(_) => {}
         }
         let Some(refresh_token) = latest.refresh_token.as_ref() else {
-            return Err(ProviderFetchOutcome::Failed {
-                kind: ErrorKind::Credentials,
-            });
+            // CLI 那份没有 refresh token 可用（典型情形：token 由 Claude Code 自己管），
+            // 但它已经过期——先借 Desktop 同账号的 access token 顶上。
+            return match self.borrow_desktop_credentials(&latest) {
+                Discovery::Found(borrowed) => Ok(borrowed),
+                _ => Err(ProviderFetchOutcome::Failed {
+                    kind: ErrorKind::Credentials,
+                }),
+            };
         };
 
         let refreshed = match refresh_tokens(refresh_token).await {
@@ -584,9 +609,16 @@ impl ClaudeProvider {
             // refresh，见 ADR-0007。
             Err(RefreshFailure::Revoked) => {
                 tokio::time::sleep(SOFT_RECOVERY_DELAY).await;
-                return recovered_credentials(refresh_token).ok_or(ProviderFetchOutcome::Failed {
-                    kind: ErrorKind::Credentials,
-                });
+                if let Some(recovered) = recovered_credentials(refresh_token) {
+                    return Ok(recovered);
+                }
+                // 自己刷不动了就借 Desktop 的：仍读不到就报凭据类错误。
+                return match self.borrow_desktop_credentials(&latest) {
+                    Discovery::Found(borrowed) => Ok(borrowed),
+                    _ => Err(ProviderFetchOutcome::Failed {
+                        kind: ErrorKind::Credentials,
+                    }),
+                };
             }
             Err(RefreshFailure::Outcome(outcome)) => return Err(outcome),
         };
@@ -618,6 +650,45 @@ fn reread() -> Option<ClaudeCredentials> {
     match credentials::claude::discover() {
         Discovery::Found(credentials) => Some(credentials),
         _ => None,
+    }
+}
+
+/// 借 Desktop 的 access token 组装凭据。
+///
+/// 没有 CLI 账号档案时用 Desktop 当前登录的账号；有档案时只借同一账号的条目——
+/// 两者账号不同就放弃，避免把别人的额度显示成自己的。
+fn desktop_credentials(
+    existing: Option<&ClaudeCredentials>,
+    now: DateTime<Utc>,
+) -> Discovery<ClaudeCredentials> {
+    use credentials::claude_desktop::{self, DesktopRead};
+
+    if !claude_desktop::has_credential_material() {
+        return Discovery::Missing;
+    }
+
+    let read = match existing {
+        Some(credentials) => claude_desktop::borrow_token(
+            credentials.account_uuid.as_deref(),
+            credentials.organization_uuid.as_deref(),
+            now,
+        ),
+        None => claude_desktop::discover_current_account(now),
+    };
+
+    match read {
+        DesktopRead::Found(borrowed) => {
+            let profile = credentials::claude::read_profile();
+            Discovery::Found(credentials::claude::from_desktop(
+                borrowed,
+                existing
+                    .and_then(|credentials| credentials.email.clone())
+                    .or_else(|| profile.email.map(Secret::new)),
+                existing.and_then(|credentials| credentials.subscription.clone()),
+            ))
+        }
+        DesktopRead::Missing => Discovery::Missing,
+        DesktopRead::Unreadable => Discovery::Unreadable,
     }
 }
 

@@ -27,6 +27,8 @@ use crate::platform::keychain::{self, KeychainRead};
 pub enum ClaudeSource {
     File,
     Keychain,
+    /// 从 Claude Desktop 的 Electron 缓存借来的 access token（只借不刷）。
+    Desktop,
 }
 
 /// 一份可用的 Claude Code OAuth 凭据。
@@ -41,6 +43,11 @@ pub struct ClaudeCredentials {
     pub source: ClaudeSource,
     /// 只在凭据来自 macOS 钥匙串时存在，用于把刷新结果写回刚才读到的精确条目。
     pub keychain_account: Option<Secret>,
+    /// 账号与组织 id，取自 `~/.claude.json` 的 `oauthAccount`。
+    /// 用来判定 Claude Desktop 缓存里的条目是否属于同一个账号——
+    /// 只有两者都对得上才借，否则会把别人的额度显示成自己的。
+    pub account_uuid: Option<String>,
+    pub organization_uuid: Option<String>,
 }
 
 /// 手动实现：只暴露「有没有」与来源，不暴露任何取值。
@@ -95,13 +102,18 @@ pub fn discover() -> Discovery<ClaudeCredentials> {
         Discovery::Expired => Discovery::Expired,
     };
 
+    // 账号档案来自 `~/.claude.json`：OAuth 凭据里没有邮箱与账号 id，
+    // Claude Desktop 借还判定需要它们。
+    let profile = read_profile();
     match discovery {
-        Discovery::Found(credentials) if credentials.email.is_none() => {
-            Discovery::Found(ClaudeCredentials {
-                email: read_email_fallback().map(Secret::new),
-                ..credentials
-            })
-        }
+        Discovery::Found(credentials) => Discovery::Found(ClaudeCredentials {
+            email: credentials
+                .email
+                .or_else(|| profile.email.clone().map(Secret::new)),
+            account_uuid: profile.account_uuid.clone(),
+            organization_uuid: profile.organization_uuid.clone(),
+            ..credentials
+        }),
         other => other,
     }
 }
@@ -137,14 +149,58 @@ fn read_keychain() -> Discovery<ClaudeCredentials> {
 }
 
 /// `~/.claude.json` 只用来补一个显示用邮箱，读不到就算了，不影响凭据可用性。
-fn read_email_fallback() -> Option<String> {
-    let raw = fs::read_to_string(config_path()?).ok()?;
-    let root: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    non_empty(
-        root.get("oauthAccount")?
-            .get("emailAddress")
-            .and_then(serde_json::Value::as_str),
-    )
+/// `~/.claude.json` 顶层 `oauthAccount` 里的账号信息。
+///
+/// OAuth 凭据本身不含邮箱与账号 id，CLI 登录时会把它们写在这里。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ClaudeProfile {
+    pub email: Option<String>,
+    pub account_uuid: Option<String>,
+    pub organization_uuid: Option<String>,
+}
+
+/// 读账号档案。文件缺失或字段缺失都只是「不知道」，不是错误。
+pub fn read_profile() -> ClaudeProfile {
+    let Some(path) = config_path() else {
+        return ClaudeProfile::default();
+    };
+    let Ok(raw) = fs::read_to_string(path) else {
+        return ClaudeProfile::default();
+    };
+    let Ok(root) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return ClaudeProfile::default();
+    };
+    let Some(account) = root.get("oauthAccount") else {
+        return ClaudeProfile::default();
+    };
+    let field = |name: &str| non_empty(account.get(name).and_then(serde_json::Value::as_str));
+    ClaudeProfile {
+        email: field("emailAddress"),
+        account_uuid: field("accountUuid"),
+        organization_uuid: field("organizationUuid"),
+    }
+}
+
+/// 从 Claude Desktop 借来的 access token 组装一份可用凭据。
+///
+/// **不带 refresh token**：Anthropic 的 refresh token 一次性轮换且有重用检测，
+/// 拿它刷新会把用户从 Claude Desktop 挤下线；access token 是只读凭证，没有这个问题。
+pub fn from_desktop(
+    borrowed: super::claude_desktop::BorrowedDesktopToken,
+    email: Option<Secret>,
+    subscription: Option<String>,
+) -> ClaudeCredentials {
+    ClaudeCredentials {
+        access_token: Secret::new(borrowed.access_token),
+        refresh_token: None,
+        email,
+        subscription,
+        expires_at: borrowed.expires_at,
+        source: ClaudeSource::Desktop,
+        keychain_account: None,
+        account_uuid: Some(borrowed.account_uuid),
+        organization_uuid: None,
+    }
 }
 
 /// 把已读到的 payload 解析成凭据。文件与钥匙串共用同一套结构。
@@ -178,6 +234,8 @@ pub fn parse(raw: &str, source: ClaudeSource) -> Discovery<ClaudeCredentials> {
         expires_at: parse_expires_at(oauth.get("expiresAt")),
         source,
         keychain_account: None,
+        account_uuid: None,
+        organization_uuid: None,
     })
 }
 
@@ -193,6 +251,8 @@ pub fn write_back(expected: &ClaudeCredentials, tokens: &RefreshedTokens) -> io:
             })?;
             write_back_to_file(&path, expected, tokens)
         }
+        // 借来的 Desktop 凭据不写回任何地方：它不属于我们，后续刷新会重新借。
+        ClaudeSource::Desktop => Ok(()),
         ClaudeSource::Keychain => {
             let account = expected.keychain_account.as_ref().ok_or_else(|| {
                 io::Error::new(
