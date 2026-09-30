@@ -28,7 +28,7 @@ use crate::usage::model::{
 use crate::usage::pricing::{PricingCatalog, PricingUsageKey};
 
 const DATABASE_FILE: &str = "usage.db";
-const SCHEMA_VERSION: i64 = 8;
+const SCHEMA_VERSION: i64 = 9;
 
 #[derive(Debug)]
 pub enum UsageDbError {
@@ -686,6 +686,141 @@ impl UsageDb {
 
         transaction.commit()?;
         Ok(inserted)
+    }
+
+    // ---- Cursor 远端计量（schema v9） ----
+
+    /// 某个账号已经拉全的自然日。
+    pub fn cursor_coverage(&self, account_key: &str) -> Result<Vec<String>, UsageDbError> {
+        let connection = self.open_read()?;
+        let mut statement = connection.prepare(
+            "SELECT day_local FROM cursor_usage_coverage
+              WHERE account_key = ?1 ORDER BY day_local",
+        )?;
+        let rows = statement.query_map(params![account_key], |row| row.get::<_, String>(0))?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// 覆盖表里的全部账号键。账号换了要整体重拉，所以需要知道之前记的是谁。
+    pub fn cursor_coverage_accounts(&self) -> Result<Vec<String>, UsageDbError> {
+        let connection = self.open_read()?;
+        let mut statement = connection.prepare(
+            "SELECT DISTINCT account_key FROM cursor_usage_coverage ORDER BY account_key",
+        )?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// 按自然日原子替换一个账号的远端计费用量。
+    ///
+    /// 替换单位是「天」而不是「事件」：服务端不提供稳定事件 id，只有整天替换才能
+    /// 保证重复拉取不会把同一天算两遍。调用方必须传**一整天的桶**（`day_local`
+    /// 落在 `[from_day, to_day]` 闭区间内），函数只删这些天，不动其他天。
+    ///
+    /// 同时更新覆盖表：一个自然日只有真的拉全了才会被调用方传进来。
+    pub fn cursor_replace_days(
+        &self,
+        account_key: &str,
+        from_day: &str,
+        to_day: &str,
+        conversation_key: &str,
+        buckets: &[CursorRemoteBucket],
+    ) -> Result<CursorReplaceResult, UsageDbError> {
+        self.initialize()?;
+        let _guard = self.write_lock.lock().expect("usage db write lock");
+        let mut connection = self.open_write_unchecked()?;
+        let transaction = connection.transaction()?;
+
+        let removed = transaction.execute(
+            "DELETE FROM usage_entries
+              WHERE source = 'cursor' AND day_local >= ?1 AND day_local <= ?2",
+            params![from_day, to_day],
+        )?;
+
+        let mut inserted = 0_u64;
+        {
+            let mut statement = transaction.prepare(
+                "INSERT INTO usage_entries (
+                   file_key, source, dedup_key, conversation_key, model, speed,
+                   inference_geo, occurred_at, day_local, uncached_input_tokens,
+                   output_tokens, reasoning_output_tokens, cache_read_input_tokens,
+                   cache_write_5m_input_tokens, cache_write_1h_input_tokens,
+                   api_equivalent_cost_nanos, billing_equivalent_tokens_nanos,
+                   fast_multiplier_nanos, pricing_fingerprint, request_count,
+                   granularity
+                 ) VALUES (
+                   ?1, 'cursor', ?2, ?3, ?4, 'standard', 'unknown', ?5, ?6, ?7, ?8, 0, ?9,
+                   ?10, 0, ?11, NULL, NULL, NULL, ?12, 'day'
+                 )",
+            )?;
+            let now = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+            let _ = now;
+            for bucket in buckets {
+                let occurred_at = local_day_start_utc(&bucket.day_local);
+                inserted += statement.execute(params![
+                    format!("cursor:remote:{account_key}"),
+                    format!(
+                        "cursor-day:{account_key}:{}:{}",
+                        bucket.day_local, bucket.model
+                    ),
+                    conversation_key,
+                    bucket.model,
+                    occurred_at,
+                    bucket.day_local,
+                    bucket.input_tokens,
+                    bucket.output_tokens,
+                    bucket.cache_read_tokens,
+                    bucket.cache_write_tokens,
+                    bucket.charged_nanos,
+                    bucket.request_count,
+                ])? as u64;
+            }
+        }
+
+        transaction.execute(
+            "DELETE FROM cursor_usage_coverage
+              WHERE account_key = ?1 AND day_local >= ?2 AND day_local <= ?3",
+            params![account_key, from_day, to_day],
+        )?;
+        {
+            let mut statement = transaction.prepare(
+                "INSERT OR REPLACE INTO cursor_usage_coverage (account_key, day_local, updated_at)
+                 VALUES (?1, ?2, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))",
+            )?;
+            let mut day = from_day.to_owned();
+            loop {
+                statement.execute(params![account_key, day])?;
+                if day.as_str() >= to_day {
+                    break;
+                }
+                day = next_day(&day).ok_or(UsageDbError::Sql)?;
+            }
+        }
+
+        transaction.commit()?;
+        Ok(CursorReplaceResult {
+            removed: u64::try_from(removed).map_err(|_| UsageDbError::Sql)?,
+            inserted,
+        })
+    }
+
+    /// 换账号时清掉旧账号的远端计量与覆盖状态：两个账号的用量不能混在一张账上。
+    pub fn cursor_reset_account(&self, account_key: &str) -> Result<(), UsageDbError> {
+        self.initialize()?;
+        let _guard = self.write_lock.lock().expect("usage db write lock");
+        let mut connection = self.open_write_unchecked()?;
+        let transaction = connection.transaction()?;
+        transaction.execute(
+            "DELETE FROM usage_entries
+              WHERE source = 'cursor' AND file_key = ?1",
+            params![format!("cursor:remote:{account_key}")],
+        )?;
+        transaction.execute(
+            "DELETE FROM cursor_usage_coverage WHERE account_key = ?1",
+            params![account_key],
+        )?;
+        transaction.commit()?;
+        Ok(())
     }
 
     pub fn summary(&self, query: &UsageSummaryQuery) -> Result<UsageSummary, UsageDbError> {
@@ -1590,7 +1725,7 @@ impl UsageDb {
 }
 
 fn migrate(connection: &mut Connection, from: i64) -> Result<(), UsageDbError> {
-    if !matches!(from, 0..=7) {
+    if !matches!(from, 0..=8) {
         return Err(UsageDbError::UnsupportedSchema);
     }
     let transaction = connection.transaction()?;
@@ -1719,6 +1854,10 @@ fn migrate(connection: &mut Connection, from: i64) -> Result<(), UsageDbError> {
     // v8：DSH 的会话归属与「源日志被清理后仍保留历史」所需的贡献汇总。
     if from < 8 {
         upgrade_to_v8(&transaction)?;
+    }
+    // v9：Cursor 远端计量的覆盖表。按自然日记「已经拉全」，重复拉取不会重复入账。
+    if from < 9 {
+        upgrade_to_v9(&transaction)?;
     }
     transaction.commit()?;
     Ok(())
@@ -2172,6 +2311,67 @@ fn speed_from_db(value: &str) -> rusqlite::Result<UsageSpeed> {
     }
 }
 
+/// 一个按天粒度的 Cursor 远端计量桶（来自 `usage::cursor_remote`）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CursorRemoteBucket {
+    pub day_local: String,
+    pub model: String,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub cache_write_tokens: i64,
+    /// 服务端计费金额，纳秒单位。
+    pub charged_nanos: i64,
+    pub request_count: i64,
+}
+
+/// 一次按日替换的结果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CursorReplaceResult {
+    pub removed: u64,
+    pub inserted: u64,
+}
+
+/// 本地自然日零点对应的 UTC 时刻（`YYYY-MM-DD` → ISO 8601）。
+///
+/// 按天粒度的事实只有自然日一个时间锚点；写 UTC 零点会让西半球时区的行落到当天窗口外，
+/// 因此按本地时区换算。夏令时下零点不存在时取当天第一个有效时刻。
+fn local_day_start_utc(day_local: &str) -> String {
+    use chrono::{Local, NaiveDate, TimeZone};
+
+    let Ok(day) = NaiveDate::parse_from_str(day_local, "%Y-%m-%d") else {
+        return format!("{day_local}T00:00:00Z");
+    };
+    let Some(naive) = day.and_hms_opt(0, 0, 0) else {
+        return format!("{day_local}T00:00:00Z");
+    };
+    match Local.from_local_datetime(&naive) {
+        chrono::LocalResult::Single(time) => time
+            .with_timezone(&Utc)
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        chrono::LocalResult::Ambiguous(first, _) => first
+            .with_timezone(&Utc)
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        chrono::LocalResult::None => day
+            .and_hms_opt(1, 0, 0)
+            .and_then(|naive| Local.from_local_datetime(&naive).earliest())
+            .map(|time| {
+                time.with_timezone(&Utc)
+                    .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+            })
+            .unwrap_or_else(|| format!("{day_local}T00:00:00Z")),
+    }
+}
+
+/// `YYYY-MM-DD` 的次日。
+fn next_day(day_local: &str) -> Option<String> {
+    use chrono::{Days, NaiveDate};
+    NaiveDate::parse_from_str(day_local, "%Y-%m-%d")
+        .ok()?
+        .checked_add_days(Days::new(1))
+        .map(|day| day.format("%Y-%m-%d").to_string())
+}
+
 /// 写入 `dsh_sessions` 的一行。父会话与标题按「新值非空才覆盖」合并。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DshSessionUpsert {
@@ -2350,6 +2550,24 @@ fn upgrade_to_v8(transaction: &rusqlite::Transaction) -> Result<(), UsageDbError
            PRIMARY KEY (session_id, day_local, model, speed)
          );
          PRAGMA user_version = 8;",
+    )?;
+    Ok(())
+}
+
+/// v8 → v9：Cursor 远端计量的按日覆盖表。
+///
+/// 远端计量没有事件 id，去重只能靠「按自然日原子替换」：某天拉全了就整天替换，
+/// 因此需要逐日记下覆盖状态，而不是记一个范围——范围在部分失败时无法表达空洞。
+fn upgrade_to_v9(transaction: &rusqlite::Transaction) -> Result<(), UsageDbError> {
+    transaction.execute_batch(
+        "CREATE TABLE cursor_usage_coverage (
+           account_key TEXT NOT NULL,
+           day_local TEXT NOT NULL,
+           updated_at TEXT NOT NULL,
+           PRIMARY KEY (account_key, day_local)
+         );
+         CREATE INDEX ix_cursor_coverage_account ON cursor_usage_coverage(account_key);
+         PRAGMA user_version = 9;",
     )?;
     Ok(())
 }
@@ -2808,6 +3026,10 @@ mod tests {
                 ][..],
             ),
             (
+                "cursor_usage_coverage",
+                &["account_key", "day_local", "updated_at"][..],
+            ),
+            (
                 "dsh_session_usage",
                 &[
                     "session_id",
@@ -3086,6 +3308,153 @@ mod tests {
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].resets_at.as_deref(), Some("2026-07-30T06:00:00Z"));
         assert_eq!(events[1].resets_at, None);
+    }
+
+    #[test]
+    fn cursor_remote_days_are_replaced_atomically_and_covered() {
+        let (_dir, database) = database();
+        let bucket = |day: &str, model: &str, input: i64| CursorRemoteBucket {
+            day_local: day.to_owned(),
+            model: model.to_owned(),
+            input_tokens: input,
+            output_tokens: 5,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            charged_nanos: 1_000_000,
+            request_count: 2,
+        };
+
+        let first = database
+            .cursor_replace_days(
+                "account-1",
+                "2026-10-01",
+                "2026-10-02",
+                "cursor:account-1",
+                &[
+                    bucket("2026-10-01", "a", 100),
+                    bucket("2026-10-02", "a", 50),
+                ],
+            )
+            .expect("replace");
+        assert_eq!(first.inserted, 2);
+        assert_eq!(
+            database.cursor_coverage("account-1").expect("coverage"),
+            vec!["2026-10-01".to_owned(), "2026-10-02".to_owned()]
+        );
+
+        // 再拉一次同一天：整天替换，不叠加。
+        let second = database
+            .cursor_replace_days(
+                "account-1",
+                "2026-10-01",
+                "2026-10-01",
+                "cursor:account-1",
+                &[bucket("2026-10-01", "a", 7)],
+            )
+            .expect("replace again");
+        assert_eq!(second.removed, 1);
+        assert_eq!(second.inserted, 1);
+
+        let summary = database
+            .summary(&UsageSummaryQuery {
+                filter: UsageFilter::default(),
+                group_by: crate::contracts::UsageGroupBy::Source,
+            })
+            .expect("summary");
+        assert_eq!(summary.entry_count, 2, "10-01 被替换、10-02 保留");
+        // 两条按天事实：替换后的 7 与保留的 50。
+        assert_eq!(summary.tokens.uncached_input_tokens, 57);
+        assert_eq!(summary.request_count, 4);
+        // 按天粒度的事实请求数来自事件条数，不是行数。
+        assert_eq!(summary.rows[0].entry_count, 2);
+    }
+
+    #[test]
+    fn cursor_remote_entries_are_unattributed_and_excluded_from_conversations() {
+        let (_dir, database) = database();
+        database
+            .cursor_replace_days(
+                "account-1",
+                "2026-10-01",
+                "2026-10-01",
+                "cursor:account-1",
+                &[CursorRemoteBucket {
+                    day_local: "2026-10-01".to_owned(),
+                    model: "claude-4.5-sonnet".to_owned(),
+                    input_tokens: 10,
+                    output_tokens: 1,
+                    cache_read_tokens: 0,
+                    cache_write_tokens: 0,
+                    charged_nanos: 0,
+                    request_count: 1,
+                }],
+            )
+            .expect("replace");
+
+        let page = database
+            .conversations(
+                &UsageConversationQuery {
+                    filter: UsageFilter::default(),
+                    ..UsageConversationQuery::default()
+                },
+                10,
+                0,
+                None,
+                None,
+            )
+            .expect("conversations");
+        // 远端计量没有对话身份：不进入对话列表，但计入概览与「未归属」分组。
+        assert_eq!(page.total, 0);
+        assert!(
+            !database
+                .cursor_coverage("account-1")
+                .expect("coverage")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn switching_cursor_accounts_drops_the_previous_ledger() {
+        let (_dir, database) = database();
+        let bucket = |day: &str| CursorRemoteBucket {
+            day_local: day.to_owned(),
+            model: "a".to_owned(),
+            input_tokens: 10,
+            output_tokens: 1,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            charged_nanos: 0,
+            request_count: 1,
+        };
+
+        database
+            .cursor_replace_days(
+                "account-1",
+                "2026-10-01",
+                "2026-10-01",
+                "cursor:account-1",
+                &[bucket("2026-10-01")],
+            )
+            .expect("first account");
+        assert_eq!(
+            database.cursor_coverage_accounts().expect("accounts").len(),
+            1
+        );
+
+        database.cursor_reset_account("account-1").expect("reset");
+        let summary = database
+            .summary(&UsageSummaryQuery {
+                filter: UsageFilter::default(),
+                group_by: crate::contracts::UsageGroupBy::Source,
+            })
+            .expect("summary");
+        assert_eq!(summary.entry_count, 0, "换账号后旧账必须清掉");
+        assert!(
+            database
+                .cursor_coverage("account-1")
+                .expect("coverage")
+                .is_empty()
+        );
     }
 
     #[test]

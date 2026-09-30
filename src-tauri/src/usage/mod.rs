@@ -3,7 +3,8 @@
 //! 扫描只读外部文件，所有派生数据写入 CC Trace 自己的 SQLite。command 只接收固定
 //! 查询参数，不接收路径；测试通过显式临时根目录覆盖，避免触碰真实用户数据。
 
-pub(crate) mod dsh;
+pub(crate) mod cursor_remote;
+mod dsh;
 mod dsh_zstd;
 pub(crate) mod model;
 mod opencode;
@@ -20,7 +21,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::UNIX_EPOCH;
 
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, Local, SecondsFormat, Utc};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
@@ -32,7 +33,7 @@ use crate::contracts::{
 };
 #[cfg(feature = "perf-baseline")]
 use crate::storage::PerfStats;
-use crate::storage::{DshSessionUpsert, UsageDb, UsageDbError};
+use crate::storage::{CursorRemoteBucket, DshSessionUpsert, UsageDb, UsageDbError};
 
 use model::{ClaudeCursor, CodexCursor, ConversationFact, ParsedLine, PiCursor, ScanBatch};
 use parser::{parse_claude_line, parse_codex_line, parse_pi_line};
@@ -45,6 +46,14 @@ const MAX_LINE_BYTES: usize = 16 * 1024 * 1024;
 const BATCH_LINES: u64 = 2_000;
 const BATCH_BYTES: u64 = 8 * 1024 * 1024;
 const PREFIX_BYTES: u64 = 4_096;
+/// 远端计量的最小间隔：Dashboard 对频率敏感，不跟随本地扫描节奏（默认 5 分钟）。
+const CURSOR_REMOTE_MIN_INTERVAL_MINUTES: i64 = 5;
+/// 被限流后的退避。
+const CURSOR_REMOTE_RATE_LIMIT_BACKOFF_MINUTES: i64 = 10;
+/// 可重试失败后的退避。
+const CURSOR_REMOTE_ERROR_BACKOFF_MINUTES: i64 = 5;
+/// 不可重试失败（结构不符、范围非法）后的退避：立刻重试只会拿到同一个结果。
+const CURSOR_REMOTE_PERMANENT_BACKOFF_MINUTES: i64 = 60;
 /// DSH 父链解析的深度上限。超出即自认根：宁可少归一条，也不做无界遍历。
 const DSH_ROOT_MAX_DEPTH: usize = 32;
 const DEFAULT_LIMIT: u32 = 50;
@@ -68,18 +77,274 @@ pub struct UsageService {
     db: UsageDb,
     pricing: PricingCatalogStore,
     status: Mutex<UsageScanStatus>,
+    /// Cursor 远端计量的节流与退避状态。远端拉取不参与本地扫描的水位。
+    cursor_remote: Mutex<CursorRemoteState>,
     /// 串行化“开始扫描”与“提交价格 + 数据库重计价”，保证两者不会越过安全边界。
     lifecycle: Mutex<()>,
     reprice_pending: AtomicBool,
     cancel: AtomicBool,
 }
 
+/// 账号哈希：覆盖表与到条目键都用它，**不落账号明文**。
+fn cursor_account_hash(
+    credentials: &crate::providers::credentials::cursor::CursorCredentials,
+) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(b"cc-trace-cursor-account-v1");
+    hasher.update(
+        credentials
+            .account_key()
+            .map(|key| key.expose().to_owned())
+            .unwrap_or_else(|| credentials.subject.clone())
+            .as_bytes(),
+    );
+    hasher
+        .finalize()
+        .iter()
+        .take(8)
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// 取数错误的稳定标签。日志与状态里只留标签与原因分类，不带响应原文。
+fn error_label(error: &cursor_remote::CursorFetchError) -> &'static str {
+    match error {
+        cursor_remote::CursorFetchError::InvalidRange => "invalid-range",
+        cursor_remote::CursorFetchError::Transport => "transport",
+        cursor_remote::CursorFetchError::Http(_) => "http",
+        cursor_remote::CursorFetchError::InvalidPage => "invalid-page",
+        cursor_remote::CursorFetchError::PaginationInconsistent => "pagination-inconsistent",
+        cursor_remote::CursorFetchError::PageLimitReached => "page-limit",
+        cursor_remote::CursorFetchError::SingleDayTooDense => "single-day-too-dense",
+        cursor_remote::CursorFetchError::NumericOverflow => "numeric-overflow",
+    }
+}
+
+/// Cursor 远端计量的对外状态。界面用它说明「为什么现在没有远端数据」。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CursorRemoteStatus {
+    pub last_success_at: Option<String>,
+    pub last_error: Option<String>,
+    /// 退避期内不再发请求的时刻。
+    pub retry_after: Option<String>,
+    /// 当前账号已经拉全的自然日数。
+    pub covered_days: u64,
+}
+
+#[derive(Debug, Clone, Default)]
+struct CursorRemoteState {
+    last_attempt_at: Option<DateTime<Utc>>,
+    last_success_at: Option<DateTime<Utc>>,
+    retry_after: Option<DateTime<Utc>>,
+    last_error: Option<String>,
+    /// 上一次拉取用的账号哈希：变了就清掉旧账号的远端账，不把两个账号混在一起。
+    account_hash: Option<String>,
+}
+
+/// 一次远端刷新的结局。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CursorRemoteOutcome {
+    /// 没有可用的 Cursor 登录态：远端计量整体跳过，不是错误。
+    NoCredential,
+    /// 距上次尝试太近，或还在退避期内。
+    Throttled,
+    /// 拉取成功（可能只是补齐了部分日子）。
+    Updated { ranges: usize, buckets: usize },
+    /// 拉取失败：保留上一次的远端数据，等退避结束再试。
+    Failed { error: String, retry_after: String },
+}
+
 impl UsageService {
+    /// 远端计量的状态快照。
+    pub fn cursor_remote_status(&self) -> CursorRemoteStatus {
+        let state = self.cursor_remote.lock().expect("cursor remote lock");
+        let covered_days = state
+            .account_hash
+            .as_deref()
+            .and_then(|account| self.db.cursor_coverage(account).ok())
+            .map(|days| days.len() as u64)
+            .unwrap_or(0);
+        CursorRemoteStatus {
+            last_success_at: state
+                .last_success_at
+                .map(|time| time.to_rfc3339_opts(SecondsFormat::Secs, true)),
+            last_error: state.last_error.clone(),
+            retry_after: state
+                .retry_after
+                .map(|time| time.to_rfc3339_opts(SecondsFormat::Secs, true)),
+            covered_days,
+        }
+    }
+
+    /// 拉取 Cursor 远端计费用量。
+    ///
+    /// 自己的节流与退避在这里定：远端接口对频率敏感，**不跟随本地扫描节奏**。
+    /// `force` 只用于用户手动刷新，仍然绕过不了 429 之后的那段退避。
+    pub async fn refresh_cursor_remote(self: &Arc<Self>, force: bool) -> CursorRemoteOutcome {
+        let now = Utc::now();
+        {
+            let state = self.cursor_remote.lock().expect("cursor remote lock");
+            if let Some(retry_after) = state.retry_after
+                && retry_after > now
+            {
+                return CursorRemoteOutcome::Throttled;
+            }
+            if !force
+                && state.last_attempt_at.is_some_and(|last| {
+                    (now - last).num_minutes() < CURSOR_REMOTE_MIN_INTERVAL_MINUTES
+                })
+            {
+                return CursorRemoteOutcome::Throttled;
+            }
+        }
+
+        let credentials = match crate::providers::credentials::cursor::discover() {
+            crate::providers::credentials::Discovery::Found(credentials) => credentials,
+            _ => return CursorRemoteOutcome::NoCredential,
+        };
+        let account_hash = cursor_account_hash(&credentials);
+        self.cursor_remote
+            .lock()
+            .expect("cursor remote lock")
+            .last_attempt_at = Some(now);
+
+        // 换账号：旧账号的远端账整份清掉，覆盖状态也清掉，否则两边会混成一张账。
+        let previous_accounts = self.db.cursor_coverage_accounts().unwrap_or_default();
+        if previous_accounts
+            .iter()
+            .any(|account| account != &account_hash)
+        {
+            for account in previous_accounts {
+                if account != account_hash {
+                    let _ = self.db.cursor_reset_account(&account);
+                }
+            }
+        }
+
+        let coverage: cursor_remote::CursorCoverage = self
+            .db
+            .cursor_coverage(&account_hash)
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|day| chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d").ok())
+            .collect();
+        let today = Local::now().date_naive();
+        let ranges = cursor_remote::plan_fetch_ranges(today, &coverage, None);
+        if ranges.is_empty() {
+            self.mark_cursor_success(now, Some(account_hash));
+            return CursorRemoteOutcome::Updated {
+                ranges: 0,
+                buckets: 0,
+            };
+        }
+
+        let cookie = credentials.cookie_header();
+        let mut total_buckets = 0_usize;
+        let mut completed = 0_usize;
+        for (from_ms, to_ms) in &ranges {
+            match cursor_remote::fetch_range(&cookie, *from_ms, *to_ms).await {
+                Ok(events) => {
+                    let buckets = match cursor_remote::make_buckets(&events) {
+                        Ok(buckets) => buckets,
+                        Err(error) => return self.fail_cursor_remote(&error, now),
+                    };
+                    let Some(from_day) = cursor_remote::local_day_of(*from_ms) else {
+                        return self.fail_cursor_remote(
+                            &cursor_remote::CursorFetchError::InvalidRange,
+                            now,
+                        );
+                    };
+                    let Some(to_day) = cursor_remote::local_day_of(to_ms - 1) else {
+                        return self.fail_cursor_remote(
+                            &cursor_remote::CursorFetchError::InvalidRange,
+                            now,
+                        );
+                    };
+                    let rows: Vec<CursorRemoteBucket> = buckets
+                        .iter()
+                        .map(|bucket| CursorRemoteBucket {
+                            day_local: bucket.day_local.clone(),
+                            model: bucket.model.clone(),
+                            input_tokens: bucket.input_tokens,
+                            output_tokens: bucket.output_tokens,
+                            cache_read_tokens: bucket.cache_read_tokens,
+                            cache_write_tokens: bucket.cache_write_tokens,
+                            charged_nanos: bucket.charged_nanos,
+                            request_count: bucket.request_count,
+                        })
+                        .collect();
+                    let conversation_key = format!("cursor:{account_hash}");
+                    total_buckets += rows.len();
+                    if let Err(_error) = self.db.cursor_replace_days(
+                        &account_hash,
+                        &from_day.format("%Y-%m-%d").to_string(),
+                        &to_day.format("%Y-%m-%d").to_string(),
+                        &conversation_key,
+                        &rows,
+                    ) {
+                        return self.fail_cursor_remote(
+                            &cursor_remote::CursorFetchError::InvalidPage,
+                            now,
+                        );
+                    }
+                    completed += 1;
+                }
+                Err(error) => return self.fail_cursor_remote(&error, now),
+            }
+        }
+
+        self.mark_cursor_success(now, Some(account_hash));
+        CursorRemoteOutcome::Updated {
+            ranges: completed,
+            buckets: total_buckets,
+        }
+    }
+
+    fn mark_cursor_success(&self, now: DateTime<Utc>, account_hash: Option<String>) {
+        let mut state = self.cursor_remote.lock().expect("cursor remote lock");
+        state.last_success_at = Some(now);
+        state.retry_after = None;
+        state.last_error = None;
+        if account_hash.is_some() {
+            state.account_hash = account_hash;
+        }
+    }
+
+    /// 失败时记退避。退避长度按错误的**性质**分档，不按文案比字符串：
+    /// 被限流最久（10 分钟，远端最敏感），可重试的（网络、5xx、分页不一致）中等（5 分钟），
+    /// 其余（结构不符、范围非法）更久（60 分钟）——立刻重试只会拿到同一个结果。
+    fn fail_cursor_remote(
+        self: &Arc<Self>,
+        error: &cursor_remote::CursorFetchError,
+        now: DateTime<Utc>,
+    ) -> CursorRemoteOutcome {
+        let backoff = if error.is_rate_limited() {
+            CURSOR_REMOTE_RATE_LIMIT_BACKOFF_MINUTES
+        } else if error.is_retryable() {
+            CURSOR_REMOTE_ERROR_BACKOFF_MINUTES
+        } else {
+            CURSOR_REMOTE_PERMANENT_BACKOFF_MINUTES
+        };
+        let label = error_label(error);
+        let retry_after = now + chrono::Duration::minutes(backoff);
+        {
+            let mut state = self.cursor_remote.lock().expect("cursor remote lock");
+            state.last_error = Some(label.to_owned());
+            state.retry_after = Some(retry_after);
+        }
+        CursorRemoteOutcome::Failed {
+            error: label.to_owned(),
+            retry_after: retry_after.to_rfc3339_opts(SecondsFormat::Secs, true),
+        }
+    }
+
     pub fn new(config_dir: PathBuf) -> Arc<Self> {
         Arc::new(Self {
             db: UsageDb::new(config_dir.clone()),
             pricing: PricingCatalogStore::new(config_dir),
             status: Mutex::new(UsageScanStatus::default()),
+            cursor_remote: Mutex::new(CursorRemoteState::default()),
             lifecycle: Mutex::new(()),
             reprice_pending: AtomicBool::new(false),
             cancel: AtomicBool::new(false),

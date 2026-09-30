@@ -527,10 +527,25 @@ Windows 行为在实机验证前一律标注未验证。
 - [x] 项目身份与未归属口径定稿（[ADR-0034](决策/ADR-0034-项目身份与未归属口径.md)），扫描层先落纯文本身份键，Git 根与 worktree 归组在批次 5 补齐。
 - [x] 校验：Rust 255 项测试、`cargo fmt`、`cargo clippy -D warnings` 全通过；前端 111 项 vitest、`vue-tsc`、eslint、prettier 全通过。
 
-### 批次 2～8、10：待做
+### 批次 2：五个额度服务（2026-10-01 完成）
 
-- [ ] 批次 2：五个额度 Provider 的凭据发现与额度客户端（含 Windows 凭据存储）。
-- [ ] 批次 3：本地数据源扩展（DSH zstd、Cursor 远端计量）。
+- [x] 平台秘密存储：macOS 钥匙串／Windows 凭据管理器（`CREDENTIALW` 与常量取自 windows-sys 官方绑定），无系统秘密存储的平台明确拒绝，不退回明文文件。
+- [x] Codex：导入副账号（元数据 `codex-accounts.json` + 凭据进系统存储，槽位按身份短哈希）、PAT 模式、额外重置次数查询；Provider 显式区分环境／导入两种凭据来源。
+- [x] Claude：Claude Desktop 作为**平等**来源（只借 access token，永不读取其 refresh token）；平台解密分叉收敛在一处（macOS 钥匙串 + AES-128-CBC／Windows DPAPI）。
+- [x] Antigravity：jetski／oauth_creds 两来源、按需续期并回写同一文件、client secret 从本机官方组件提取；loadCodeAssist 三阶段富化与四档窗口映射。
+- [x] Cursor：只读 `state.vscdb` 登录态（WAL 打不开时退到 immutable 只读快照），Total／Auto／API 三档与 Unlimited。
+- [x] Command Code：五档凭据来源、whoami + credits + subscriptions、5h／weekly／月度 credits。
+- [x] 校验：Rust 341 项测试通过，`cargo fmt`／`clippy -D warnings` 干净（本批结束时 341 → 后续批次继续累加）。
+
+### 批次 3：本地数据源扩展到六个（2026-10-01 完成）
+
+- [x] DSH：多帧 zstd 容器（帧边界扫描不解压、水位只按完整帧推进、单帧解码要求恰好一帧）、会话记录语义（种子边界、槽位替换、重试代次、标题覆盖）、schema v8（`dsh_sessions` + `dsh_session_usage`）、子代理按父链归根、源日志被清理后仍保留历史。
+- [x] Cursor 远端计量：Dashboard 事件流分页与重叠消解、按自然日原子替换（schema v9 覆盖表）、按天×模型分桶、范围规划（最近两天 ∪ 本周 ∪ 计费周期）与跨月切块、换账号清旧账与 429 退避。
+- [x] DSH 归入定价参与者（日志只有 token 用量，按价格表估算）；Pi／OpenCode／Cursor 自带费用。
+- [x] 校验：Rust 403 项测试通过，`cargo fmt`／`clippy -D warnings` 干净。
+
+### 批次 4～8、10：待做
+
 - [ ] 批次 4：额度页（周期记录、用满预估、多账号分区）。
 - [ ] 批次 5：项目分析页（Git 根、worktree 归组、未归属分组）。
 - [ ] 批次 6：概览页重构（粒度日／周／月、范围分档、构成四维、高消耗对话、排行口径）。

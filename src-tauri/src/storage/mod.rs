@@ -23,4 +23,6 @@ pub use quota_cache::{CachedProvider, QuotaCache, QuotaCacheStore};
 pub use settings_store::{LoadIssue, SettingsStore};
 #[cfg(feature = "perf-baseline")]
 pub use usage_db::PerfStats;
-pub use usage_db::{CommitResult, DshSessionUpsert, UsageDb, UsageDbError};
+pub use usage_db::{
+    CommitResult, CursorRemoteBucket, CursorReplaceResult, DshSessionUpsert, UsageDb, UsageDbError,
+};

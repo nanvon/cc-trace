@@ -13,9 +13,37 @@ use crate::contracts::{
     UsageConversationQuery, UsageRepriceResult, UsageScanStatus, UsageSource, UsageSummary,
     UsageSummaryQuery,
 };
+use crate::usage::CursorRemoteOutcome;
 use crate::usage::UsageError;
 
 use super::CommandError;
+
+/// 一次远端刷新的结局（脱敏 DTO）：只带分类与计数，不带响应原文。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase", tag = "state")]
+pub enum CursorRemoteOutcomeView {
+    /// 没有可用的 Cursor 登录态：远端计量整体跳过，不是错误。
+    NoCredential,
+    /// 距上次尝试太近或仍在退避期内。
+    Throttled,
+    /// 拉取成功（可能只是补齐了部分日子）。
+    Updated { ranges: usize, buckets: usize },
+    /// 拉取失败；上一次的远端数据保留。
+    Failed { error: String, retry_after: String },
+}
+
+impl From<CursorRemoteOutcome> for CursorRemoteOutcomeView {
+    fn from(outcome: CursorRemoteOutcome) -> Self {
+        match outcome {
+            CursorRemoteOutcome::NoCredential => Self::NoCredential,
+            CursorRemoteOutcome::Throttled => Self::Throttled,
+            CursorRemoteOutcome::Updated { ranges, buckets } => Self::Updated { ranges, buckets },
+            CursorRemoteOutcome::Failed { error, retry_after } => {
+                Self::Failed { error, retry_after }
+            }
+        }
+    }
+}
 
 #[tauri::command]
 pub fn usage_scan_start(core: State<'_, Arc<AppCore>>) -> Result<UsageScanStatus, CommandError> {
@@ -25,6 +53,25 @@ pub fn usage_scan_start(core: State<'_, Arc<AppCore>>) -> Result<UsageScanStatus
 #[tauri::command]
 pub fn usage_scan_cancel(core: State<'_, Arc<AppCore>>) -> UsageScanStatus {
     core.usage().cancel_scan()
+}
+
+/// 手动拉取 Cursor 远端计量。返回一次刷新的结局，界面据此说明状态。
+///
+/// `force` 在这里恒为真：用户点了刷新就该真发请求；被限流后的退避仍然拦住它。
+#[tauri::command]
+pub async fn usage_cursor_remote_refresh(
+    core: State<'_, Arc<AppCore>>,
+) -> Result<CursorRemoteOutcomeView, CommandError> {
+    let outcome = core.usage().refresh_cursor_remote(true).await;
+    Ok(CursorRemoteOutcomeView::from(outcome))
+}
+
+/// 远端计量的当前状态：上次成功、上次错误、退避截止、已覆盖天数。
+#[tauri::command]
+pub fn usage_cursor_remote_status(
+    core: State<'_, Arc<AppCore>>,
+) -> crate::usage::CursorRemoteStatus {
+    core.usage().cursor_remote_status()
 }
 
 #[tauri::command]

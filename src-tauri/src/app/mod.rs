@@ -715,6 +715,9 @@ pub fn start_auto_usage_scan(core: &Arc<AppCore>) {
             ))
             .await;
             let _ = core.usage.start_default_scan();
+            // 远端计量有自己的一套节流与退避（5 分钟最小间隔、429 后 10 分钟退避），
+            // 因此跟着扫描循环走不会把请求打密：它自己决定这一轮发不发。
+            let _ = core.usage.refresh_cursor_remote(false).await;
         }
     });
 }

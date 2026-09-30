@@ -6,6 +6,11 @@ pub mod app;
 pub mod commands;
 pub mod contracts;
 pub mod platform;
+// Provider 的取数结果就是 `ProviderFetchOutcome`（成功与失败同型，调度层按它分支），
+// 它带一份快照与身份，超过 clippy 的 128 字节阈值。这是有意的形态：每次刷新构造一次、
+// 不在任何热路径上，为消掉这条告警把 Err 装箱只会给全部调用点加一层间接与
+// `map_err(Box::new)` 噪音。阈值本身与性能无关，这里按噪声处理。
+#[allow(clippy::result_large_err)]
 pub mod providers;
 pub mod scheduler;
 pub mod storage;
