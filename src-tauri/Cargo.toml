@@ -77,6 +77,15 @@ objc2-foundation = { version = "0.3", features = ["objc2-core-foundation"] }
 block2 = "0.6"
 objc2 = "0.6"
 
+[target.'cfg(windows)'.dependencies]
+# CC Trace 自己的秘密（导入的 Codex 账号凭据、手动填写的 API Key）存进 Windows
+# 凭据管理器，见 ADR-0035。用官方绑定而不是手抄 `CREDENTIALW` 结构与常量值：
+# 字段顺序与取值由 Windows 元数据生成，避免抄错。
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Security_Credentials",
+] }
+
 [dev-dependencies]
 tempfile = "3"
 

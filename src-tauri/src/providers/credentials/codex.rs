@@ -24,6 +24,9 @@ pub struct CodexCredentials {
     pub refresh_token: Option<Secret>,
     /// 请求头 `ChatGPT-Account-Id`，同时参与身份变化判断。
     pub account_id: Option<Secret>,
+    /// ChatGPT 用户 id（JWT claim `chatgpt_user_id`）。导入账号用它组成复合身份，
+    /// 老凭据可能没有这个 claim。
+    pub user_id: Option<Secret>,
     pub email: Option<Secret>,
     /// 计划名不是秘密，可直接进入脱敏身份。
     pub plan: Option<String>,
@@ -38,6 +41,7 @@ impl fmt::Debug for CodexCredentials {
             .debug_struct("CodexCredentials")
             .field("has_refresh_token", &self.refresh_token.is_some())
             .field("has_account_id", &self.account_id.is_some())
+            .field("has_user_id", &self.user_id.is_some())
             .field("has_email", &self.email.is_some())
             .field("plan", &self.plan)
             .field("access_expires_at", &self.access_expires_at)
@@ -136,6 +140,14 @@ pub fn parse(raw: &str) -> Discovery<CodexCredentials> {
     .or_else(|| auth_claim("chatgpt_account_id", id_claims.as_ref()))
     .map(Secret::new);
 
+    // ChatGPT 用户 id：与 account id 一起组成导入账号的复合身份。
+    // 老凭据可能没有这个 claim，那时身份退化成单段 account id。
+    let user_id = auth_claim("chatgpt_user_id", access_claims.as_ref())
+        .or_else(|| auth_claim("chatgpt_user_id", id_claims.as_ref()))
+        .or_else(|| auth_claim("user_id", access_claims.as_ref()))
+        .or_else(|| auth_claim("user_id", id_claims.as_ref()))
+        .map(Secret::new);
+
     let email = id_claims
         .as_ref()
         .and_then(|claims| non_empty(claims.get("email").and_then(serde_json::Value::as_str)))
@@ -158,9 +170,86 @@ pub fn parse(raw: &str) -> Discovery<CodexCredentials> {
         access_token: Secret::new(access_token),
         refresh_token,
         account_id,
+        user_id,
         email,
         plan,
     })
+}
+
+/// 解析导入账号的凭据文本（用户粘贴的 `auth.json` 内容）。
+///
+/// 与 [`parse`] 的差别只有一处：PAT 形态在这里是**可用**的凭据——令牌本身就是 access
+/// token，能直接发请求；在主账号路径上 PAT 是「存在但不支持」，因为主账号的语义是
+/// 「读 Codex CLI 的登录态、续期后回写 `auth.json`」，PAT 没有续期这回事。
+///
+/// PAT 不透明，本地解不出 account id，也**不发** `ChatGPT-Account-Id` 请求头：
+/// 令牌已经限定在它自己的账号域里，多发一个头只可能被服务端拒。
+pub fn parse_imported(raw: &str, fallback_account_id: Option<&str>) -> Discovery<CodexCredentials> {
+    match parse(raw) {
+        Discovery::Found(mut credentials) => {
+            if credentials.account_id.is_none() {
+                credentials.account_id = non_empty(fallback_account_id).map(Secret::new);
+            }
+            Discovery::Found(credentials)
+        }
+        Discovery::Unsupported => {
+            let Ok(root) = serde_json::from_str::<serde_json::Value>(raw) else {
+                return Discovery::Unsupported;
+            };
+            let Some(token) = non_empty(
+                root.get("personal_access_token")
+                    .and_then(serde_json::Value::as_str),
+            ) else {
+                return Discovery::Missing;
+            };
+            Discovery::Found(CodexCredentials {
+                access_token: Secret::new(token),
+                refresh_token: None,
+                account_id: None,
+                user_id: None,
+                email: None,
+                plan: None,
+                // 解不出的令牌不主动续期，也不参与「身份变化即丢弃」判断。
+                access_expires_at: None,
+            })
+        }
+        other => other,
+    }
+}
+
+/// 把刷新结果写进一段凭据 JSON 文本，返回新的文本。
+///
+/// 导入账号的凭据存在我们自己的秘密存储里，没有「另一个进程在写同一个文件」的竞争，
+/// 所以这里不做版本比对，只做字段替换；`last_refresh` 一并更新，便于人工排查。
+pub fn payload_with_tokens(
+    expected: &CodexCredentials,
+    tokens: &RefreshedTokens,
+) -> io::Result<String> {
+    let mut root = serde_json::Map::new();
+    let mut token_object = serde_json::Map::new();
+    token_object.insert(
+        "access_token".to_owned(),
+        serde_json::Value::String(tokens.access_token.expose().to_owned()),
+    );
+    token_object.insert(
+        "refresh_token".to_owned(),
+        serde_json::Value::String(tokens.refresh_token.expose().to_owned()),
+    );
+    if let Some(id_token) = tokens.id_token.as_ref() {
+        token_object.insert(
+            "id_token".to_owned(),
+            serde_json::Value::String(id_token.expose().to_owned()),
+        );
+    }
+    if let Some(account_id) = expected.account_id.as_ref() {
+        token_object.insert(
+            "account_id".to_owned(),
+            serde_json::Value::String(account_id.expose().to_owned()),
+        );
+    }
+    root.insert("tokens".to_owned(), serde_json::Value::Object(token_object));
+    serde_json::to_string(&serde_json::Value::Object(root))
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
 }
 
 /// 把刷新结果原子回写 `auth.json`，只改 token 三件套与 Codex 自己的刷新时间。

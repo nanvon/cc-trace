@@ -16,5 +16,7 @@ pub mod menubar_badge;
 /// 可靠，见 outside_click.rs。
 #[cfg(target_os = "macos")]
 pub mod outside_click;
+/// CC Trace 自己的秘密存储（导入账号凭据、手动 API Key）。
+pub mod secret_store;
 pub mod strings;
 pub mod tray;

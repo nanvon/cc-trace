@@ -4,6 +4,7 @@
 //! 因此界面永远只有一个状态源：`quota://updated` 与 `quota://refresh-state`。
 
 use std::collections::BTreeMap;
+use std::io;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -25,7 +26,10 @@ use crate::providers::codex::CodexProvider;
 use crate::providers::synthetic::{Scenario, ScenarioHandle, SyntheticProvider};
 use crate::scheduler::params::jittered_seconds;
 use crate::scheduler::{ProviderRuntime, RefreshDecision, RefreshTrigger};
-use crate::storage::{CachedProvider, LoadIssue, QuotaCache, QuotaCacheStore, SettingsStore};
+use crate::storage::{
+    CachedProvider, ImportedCodexAccount, ImportedCodexStore, LoadIssue, QuotaCache,
+    QuotaCacheStore, SettingsStore,
+};
 use crate::usage::UsageService;
 
 /// 额度数据发生变化。载荷是完整的 [`QuotaState`]，前端不需要自己合并增量。
@@ -57,14 +61,16 @@ pub struct SettingsOutcome {
 }
 
 /// 一个额度主体的来源与其静态描述。导入账号增删只改这张表。
-struct ProviderSlot {
-    subject: QuotaSubject,
-    source: Arc<dyn QuotaProvider>,
+pub(crate) struct ProviderSlot {
+    pub subject: QuotaSubject,
+    pub source: Arc<dyn QuotaProvider>,
 }
 
 pub struct AppCore {
     store: SettingsStore,
     cache_store: QuotaCacheStore,
+    /// 导入的 Codex 副账号：元数据在 JSON，凭据在系统秘密存储。
+    imported_codex: Arc<ImportedCodexStore>,
     usage: Arc<UsageService>,
     settings: Mutex<Settings>,
     runtimes: Mutex<BTreeMap<String, ProviderRuntime>>,
@@ -87,12 +93,10 @@ impl AppCore {
         let store = SettingsStore::new(config_dir.clone());
         let (settings, issue) = store.load();
         let cache_store = QuotaCacheStore::new(config_dir.clone());
+        let imported_codex = Arc::new(ImportedCodexStore::new(config_dir.clone()));
         let usage = UsageService::new(config_dir);
 
-        let mut providers: BTreeMap<String, ProviderSlot> = BTreeMap::new();
-        for (subject, source) in primary_subjects() {
-            providers.insert(subject.subject_id.clone(), ProviderSlot { subject, source });
-        }
+        let providers = build_slots(&imported_codex);
 
         let mut runtimes = BTreeMap::new();
         for subject in providers.values().map(|slot| slot.subject.clone()) {
@@ -116,6 +120,7 @@ impl AppCore {
         let core = Arc::new(Self {
             store,
             cache_store,
+            imported_codex,
             usage,
             settings: Mutex::new(settings),
             runtimes: Mutex::new(runtimes),
@@ -152,6 +157,55 @@ impl AppCore {
             .expect("providers lock")
             .get(subject_id)
             .map(|slot| Arc::clone(&slot.source))
+    }
+
+    /// 导入账号的元数据与凭据存储句柄。命令层用它读写凭据槽位。
+    pub fn imported_codex_store(&self) -> &Arc<ImportedCodexStore> {
+        &self.imported_codex
+    }
+
+    /// 导入的 Codex 副账号元数据（不含凭据）。
+    pub fn imported_codex_accounts(&self) -> Vec<ImportedCodexAccount> {
+        self.imported_codex.load()
+    }
+
+    /// 写入导入账号元数据并重建额度来源表。
+    ///
+    /// 重建保留仍然存在的额度主体的运行时（快照、身份、退避），只丢掉被删除主体的
+    /// 运行时，因此增删账号不会让其他账号的展示闪回空态。
+    pub fn replace_imported_codex_accounts(
+        &self,
+        accounts: &[ImportedCodexAccount],
+    ) -> Result<(), io::Error> {
+        self.imported_codex.save(accounts)?;
+        self.reload_providers();
+        Ok(())
+    }
+
+    /// 按当前 `codex-accounts.json` 重建额度来源表。
+    pub fn reload_providers(&self) {
+        let rebuilt = build_slots(&self.imported_codex);
+        let mut next_runtimes: BTreeMap<String, ProviderRuntime> = BTreeMap::new();
+        {
+            let runtimes = self.runtimes.lock().expect("runtimes lock");
+            for (subject_id, slot) in &rebuilt {
+                let runtime = match runtimes.get(subject_id) {
+                    Some(existing) => {
+                        let mut runtime = existing.clone();
+                        // 别名／顺序变了要跟着走，快照与退避不变。
+                        runtime.snapshot.label = slot.subject.label.clone();
+                        runtime
+                    }
+                    None => ProviderRuntime::new(&slot.subject),
+                };
+                next_runtimes.insert(subject_id.clone(), runtime);
+            }
+        }
+        *self.runtimes.lock().expect("runtimes lock") = next_runtimes;
+        *self.providers.lock().expect("providers lock") = rebuilt;
+        // 缓存按运行时的主体集合重写：被删除账号的历史读数随之消失，
+        // 但 `usage.db` 里的额度历史与用量保留，需要时仍能在额度页看到。
+        self.persist_cache();
     }
 
     /// 按 Provider 顺序、主账号在前、导入账号按用户顺序排列的额度主体清单。
@@ -673,19 +727,48 @@ fn provider_rank(provider: ProviderId) -> usize {
         .unwrap_or(usize::MAX)
 }
 
-/// 真实额度来源的主账号清单。新增 Provider 只在这里加一行，顺序由
-/// [`ProviderId::ORDER`] 决定，界面与调度不再各自维护第二份顺序。
-fn primary_subjects() -> Vec<(QuotaSubject, Arc<dyn QuotaProvider>)> {
-    vec![
-        (
-            QuotaSubject::primary(ProviderId::Codex),
-            CodexProvider::new() as Arc<dyn QuotaProvider>,
-        ),
-        (
-            QuotaSubject::primary(ProviderId::Claude),
-            ClaudeProvider::new() as Arc<dyn QuotaProvider>,
-        ),
-    ]
+/// 真实额度来源的全部主体：每个 Provider 的主账号，外加用户导入的 Codex 副账号。
+///
+/// 这是唯一一处构造额度来源的地方；新增 Provider 在这里加一行，顺序由
+/// [`ProviderId::ORDER`] 与 [`QuotaSubject::order_index`] 决定，界面与调度不再各自排序。
+fn build_slots(imported_codex: &Arc<ImportedCodexStore>) -> BTreeMap<String, ProviderSlot> {
+    let mut slots = BTreeMap::new();
+    let mut insert = |subject: QuotaSubject, source: Arc<dyn QuotaProvider>| {
+        slots.insert(subject.subject_id.clone(), ProviderSlot { subject, source });
+    };
+
+    insert(
+        QuotaSubject::primary(ProviderId::Codex),
+        CodexProvider::new(),
+    );
+    insert(
+        QuotaSubject::primary(ProviderId::Claude),
+        ClaudeProvider::new(),
+    );
+
+    for (index, account) in imported_codex.load().iter().enumerate() {
+        let identity = account.identity_hash();
+        let order = u32::try_from(index).unwrap_or(u32::MAX);
+        let subject = QuotaSubject::imported_codex(
+            &identity,
+            Some(account.display_name(&default_account_name(index))),
+            order,
+        );
+        let source = CodexProvider::imported(
+            identity,
+            // PAT 不发 `ChatGPT-Account-Id`，见 `credentials::codex::parse_imported`。
+            (!account.personal_access_token).then(|| account.chatgpt_account_id().to_owned()),
+            Arc::clone(imported_codex),
+        );
+        insert(subject, source);
+    }
+
+    slots
+}
+
+/// 导入账号没有别名也没有邮箱时的兜底展示名，只用于界面。
+fn default_account_name(index: usize) -> String {
+    format!("Codex 账号 {}", index + 1)
 }
 
 #[cfg(test)]

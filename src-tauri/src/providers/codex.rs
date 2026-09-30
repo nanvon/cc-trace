@@ -6,6 +6,8 @@
 //! 秘密只在本模块与 [`credentials`](super::credentials) 之间流动：请求头由这里拼装，
 //! 返回值只有脱敏 contract。
 
+use std::fmt;
+use std::io;
 use std::sync::Arc;
 use std::time::Duration as StdDuration;
 
@@ -20,6 +22,7 @@ use crate::contracts::{
     ErrorKind, ProviderId, ProviderIdentity, QuotaSnapshot, QuotaWindow, QuotaWindowKind,
 };
 use crate::scheduler::params::CODEX_TOKEN_REFRESH_SKEW_SECS;
+use crate::storage::ImportedCodexStore;
 
 const USAGE_ENDPOINT: &str = "https://chatgpt.com/backend-api/wham/usage";
 const TOKEN_ENDPOINT: &str = "https://auth.openai.com/oauth/token";
@@ -32,8 +35,15 @@ const FIVE_HOUR_SECONDS: u64 = 5 * 60 * 60;
 const WEEKLY_SECONDS: u64 = 7 * 24 * 60 * 60;
 
 /// 解析成功后的脱敏结果。这里只保留计划名与标准化额度，不携带响应身份原文。
+///
+/// 身份字段（`account_id` / `user_id` / `email`）单独列在这里，因为
+/// `wham/usage` 对**不透明的 personal access token** 是唯一的身份来源：
+/// 那种令牌在本地解不出账号，导入时只能联网取一次。
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedCodexUsage {
+    pub account_id: Option<String>,
+    pub user_id: Option<String>,
+    pub email: Option<String>,
     pub identity: Option<ProviderIdentity>,
     pub snapshot: QuotaSnapshot,
 }
@@ -53,6 +63,13 @@ pub enum CodexUsageParseError {
 struct UsageResponse {
     plan_type: Option<String>,
     rate_limit: Option<RateLimit>,
+    /// 响应自带的身份字段；字段名与 cc-bar 读取的一致（snake_case）。
+    #[serde(default)]
+    account_id: Option<String>,
+    #[serde(default)]
+    user_id: Option<String>,
+    #[serde(default)]
+    email: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -104,6 +121,15 @@ pub fn parse_usage_response(
     });
 
     Ok(ParsedCodexUsage {
+        account_id: response
+            .account_id
+            .and_then(|value| non_empty(&value).map(str::to_owned)),
+        user_id: response
+            .user_id
+            .and_then(|value| non_empty(&value).map(str::to_owned)),
+        email: response
+            .email
+            .and_then(|value| non_empty(&value).map(str::to_owned)),
         identity,
         snapshot: QuotaSnapshot {
             windows,
@@ -229,23 +255,93 @@ fn non_empty(value: &str) -> Option<&str> {
 
 // --- 真实额度来源 ---
 
+/// Codex 凭据来源。
+///
+/// 主账号与导入副账号走同一套请求与解析，差别只在「凭据从哪读、续期后写回哪」。
+/// 把这件事显式化，避免在协议代码里散落 `if imported` 判断。
+#[derive(Clone)]
+pub enum CodexCredentialSource {
+    /// 主账号：读 Codex CLI 的 `~/.codex/auth.json`，续期后按 [ADR-0014] 回写同一来源。
+    /// [ADR-0014]: ../../../../docs/决策/ADR-0014-token刷新结果回写外部凭据.md
+    Environment,
+    /// 导入副账号：读 CC Trace 自己的秘密存储，续期后回写同一槽位。
+    Imported {
+        identity_hash: String,
+        account_id: Option<String>,
+        store: Arc<ImportedCodexStore>,
+    },
+}
+
 /// 真实 Codex 额度来源：凭据发现 → 按需续期 → Usage 请求 → 标准化。
+#[derive(Clone)]
 pub struct CodexProvider {
     /// 同一 Provider 进程内只允许一个刷新任务，其余调用等待同一结果，
     /// 见 `docs/额度领域模型.md` 第 5.2 节。用异步锁而不是 `std::sync::Mutex`：
     /// 临界区里有 `await`。
-    refresh_lock: Mutex<()>,
+    refresh_lock: Arc<Mutex<()>>,
+    source: CodexCredentialSource,
+}
+
+/// 手动实现：`CodexProvider` 持有凭据来源，不能让 `Debug` 顺着走进去。
+impl fmt::Debug for CodexProvider {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let source = match self.source {
+            CodexCredentialSource::Environment => "environment",
+            CodexCredentialSource::Imported { .. } => "imported",
+        };
+        formatter
+            .debug_struct("CodexProvider")
+            .field("source", &source)
+            .finish()
+    }
 }
 
 impl CodexProvider {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
-            refresh_lock: Mutex::new(()),
+            refresh_lock: Arc::new(Mutex::new(())),
+            source: CodexCredentialSource::Environment,
         })
     }
 
+    /// 导入副账号的 Provider：凭据来自 CC Trace 自己的秘密存储。
+    pub fn imported(
+        identity_hash: String,
+        account_id: Option<String>,
+        store: Arc<ImportedCodexStore>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            refresh_lock: Arc::new(Mutex::new(())),
+            source: CodexCredentialSource::Imported {
+                identity_hash,
+                account_id,
+                store,
+            },
+        })
+    }
+
+    /// 读取当前凭据。两个来源的语义差别只有「东西在哪」，判断标准完全一致。
+    fn discover(&self) -> Discovery<CodexCredentials> {
+        match &self.source {
+            CodexCredentialSource::Environment => credentials::codex::discover(),
+            CodexCredentialSource::Imported {
+                identity_hash,
+                account_id,
+                store,
+            } => match store.load_credentials(identity_hash) {
+                crate::platform::secret_store::SecretRead::Found(secret) => {
+                    credentials::codex::parse_imported(secret.expose(), account_id.as_deref())
+                }
+                crate::platform::secret_store::SecretRead::Missing => Discovery::Missing,
+                // 系统拒绝了访问：这是权限问题，不能说成「没有凭据」。
+                crate::platform::secret_store::SecretRead::Denied
+                | crate::platform::secret_store::SecretRead::Failed => Discovery::Unreadable,
+            },
+        }
+    }
+
     async fn fetch_once(&self) -> ProviderFetchOutcome {
-        let credentials = match credentials::codex::discover() {
+        let credentials = match self.discover() {
             Discovery::Found(credentials) => credentials,
             Discovery::Missing => return ProviderFetchOutcome::NoCredentials,
             Discovery::Unsupported => return ProviderFetchOutcome::Unsupported,
@@ -262,19 +358,7 @@ impl CodexProvider {
             Err(outcome) => return outcome,
         };
 
-        let mut request = http::client()
-            .get(USAGE_ENDPOINT)
-            .header(
-                reqwest::header::AUTHORIZATION,
-                format!("Bearer {}", credentials.access_token.expose()),
-            )
-            .header(reqwest::header::ACCEPT, "application/json")
-            .header(reqwest::header::USER_AGENT, "codex-cli");
-        if let Some(account_id) = credentials.account_id.as_ref() {
-            request = request.header("ChatGPT-Account-Id", account_id.expose());
-        }
-
-        let response = match request.send().await {
+        let response = match usage_request(&credentials).send().await {
             Ok(response) => response,
             Err(error) => return http::classify_transport(&error),
         };
@@ -322,7 +406,7 @@ impl CodexProvider {
         let _guard = self.refresh_lock.lock().await;
 
         // 拿到锁后重读：排队期间 Codex CLI 或另一次刷新可能已经写入了新 token。
-        let latest = match credentials::codex::discover() {
+        let latest = match self.discover() {
             Discovery::Found(latest) => latest,
             _ => {
                 return Err(ProviderFetchOutcome::Failed {
@@ -348,13 +432,15 @@ impl CodexProvider {
             // 出现一份不同且仍有效的新 token 时采用；否则维持凭据类错误。
             Err(RefreshFailure::Revoked) => {
                 tokio::time::sleep(SOFT_RECOVERY_DELAY).await;
-                return recovered_credentials(refresh_token).ok_or(ProviderFetchOutcome::Failed {
-                    kind: ErrorKind::Credentials,
-                });
+                return self.recovered_credentials(refresh_token).ok_or(
+                    ProviderFetchOutcome::Failed {
+                        kind: ErrorKind::Credentials,
+                    },
+                );
             }
             Err(RefreshFailure::Outcome(outcome)) => return Err(outcome),
         };
-        credentials::codex::write_back(&latest, &refreshed, Utc::now()).map_err(|_| {
+        self.write_back(&latest, &refreshed).map_err(|_| {
             // 服务端已经轮换了 token，但我们没能存下来。报凭据类错误而不是静默继续：
             // 下次启动会拿着作废的 refresh token，用户需要知道。
             ProviderFetchOutcome::Failed {
@@ -362,12 +448,56 @@ impl CodexProvider {
             }
         })?;
 
-        match credentials::codex::discover() {
+        match self.discover() {
             Discovery::Found(current) => Ok(current),
             _ => Err(ProviderFetchOutcome::Failed {
                 kind: ErrorKind::Credentials,
             }),
         }
+    }
+
+    /// 回写刷新结果。主账号按 [ADR-0014] 改 Codex CLI 的文件，导入账号改我们自己的槽位。
+    /// [ADR-0014]: ../../../../docs/决策/ADR-0014-token刷新结果回写外部凭据.md
+    fn write_back(
+        &self,
+        expected: &CodexCredentials,
+        refreshed: &RefreshedTokens,
+    ) -> io::Result<()> {
+        match &self.source {
+            CodexCredentialSource::Environment => {
+                credentials::codex::write_back(expected, refreshed, Utc::now())
+            }
+            CodexCredentialSource::Imported {
+                identity_hash,
+                store,
+                ..
+            } => {
+                let payload = credentials::codex::payload_with_tokens(expected, refreshed)?;
+                match store.save_credentials(identity_hash, &payload) {
+                    crate::platform::secret_store::SecretWrite::Ok => Ok(()),
+                    other => Err(io::Error::new(
+                        crate::platform::secret_store::failure_kind(other),
+                        "imported codex credentials could not be stored",
+                    )),
+                }
+            }
+        }
+    }
+
+    /// 软恢复：另一个客户端刷新成功时，来源里会出现一份不同且仍有效的新 token。
+    fn recovered_credentials(&self, attempted_refresh: &Secret) -> Option<CodexCredentials> {
+        let Discovery::Found(latest) = self.discover() else {
+            return None;
+        };
+        let rotated = latest
+            .refresh_token
+            .as_ref()
+            .is_some_and(|token| token != attempted_refresh);
+        let fresh = latest
+            .access_expires_at
+            .is_some_and(|expires_at| !is_expiring(expires_at, Utc::now()));
+
+        (rotated && fresh).then_some(latest)
     }
 }
 
@@ -402,22 +532,6 @@ fn identity_of(
 
 fn is_expiring(expires_at: DateTime<Utc>, now: DateTime<Utc>) -> bool {
     expires_at - now < Duration::seconds(CODEX_TOKEN_REFRESH_SKEW_SECS)
-}
-
-/// 软恢复：另一个客户端刷新成功时，来源里会出现一份不同且仍有效的新 token。
-fn recovered_credentials(attempted_refresh: &Secret) -> Option<CodexCredentials> {
-    let Discovery::Found(latest) = credentials::codex::discover() else {
-        return None;
-    };
-    let rotated = latest
-        .refresh_token
-        .as_ref()
-        .is_some_and(|token| token != attempted_refresh);
-    let fresh = latest
-        .access_expires_at
-        .is_some_and(|expires_at| !is_expiring(expires_at, Utc::now()));
-
-    (rotated && fresh).then_some(latest)
 }
 
 enum RefreshFailure {
@@ -462,6 +576,58 @@ async fn refresh_tokens(refresh_token: &Secret) -> Result<RefreshedTokens, Refre
             kind: ErrorKind::Credentials,
         },
     ))
+}
+
+/// Codex Usage 请求。主账号与导入账号共用；PAT 不带 `ChatGPT-Account-Id`
+/// （令牌已经限定在自己的账号域里）。
+fn usage_request(credentials: &CodexCredentials) -> reqwest::RequestBuilder {
+    let mut request = http::client()
+        .get(USAGE_ENDPOINT)
+        .header(
+            reqwest::header::AUTHORIZATION,
+            format!("Bearer {}", credentials.access_token.expose()),
+        )
+        .header(reqwest::header::ACCEPT, "application/json")
+        .header(reqwest::header::USER_AGENT, "codex-cli");
+    if let Some(account_id) = credentials.account_id.as_ref() {
+        request = request.header("ChatGPT-Account-Id", account_id.expose());
+    }
+    request
+}
+
+/// 用给定令牌取一次额度，返回身份与标准化快照。
+///
+/// 导入 personal access token 时用：令牌不透明，本地解不出账号，只能取一次数确认它
+/// 有效并回填身份。取数失败按 [`ProviderFetchOutcome`] 原样上报，调用方不猜原因。
+pub async fn fetch_usage_with_token(
+    access_token: &Secret,
+    account_id: Option<&Secret>,
+) -> Result<ParsedCodexUsage, ProviderFetchOutcome> {
+    let credentials = CodexCredentials {
+        access_token: access_token.clone(),
+        refresh_token: None,
+        account_id: account_id.cloned(),
+        user_id: None,
+        email: None,
+        plan: None,
+        access_expires_at: None,
+    };
+
+    let response = usage_request(&credentials)
+        .send()
+        .await
+        .map_err(|error| http::classify_transport(&error))?;
+    if let Some(failure) = http::classify_response(&response) {
+        return Err(failure);
+    }
+    let body = response
+        .text()
+        .await
+        .map_err(|error| http::classify_transport(&error))?;
+
+    parse_usage_response(&body, Utc::now()).map_err(|_| ProviderFetchOutcome::Failed {
+        kind: ErrorKind::Protocol,
+    })
 }
 
 fn is_invalid_grant(status: reqwest::StatusCode, body: &str) -> bool {

@@ -265,14 +265,15 @@ impl QuotaSubject {
         }
     }
 
-    /// 导入的 Codex 副账号。`index` 是用户排序位置，从 0 开始。
-    pub fn imported_codex(index: u32, label: Option<String>) -> Self {
+    /// 导入的 Codex 副账号。`identity_hash` 是账号身份的短哈希，
+    /// **不是下标**：删除或重排账号时下标会变，用下标做标识会把 A 的缓存与历史读成 B 的。
+    pub fn imported_codex(identity_hash: &str, label: Option<String>, order_index: u32) -> Self {
         Self {
-            subject_id: format!("codex:imported:{index}"),
+            subject_id: format!("codex:imported:{identity_hash}"),
             provider: ProviderId::Codex,
             kind: QuotaSubjectKind::Imported,
             label,
-            order_index: index,
+            order_index,
         }
     }
 }
@@ -370,13 +371,17 @@ mod tests {
 
     #[test]
     fn imported_subjects_keep_their_own_identity() {
+        let subject = QuotaSubject::imported_codex("0123456789abcdef", None, 2);
+        assert_eq!(subject.subject_id, "codex:imported:0123456789abcdef");
+        assert_eq!(subject.order_index, 2);
+
         let imported = ProviderSnapshot::for_subject(
-            "codex:1".to_owned(),
+            "codex:imported:0123456789abcdef".to_owned(),
             ProviderId::Codex,
             QuotaSubjectKind::Imported,
             Some("second@example.com".to_owned()),
         );
-        assert_eq!(imported.subject_id, "codex:1");
+        assert_eq!(imported.subject_id, "codex:imported:0123456789abcdef");
         assert_eq!(imported.kind, QuotaSubjectKind::Imported);
         assert_eq!(imported.label.as_deref(), Some("second@example.com"));
         assert!(imported.identity.is_none());

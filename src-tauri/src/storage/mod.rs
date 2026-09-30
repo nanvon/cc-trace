@@ -10,10 +10,15 @@
 //! 本模块只读写 CC Trace 自己的数据目录，不读取、迁移、覆盖或删除 Swift 版 cc-bar 的
 //! 任何数据，见 `docs/决策/ADR-0003-独立应用身份不迁移数据.md`。
 
+mod imported_codex;
 mod quota_cache;
 mod settings_store;
 mod usage_db;
 
+pub use imported_codex::{
+    IMPORTED_ACCOUNTS_SCHEMA_VERSION, ImportedCodexAccount, ImportedCodexStore, identity_hash,
+    secret_slot,
+};
 pub use quota_cache::{CachedProvider, QuotaCache, QuotaCacheStore};
 pub use settings_store::{LoadIssue, SettingsStore};
 #[cfg(feature = "perf-baseline")]
