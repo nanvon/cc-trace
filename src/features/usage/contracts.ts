@@ -171,6 +171,8 @@ export interface QuotaHistoryEvent {
   observedAt: string;
   /** 事件时点该窗口的重置时间（ISO 8601 UTC）；缺失或旧数据为 null。 */
   resetsAt: string | null;
+  /** 该窗口的长度（秒）；旧行与长度未知的服务为 null。周期起点按它回推。 */
+  windowSeconds: number | null;
 }
 
 export interface QuotaHistoryQuery {
@@ -182,6 +184,77 @@ export interface QuotaHistoryQuery {
 
 export interface QuotaHistory {
   events: QuotaHistoryEvent[];
+}
+
+/** 额度周期查询：回看天数默认 30。 */
+export interface QuotaCycleQuery {
+  provider: ProviderId | null;
+  identityKey: string | null;
+  days: number | null;
+}
+
+/** 周期的用量读数。没有本地用量的服务全为 0。 */
+export interface QuotaCycleUsage {
+  tokens: UsageTokenTotals;
+  cost: UsageCostTotals;
+  requestCount: number;
+}
+
+/** 一个额度片段（周期内的份额度）。 */
+export interface QuotaCycleSegmentView {
+  startAt: string;
+  /** 活动片段为 null。 */
+  endAt: string | null;
+  baselineUsedPercent: number;
+  latestUsedPercent: number;
+  maximumUsedPercent: number;
+  observedUsedPercent: number;
+  /** `initial` 或 `extraReset`。 */
+  startReason: string;
+  active: boolean;
+  usage: QuotaCycleUsage;
+}
+
+/** 用满预估；`confidence` 为 `early` 时不给具体数字。 */
+export interface QuotaCycleForecast {
+  confidence: "early" | "rough" | "reference" | "reliable";
+  observedPercent: number;
+  estimatedFullTokens: number | null;
+  estimatedFullCostNanos: string | null;
+  projectedCycleTokens: number | null;
+  projectedCycleCostNanos: string | null;
+}
+
+/** 一个额度周期。 */
+export interface QuotaCycleView {
+  id: string;
+  provider: ProviderId;
+  identityKey: string;
+  /** 导入账号的别名或邮箱；主账号为 null。 */
+  identityLabel: string | null;
+  windowKind: QuotaWindowKind;
+  windowId: string;
+  windowSeconds: number | null;
+  startAt: string;
+  endAt: string;
+  scheduledEndAt: string;
+  firstSampleAt: string;
+  lastSampleAt: string;
+  latestUsedPercent: number;
+  peakUsedPercent: number;
+  /** `observed`（亲眼看到重置）或 `inferred`（起点由重置时刻回推）。 */
+  boundaryQuality: "observed" | "inferred";
+  extraResetCount: number;
+  active: boolean;
+  usage: QuotaCycleUsage;
+  currentAllowance: QuotaCycleUsage;
+  segments: QuotaCycleSegmentView[];
+  forecast: QuotaCycleForecast | null;
+}
+
+export interface QuotaCyclePage {
+  cycles: QuotaCycleView[];
+  generatedAt: string;
 }
 
 export type UsageConversationSort = "recent" | "tokens" | "cost";

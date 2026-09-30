@@ -163,6 +163,25 @@ impl AppCore {
             .map(|slot| Arc::clone(&slot.source))
     }
 
+    /// 额度主体展示名：身份指纹 → 别名或邮箱。
+    ///
+    /// 主账号不进表（界面按服务名显示）；只有导入账号需要区分，而额度周期是按
+    /// 身份指纹聚合的，所以这里以指纹为键。
+    pub fn subject_labels(&self) -> BTreeMap<String, String> {
+        let runtimes = self.runtimes.lock().expect("runtimes lock");
+        let mut labels = BTreeMap::new();
+        for runtime in runtimes.values() {
+            let Some(label) = runtime.snapshot.label.clone() else {
+                continue;
+            };
+            let Some(identity_key) = runtime.identity_key() else {
+                continue;
+            };
+            labels.insert(identity_key.to_owned(), label);
+        }
+        labels
+    }
+
     /// 改 Command Code 的凭据偏好并落盘。命令层在手动 Key 写入／清除后调用，
     /// 保证「凭据变了」与「偏好指向它」是同一个动作。
     pub fn set_command_code_credential_preference(

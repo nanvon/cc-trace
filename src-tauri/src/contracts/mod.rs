@@ -26,8 +26,9 @@ pub use settings::{
 };
 pub(crate) use usage::decimal_nanos_string;
 pub use usage::{
-    PricingCatalogRefreshStatus, QuotaHistory, QuotaHistoryEvent, QuotaHistoryQuery,
-    UsageConversation, UsageConversationBreakdown, UsageConversationPage,
+    PricingCatalogRefreshStatus, QuotaCycleForecast, QuotaCyclePage, QuotaCycleQuery,
+    QuotaCycleSegmentView, QuotaCycleUsage, QuotaCycleView, QuotaHistory, QuotaHistoryEvent,
+    QuotaHistoryQuery, UsageConversation, UsageConversationBreakdown, UsageConversationPage,
     UsageConversationProjectOption, UsageConversationQuery, UsageConversationSort, UsageCostTotals,
     UsageFastTotals, UsageFilter, UsageGroupBy, UsageProjectPage, UsageProjectQuery,
     UsageProjectSort, UsageProjectSummary, UsageRepriceResult, UsageScanState, UsageScanStatus,

@@ -2,6 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 
 import type {
   PricingCatalogRefreshStatus,
+  QuotaCyclePage,
+  QuotaCycleQuery,
   QuotaHistory,
   QuotaHistoryQuery,
   UsageConversation,
@@ -33,6 +35,11 @@ export function getUsageSummary(query: UsageSummaryQuery): Promise<UsageSummary>
 
 export function getQuotaHistory(query: QuotaHistoryQuery): Promise<QuotaHistory> {
   return invoke<QuotaHistory>("usage_get_quota_history", { query });
+}
+
+/** 额度周期与用满预估。周期是从额度事件现算的派生结果，不落盘。 */
+export function getQuotaCycles(query: QuotaCycleQuery): Promise<QuotaCyclePage> {
+  return invoke<QuotaCyclePage>("usage_get_quota_cycles", { query });
 }
 
 export function listConversations(query: UsageConversationQuery): Promise<UsageConversationPage> {

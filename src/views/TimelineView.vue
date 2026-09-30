@@ -24,13 +24,25 @@ use([LineChart, GridComponent, TooltipComponent, CanvasRenderer]);
 
 import { PROVIDER_ORDER, type ProviderId, type QuotaWindowKind } from "../features/quota/contracts";
 import {
+  activeCycle,
+  cycleProgress,
+  groupCycles,
+  officialUsedPercent,
+  pastCycles,
+  usageTokens,
+  windowBadge as cycleWindowBadge,
+  type QuotaCycleAccount,
+  type QuotaCycleView,
+  type QuotaCycleWindow,
+} from "../features/quota/cycles";
+import {
   activeSeriesByProvider,
   eventRows,
   latestEvent,
   todayDelta,
   type QuotaSeries,
 } from "../features/quota/history";
-import { getQuotaHistory } from "../features/usage/api";
+import { getQuotaCycles, getQuotaHistory } from "../features/usage/api";
 import type { QuotaHistoryEvent } from "../features/usage/contracts";
 import { quotaChartColor, usageChartColors } from "../lib/chartTheme";
 import { quotaTone } from "../lib/quotaTone";
@@ -40,6 +52,13 @@ const { t, locale } = useI18n();
 const loading = ref(true);
 const unavailable = ref(false);
 const events = ref<QuotaHistoryEvent[]>([]);
+/** 周期与用满预估。周期是从额度事件现算的派生结果，与历史同一次加载。 */
+const cycles = ref<QuotaCycleView[]>([]);
+/** 每个主体的窗口选择（主体键 → 窗口 id）。默认取该主体最短的窗口。 */
+const selectedWindow = ref<Record<string, string>>({});
+/** 倒计时每秒走一格；只在有活动周期时使用。 */
+const now = ref(Date.now());
+let ticker: number | null = null;
 
 const themeVersion = ref(0);
 let themeObserver: MutationObserver | null = null;
@@ -48,6 +67,128 @@ const seriesByProvider = computed(() => {
   if (events.value.length === 0) return new Map();
   return activeSeriesByProvider(events.value);
 });
+
+const cycleAccounts = computed(() => groupCycles({ cycles: cycles.value, generatedAt: "" }));
+
+function accountKey(account: QuotaCycleAccount): string {
+  return `${account.provider}|${account.identityKey}`;
+}
+
+/** 当前选中的窗口；没选过就取该主体最短的窗口（通常是最该看的那个）。 */
+function selectedWindowOf(account: QuotaCycleAccount): QuotaCycleWindow | null {
+  if (account.windows.length === 0) return null;
+  const key = accountKey(account);
+  const wanted = selectedWindow.value[key];
+  return account.windows.find((window) => window.windowId === wanted) ?? account.windows[0];
+}
+
+function selectWindow(account: QuotaCycleAccount, window: QuotaCycleWindow): void {
+  selectedWindow.value = { ...selectedWindow.value, [accountKey(account)]: window.windowId };
+}
+
+/** 主体展示名：导入账号用别名/邮箱，主账号用服务名。 */
+function accountLabel(account: QuotaCycleAccount): string {
+  return account.label ?? t(`provider.${account.provider}`);
+}
+
+/** 剩余时长：`3h 12m`／`2d 4h`／`即将重置`。 */
+function countdown(cycle: QuotaCycleView | null): string {
+  if (!cycle) return "—";
+  const remaining = new Date(cycle.endAt).getTime() - now.value;
+  if (remaining <= 0) return t("timeline.cycles.resetting");
+  const minutes = Math.floor(remaining / 60_000);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) {
+    return `${hours}h ${minutes % 60}m`;
+  }
+  return `${Math.floor(hours / 24)}d ${hours % 24}h`;
+}
+
+/**
+ * 纳秒 → 本地化金额（两位小数）。缺值返回 null，由调用方决定不显示。
+ *
+ * 用量读数里的金额是数字，预估里的金额是十进制定点字符串（避免 JSON 精度丢失），
+ * 两者在展示层归一，界面不必知道这个区别。
+ */
+function formatNanos(value: number | string | null): string | null {
+  if (value === null) return null;
+  const nanos = typeof value === "string" ? Number(value) : value;
+  if (!Number.isFinite(nanos)) return null;
+  return new Intl.NumberFormat(locale.value, {
+    currency: "USD",
+    maximumFractionDigits: 2,
+    minimumFractionDigits: 2,
+    style: "currency",
+  }).format(nanos / 1_000_000_000);
+}
+
+function formatTokens(value: number | null): string | null {
+  if (value === null) return null;
+  return new Intl.NumberFormat(locale.value, { notation: "compact" }).format(value);
+}
+
+/** 用量读数：`12.3k tokens · $1.20`，缺项省略；全缺时给「无本地用量」。 */
+function usageText(cycle: QuotaCycleView, scope: "cycle" | "allowance"): string {
+  const usage = scope === "cycle" ? cycle.usage : cycle.currentAllowance;
+  const parts: string[] = [];
+  const tokens = formatTokens(usageTokens(usage));
+  if (tokens && usageTokens(usage) > 0) parts.push(t("timeline.cycles.tokens", { value: tokens }));
+  const cost = formatNanos(usage.cost.apiEquivalentCostNanos);
+  if (cost && usage.cost.pricedEntries > 0) parts.push(cost);
+  return parts.length > 0 ? parts.join(" · ") : t("timeline.cycles.noLocalUsage");
+}
+
+/** 预估读数：`约 12.3k tokens · $1.20 用满`；不可信档不给数字。 */
+function forecastText(cycle: QuotaCycleView): string | null {
+  const forecast = cycle.forecast;
+  if (!forecast || forecast.estimatedFullTokens === null) return null;
+  const parts: string[] = [];
+  const tokens = formatTokens(forecast.estimatedFullTokens);
+  if (tokens) parts.push(t("timeline.cycles.tokens", { value: tokens }));
+  const cost = formatNanos(forecast.estimatedFullCostNanos);
+  if (cost) parts.push(cost);
+  return parts.join(" · ");
+}
+
+function confidenceLabel(cycle: QuotaCycleView): string | null {
+  const confidence = cycle.forecast?.confidence;
+  if (!confidence) return null;
+  return t(`timeline.cycles.confidence.${confidence}`);
+}
+
+/** 片段起点的说明：额外重置需要显式说出来，否则用户会以为读数是错的。 */
+function segmentNote(cycle: QuotaCycleView): string | null {
+  if (cycle.extraResetCount <= 0) return null;
+  return t("timeline.cycles.extraResets", { count: cycle.extraResetCount });
+}
+
+/** 一个主体一张卡：窗口选择、活动周期与历史周期都在这里定好，模板只负责渲染。 */
+interface QuotaCycleCard {
+  key: string;
+  label: string;
+  account: QuotaCycleAccount;
+  active: QuotaCycleView | null;
+  past: QuotaCycleView[];
+  selectedWindowId: string;
+}
+
+const cycleCards = computed<QuotaCycleCard[]>(() =>
+  cycleAccounts.value.flatMap((account) => {
+    const selected = selectedWindowOf(account);
+    if (!selected) return [];
+    return [
+      {
+        key: accountKey(account),
+        label: accountLabel(account),
+        account,
+        active: activeCycle(selected),
+        past: pastCycles(selected),
+        selectedWindowId: selected.windowId,
+      },
+    ];
+  }),
+);
 
 const sections = computed(() =>
   PROVIDER_ORDER.map((provider) => {
@@ -205,16 +346,23 @@ onMounted(async () => {
     attributes: true,
   });
 
+  ticker = window.setInterval(() => {
+    now.value = Date.now();
+  }, 1_000);
+
   try {
-    const result = await getQuotaHistory({
-      provider: null,
-      from: null,
-      to: null,
-      limit: 500,
-    });
-    events.value = result.events;
-  } catch {
-    unavailable.value = true;
+    // 周期与历史各自独立：一个失败不该让另一个在页面上消失。
+    const [history, cyclePage] = await Promise.allSettled([
+      getQuotaHistory({ provider: null, from: null, to: null, limit: 500 }),
+      getQuotaCycles({ provider: null, identityKey: null, days: 30 }),
+    ]);
+    if (history.status === "fulfilled") {
+      events.value = history.value.events;
+    }
+    if (cyclePage.status === "fulfilled") {
+      cycles.value = cyclePage.value.cycles;
+    }
+    unavailable.value = history.status === "rejected" && cyclePage.status === "rejected";
   } finally {
     loading.value = false;
   }
@@ -223,6 +371,10 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   themeObserver?.disconnect();
   themeObserver = null;
+  if (ticker !== null) {
+    window.clearInterval(ticker);
+    ticker = null;
+  }
 });
 </script>
 
@@ -239,7 +391,117 @@ onBeforeUnmount(() => {
 
       <p v-if="unavailable" class="timeline__notice">{{ t("timeline.unavailable") }}</p>
       <p v-else-if="loading" class="timeline__notice">{{ t("timeline.loading") }}</p>
-      <p v-else-if="sections.length === 0" class="timeline__notice">{{ t("timeline.empty") }}</p>
+      <p v-else-if="sections.length === 0 && cycleAccounts.length === 0" class="timeline__notice">
+        {{ t("timeline.empty") }}
+      </p>
+
+      <section
+        v-for="card in cycleCards"
+        :key="card.key"
+        class="timeline__cycles"
+        :data-provider="card.account.provider"
+        :aria-label="t('timeline.cycles.region', { account: card.label })"
+      >
+        <div class="timeline__section-head">
+          <h2>
+            <span class="timeline__dot" aria-hidden="true"></span>
+            {{ card.label }}
+          </h2>
+          <div v-if="card.account.windows.length > 1" class="timeline__tabs" role="tablist">
+            <button
+              v-for="window in card.account.windows"
+              :key="window.windowId"
+              type="button"
+              role="tab"
+              class="timeline__tab"
+              :class="{ 'timeline__tab--on': card.selectedWindowId === window.windowId }"
+              :aria-selected="card.selectedWindowId === window.windowId"
+              @click="selectWindow(card.account, window)"
+            >
+              {{ cycleWindowBadge(window.windowKind) }}
+            </button>
+          </div>
+        </div>
+
+        <article v-if="card.active" class="timeline__cycle">
+          <header class="timeline__cycle-head">
+            <span class="timeline__badge">{{ cycleWindowBadge(card.active.windowKind) }}</span>
+            <div class="timeline__cycle-metrics">
+              <div>
+                <span class="timeline__cycle-label">{{ t("timeline.cycles.officialUsed") }}</span>
+                <strong class="numeric">{{ officialUsedPercent(card.active) }}%</strong>
+              </div>
+              <div>
+                <span class="timeline__cycle-label">{{ t("timeline.cycles.resetIn") }}</span>
+                <strong class="numeric">{{ countdown(card.active) }}</strong>
+              </div>
+              <div>
+                <span class="timeline__cycle-label">
+                  {{ t("timeline.cycles.currentAllowance") }}
+                </span>
+                <strong class="numeric">{{ usageText(card.active, "allowance") }}</strong>
+              </div>
+            </div>
+          </header>
+
+          <div class="timeline__progress" aria-hidden="true">
+            <span
+              class="timeline__progress-fill"
+              :style="{ inlineSize: `${Math.round(cycleProgress(card.active, now) * 100)}%` }"
+            ></span>
+          </div>
+
+          <dl class="timeline__cycle-detail">
+            <div>
+              <dt>{{ t("timeline.cycles.cycleUsage") }}</dt>
+              <dd>{{ usageText(card.active, "cycle") }}</dd>
+            </div>
+            <div>
+              <dt>{{ t("timeline.cycles.projection") }}</dt>
+              <dd>
+                <template v-if="forecastText(card.active)">
+                  {{ forecastText(card.active) }}
+                  <small>{{ confidenceLabel(card.active) }}</small>
+                </template>
+                <template v-else>{{ t("timeline.cycles.projectionUnavailable") }}</template>
+              </dd>
+            </div>
+            <div>
+              <dt>{{ t("timeline.cycles.cycleRange") }}</dt>
+              <dd class="numeric">
+                {{ formatDate(new Date(card.active.startAt)) }} –
+                {{ formatDate(new Date(card.active.endAt)) }}
+              </dd>
+            </div>
+            <div v-if="segmentNote(card.active)">
+              <dt>{{ t("timeline.cycles.extraResetsLabel") }}</dt>
+              <dd>{{ segmentNote(card.active) }}</dd>
+            </div>
+          </dl>
+
+          <details v-if="card.past.length > 0" class="timeline__past">
+            <summary>{{ t("timeline.cycles.past", { count: card.past.length }) }}</summary>
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">{{ t("timeline.cycles.columnStart") }}</th>
+                  <th scope="col">{{ t("timeline.cycles.columnUsed") }}</th>
+                  <th scope="col">{{ t("timeline.cycles.columnTokens") }}</th>
+                  <th scope="col">{{ t("timeline.cycles.columnExtra") }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="cycle in card.past" :key="cycle.id">
+                  <td class="numeric">{{ formatDate(new Date(cycle.startAt)) }}</td>
+                  <td class="numeric">{{ officialUsedPercent(cycle) }}%</td>
+                  <td class="numeric">{{ usageText(cycle, "cycle") }}</td>
+                  <td class="numeric">{{ cycle.extraResetCount }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </details>
+        </article>
+      </section>
 
       <section
         v-for="section in sections"
@@ -586,6 +848,156 @@ onBeforeUnmount(() => {
   color: var(--status-error);
 }
 
+/* ---- 额度页上半部分：周期与用满预估 ---- */
+
+.timeline__cycles {
+  margin-block-end: 1.25rem;
+  padding: 0.9375rem 1rem 1rem;
+  background: var(--usage-surface);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-medium);
+}
+
+.timeline__tabs {
+  display: flex;
+  gap: 0.25rem;
+  flex: 0 0 auto;
+}
+
+/* 窗口切换：与徽标同语法，选中态用中性加深而不是交互色 */
+.timeline__tab {
+  padding: 0.125rem 0.4375rem;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-secondary) 10%, transparent);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: 0.65625rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.timeline__tab--on {
+  background: color-mix(in srgb, var(--text-primary) 88%, transparent);
+  color: var(--surface-primary);
+}
+
+.timeline__tab:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.timeline__cycle {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.timeline__cycle-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.timeline__cycle-metrics {
+  display: flex;
+  gap: 1.25rem;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+}
+
+.timeline__cycle-metrics > div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  min-inline-size: 0;
+}
+
+.timeline__cycle-label {
+  color: var(--text-secondary);
+  font-size: 0.6875rem;
+}
+
+.timeline__cycle-metrics strong {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 周期进度：只表达时间走了多少，不表达用量，因此用中性轨道色 */
+.timeline__progress {
+  overflow: hidden;
+  block-size: 0.1875rem;
+  border-radius: 999px;
+  background: var(--track-background);
+}
+
+.timeline__progress-fill {
+  display: block;
+  block-size: 100%;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--text-secondary) 55%, transparent);
+}
+
+.timeline__cycle-detail {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 0.625rem 1.25rem;
+  margin: 0;
+}
+
+.timeline__cycle-detail > div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  min-inline-size: 0;
+}
+
+.timeline__cycle-detail dt {
+  color: var(--text-secondary);
+  font-size: 0.6875rem;
+}
+
+.timeline__cycle-detail dd {
+  margin: 0;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.timeline__cycle-detail dd small {
+  margin-inline-start: 0.375rem;
+  color: var(--text-secondary);
+  font-size: 0.65625rem;
+}
+
+.timeline__past summary {
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 0.6875rem;
+}
+
+.timeline__past table {
+  inline-size: 100%;
+  border-collapse: collapse;
+  margin-block-start: 0.5rem;
+}
+
+.timeline__past th,
+.timeline__past td {
+  padding: 0.25rem 0.5rem;
+  border-block-end: 1px solid color-mix(in srgb, var(--border-subtle) 55%, transparent);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.timeline__past th {
+  color: var(--text-secondary);
+  font-weight: 550;
+}
+
 @container (max-width: 760px) {
   .timeline__section-head {
     align-items: flex-start;
@@ -594,6 +1006,10 @@ onBeforeUnmount(() => {
 
   .timeline__body {
     grid-template-columns: 1fr;
+  }
+
+  .timeline__cycle-head {
+    flex-direction: column;
   }
 }
 </style>

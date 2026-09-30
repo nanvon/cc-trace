@@ -4,6 +4,7 @@
 //! 查询参数，不接收路径；测试通过显式临时根目录覆盖，避免触碰真实用户数据。
 
 pub(crate) mod cursor_remote;
+pub(crate) mod cycle;
 mod dsh;
 mod dsh_zstd;
 pub(crate) mod model;
@@ -13,7 +14,7 @@ pub mod pricing;
 mod pricing_remote;
 mod title_index;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -25,11 +26,14 @@ use chrono::{DateTime, Local, SecondsFormat, Utc};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
+use crate::contracts::decimal_nanos_string as format_nanos;
 use crate::contracts::{
-    PricingCatalogRefreshStatus, ProviderId, QuotaHistory, QuotaHistoryQuery, QuotaSnapshot,
-    UsageConversation, UsageConversationBreakdown, UsageConversationPage,
-    UsageConversationProjectOption, UsageConversationQuery, UsageFilter, UsageRepriceResult,
-    UsageScanState, UsageScanStatus, UsageSource, UsageSummary, UsageSummaryQuery,
+    PricingCatalogRefreshStatus, ProviderId, QuotaCycleForecast, QuotaCyclePage, QuotaCycleQuery,
+    QuotaCycleSegmentView, QuotaCycleUsage, QuotaCycleView, QuotaHistory, QuotaHistoryQuery,
+    QuotaSnapshot, QuotaWindowKind, UsageConversation, UsageConversationBreakdown,
+    UsageConversationPage, UsageConversationProjectOption, UsageConversationQuery, UsageFilter,
+    UsageRepriceResult, UsageScanState, UsageScanStatus, UsageSource, UsageSummary,
+    UsageSummaryQuery,
 };
 #[cfg(feature = "perf-baseline")]
 use crate::storage::PerfStats;
@@ -46,6 +50,11 @@ const MAX_LINE_BYTES: usize = 16 * 1024 * 1024;
 const BATCH_LINES: u64 = 2_000;
 const BATCH_BYTES: u64 = 8 * 1024 * 1024;
 const PREFIX_BYTES: u64 = 4_096;
+/// 周期查询默认回看天数。
+const DEFAULT_CYCLE_DAYS: u32 = 30;
+const MAX_CYCLE_DAYS: u32 = 365;
+/// 单次周期查询最多取多少条额度事件。30 天里每个窗口每变一次一条，远低于这个数。
+const MAX_CYCLE_EVENTS: u32 = 200_000;
 /// 远端计量的最小间隔：Dashboard 对频率敏感，不跟随本地扫描节奏（默认 5 分钟）。
 const CURSOR_REMOTE_MIN_INTERVAL_MINUTES: i64 = 5;
 /// 被限流后的退避。
@@ -83,6 +92,61 @@ pub struct UsageService {
     lifecycle: Mutex<()>,
     reprice_pending: AtomicBool,
     cancel: AtomicBool,
+}
+
+/// 一个周期序列的键：服务 + 额度主体 + 窗口。
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct CycleSeriesKey {
+    provider: ProviderId,
+    identity_key: String,
+    window_kind: QuotaWindowKind,
+    window_id: String,
+}
+
+/// 服务在展示顺序里的位置。
+fn provider_rank(provider: &ProviderId) -> usize {
+    ProviderId::ORDER
+        .iter()
+        .position(|candidate| candidate == provider)
+        .unwrap_or(usize::MAX)
+}
+
+/// 窗口类型在展示顺序里的位置：短窗口在前，长窗口在后。
+fn window_rank(kind: &QuotaWindowKind) -> usize {
+    match kind {
+        QuotaWindowKind::FiveHour => 0,
+        QuotaWindowKind::Weekly => 1,
+        QuotaWindowKind::ModelWeekly => 2,
+        QuotaWindowKind::Monthly => 3,
+        QuotaWindowKind::Total => 4,
+        QuotaWindowKind::Auto => 5,
+        QuotaWindowKind::Api => 6,
+        QuotaWindowKind::Unknown => 7,
+    }
+}
+
+/// 百分比取整到整数：界面只显示整数百分比，契约层统一取整避免两侧各舍一次。
+fn round_percent(value: f64) -> i64 {
+    value.round().clamp(0.0, 100.0) as i64
+}
+
+fn rfc3339(time: DateTime<Utc>) -> String {
+    time.to_rfc3339_opts(SecondsFormat::Secs, true)
+}
+
+fn parse_rfc3339(value: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|time| time.with_timezone(&Utc))
+}
+
+/// token 总数：与总览的「Tokens」口径一致（不含 reasoning，它在 output 里）。
+fn tokens_total(totals: &crate::contracts::UsageTokenTotals) -> i64 {
+    totals.uncached_input_tokens
+        + totals.output_tokens
+        + totals.cache_read_input_tokens
+        + totals.cache_write_5m_input_tokens
+        + totals.cache_write_1h_input_tokens
 }
 
 /// 账号哈希：覆盖表与到条目键都用它，**不落账号明文**。
@@ -500,6 +564,185 @@ impl UsageService {
             limit,
         )?;
         Ok(QuotaHistory { events })
+    }
+
+    /// 额度周期与用满预估。
+    ///
+    /// 周期、额度片段与账号分段都是从 `quota_events` 现算的派生结果，不落盘：
+    /// 同一份事件在任何两次查询之间一定给出同一组周期（[`cycle::derive_cycles`]），
+    /// 也就不会出现「状态机漏记一次采样、周期永久对不上」。
+    ///
+    /// `labels` 是额度主体标识 → 展示名（导入账号的别名或邮箱）；主账号不在表里，
+    /// 界面按服务名显示。
+    pub fn quota_cycles(
+        &self,
+        query: QuotaCycleQuery,
+        labels: &BTreeMap<String, String>,
+    ) -> Result<QuotaCyclePage, UsageError> {
+        let now = Utc::now();
+        let days = query
+            .days
+            .unwrap_or(DEFAULT_CYCLE_DAYS)
+            .clamp(1, MAX_CYCLE_DAYS);
+        let from = (now - chrono::Duration::days(i64::from(days)))
+            .to_rfc3339_opts(SecondsFormat::Secs, true);
+
+        let events = self
+            .db
+            .quota_history(query.provider, Some(&from), None, MAX_CYCLE_EVENTS)?;
+
+        // 一个序列 = 一个服务的一个主体的一个窗口：周期边界只在同一序列内比较。
+        let mut series: Vec<CycleSeriesKey> = Vec::new();
+        let mut grouped: HashMap<CycleSeriesKey, Vec<cycle::CycleSample>> = HashMap::new();
+        for event in events {
+            let key = CycleSeriesKey {
+                provider: event.provider,
+                identity_key: event.identity_key.clone(),
+                window_kind: event.window_kind,
+                window_id: event.window_id.clone().unwrap_or_default(),
+            };
+            let entry = grouped.entry(key.clone()).or_insert_with(|| {
+                series.push(key.clone());
+                Vec::new()
+            });
+            entry.push(cycle::CycleSample {
+                observed_at: parse_rfc3339(&event.observed_at).unwrap_or(now),
+                remaining_percent: f64::from(i32::try_from(event.remaining_percent).unwrap_or(0)),
+                resets_at: event.resets_at.as_deref().and_then(parse_rfc3339),
+                window_seconds: event.window_seconds,
+            });
+        }
+
+        // 同一查询里的序列顺序必须稳定：服务顺序 → 窗口类型 → 主体。
+        series.sort_by(|left, right| {
+            provider_rank(&left.provider)
+                .cmp(&provider_rank(&right.provider))
+                .then(window_rank(&left.window_kind).cmp(&window_rank(&right.window_kind)))
+                .then(left.identity_key.cmp(&right.identity_key))
+        });
+
+        let mut cycles: Vec<QuotaCycleView> = Vec::new();
+        for key in series {
+            let Some(samples) = grouped.get(&key) else {
+                continue;
+            };
+            let derived = cycle::derive_cycles(
+                key.provider,
+                &key.identity_key,
+                key.window_kind,
+                &key.window_id,
+                samples,
+            );
+            let sources = key.provider.usage_sources();
+            let active_id = derived.active().map(|value| value.id());
+
+            for value in &derived.cycles {
+                let cycle_range = (value.start_at, value.end_at);
+                let usage = self.cycle_usage(sources, cycle_range)?;
+                let mut segments = Vec::new();
+                let mut current_allowance = QuotaCycleUsage::default();
+                for (index, segment) in value.segments.iter().enumerate() {
+                    let active = index + 1 == value.segments.len();
+                    let segment_usage = self
+                        .cycle_usage(sources, (segment.start_at, segment.end_at.unwrap_or(now)))?;
+                    if active {
+                        current_allowance = segment_usage.clone();
+                    }
+                    segments.push(QuotaCycleSegmentView {
+                        start_at: rfc3339(segment.start_at),
+                        end_at: segment.end_at.map(rfc3339),
+                        baseline_used_percent: round_percent(segment.baseline_used_percent),
+                        latest_used_percent: round_percent(segment.latest_used_percent),
+                        maximum_used_percent: round_percent(segment.maximum_used_percent),
+                        observed_used_percent: round_percent(segment.observed_used_percent()),
+                        start_reason: segment.start_reason.key().to_owned(),
+                        active,
+                        usage: segment_usage,
+                    });
+                }
+
+                let forecast = cycle::forecast(
+                    value,
+                    cycle::SegmentUsage {
+                        tokens: tokens_total(&current_allowance.tokens),
+                        cost_nanos: current_allowance.cost.api_equivalent_cost_nanos,
+                        request_count: current_allowance.request_count,
+                    },
+                    cycle::SegmentUsage {
+                        tokens: tokens_total(&usage.tokens),
+                        cost_nanos: usage.cost.api_equivalent_cost_nanos,
+                        request_count: usage.request_count,
+                    },
+                );
+
+                cycles.push(QuotaCycleView {
+                    id: value.id(),
+                    provider: value.provider,
+                    identity_key: value.identity_key.clone(),
+                    identity_label: labels.get(&value.identity_key).cloned(),
+                    window_kind: value.window_kind,
+                    window_id: value.window_id.clone(),
+                    window_seconds: value.window_seconds,
+                    start_at: rfc3339(value.start_at),
+                    end_at: rfc3339(value.end_at),
+                    scheduled_end_at: rfc3339(value.scheduled_end_at),
+                    first_sample_at: rfc3339(value.first_sample_at),
+                    last_sample_at: rfc3339(value.last_sample_at),
+                    latest_used_percent: round_percent(value.latest_used_percent),
+                    peak_used_percent: round_percent(value.peak_used_percent()),
+                    boundary_quality: value.boundary_quality.key().to_owned(),
+                    extra_reset_count: i64::try_from(value.extra_reset_count()).unwrap_or(0),
+                    active: Some(value.id()) == active_id,
+                    usage,
+                    current_allowance,
+                    segments,
+                    forecast: forecast.map(|forecast| QuotaCycleForecast {
+                        confidence: forecast.confidence.key().to_owned(),
+                        observed_percent: forecast.observed_percent,
+                        estimated_full_tokens: forecast.estimated_full_tokens,
+                        estimated_full_cost_nanos: forecast
+                            .estimated_full_cost_nanos
+                            .map(format_nanos),
+                        projected_cycle_tokens: forecast.projected_cycle_tokens,
+                        projected_cycle_cost_nanos: forecast
+                            .projected_cycle_cost_nanos
+                            .map(format_nanos),
+                    }),
+                });
+            }
+        }
+
+        Ok(QuotaCyclePage {
+            cycles,
+            generated_at: rfc3339(now),
+        })
+    }
+
+    /// 某个时间区间里、指定数据源的用量汇总。没有本地数据源的服务直接返回零，
+    /// 不去跑一次全表聚合。
+    fn cycle_usage(
+        &self,
+        sources: &[UsageSource],
+        range: (DateTime<Utc>, DateTime<Utc>),
+    ) -> Result<QuotaCycleUsage, UsageError> {
+        let (from, to) = range;
+        if sources.is_empty() || from >= to {
+            return Ok(QuotaCycleUsage::default());
+        }
+        let summary = self.summary(UsageSummaryQuery {
+            filter: UsageFilter {
+                from: Some(rfc3339(from)),
+                to: Some(rfc3339(to)),
+                sources: Some(sources.to_vec()),
+                ..UsageFilter::default()
+            },
+            group_by: crate::contracts::UsageGroupBy::Day,
+        })?;
+        Ok(QuotaCycleUsage {
+            tokens: summary.tokens,
+            cost: summary.cost,
+            request_count: summary.request_count,
+        })
     }
 
     pub fn reprice(&self) -> Result<UsageRepriceResult, UsageError> {

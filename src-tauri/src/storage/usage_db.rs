@@ -28,7 +28,7 @@ use crate::usage::model::{
 use crate::usage::pricing::{PricingCatalog, PricingUsageKey};
 
 const DATABASE_FILE: &str = "usage.db";
-const SCHEMA_VERSION: i64 = 9;
+const SCHEMA_VERSION: i64 = 10;
 
 #[derive(Debug)]
 pub enum UsageDbError {
@@ -1489,10 +1489,10 @@ impl UsageDb {
         let connection = self.open_read()?;
         let mut statement = connection.prepare(
             "SELECT provider, identity_key, window_kind, window_id,
-                    remaining_percent, observed_at, resets_at
+                    remaining_percent, observed_at, resets_at, window_seconds
                FROM (
                  SELECT id, provider, identity_key, window_kind, window_id,
-                        remaining_percent, observed_at, resets_at
+                        remaining_percent, observed_at, resets_at, window_seconds
                    FROM quota_events
                   WHERE (?1 IS NULL OR provider = ?1)
                     AND (?2 IS NULL OR observed_at >= ?2)
@@ -1513,6 +1513,9 @@ impl UsageDb {
                     remaining_percent: row.get(4)?,
                     observed_at: row.get(5)?,
                     resets_at: row.get(6)?,
+                    window_seconds: row
+                        .get::<_, Option<i64>>(7)?
+                        .and_then(|seconds| u64::try_from(seconds).ok()),
                 })
             },
         )?;
@@ -1589,8 +1592,8 @@ impl UsageDb {
             transaction.execute(
                 "INSERT INTO quota_events (
                    provider, identity_key, window_kind, window_id,
-                   remaining_percent, observed_at, resets_at
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                   remaining_percent, observed_at, resets_at, window_seconds
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![
                     provider_db(provider),
                     identity_key,
@@ -1599,6 +1602,9 @@ impl UsageDb {
                     remaining,
                     snapshot.captured_at,
                     window.resets_at,
+                    window
+                        .window_seconds
+                        .and_then(|seconds| i64::try_from(seconds).ok()),
                 ],
             )?;
         }
@@ -1725,7 +1731,7 @@ impl UsageDb {
 }
 
 fn migrate(connection: &mut Connection, from: i64) -> Result<(), UsageDbError> {
-    if !matches!(from, 0..=8) {
+    if !matches!(from, 0..=9) {
         return Err(UsageDbError::UnsupportedSchema);
     }
     let transaction = connection.transaction()?;
@@ -1858,6 +1864,11 @@ fn migrate(connection: &mut Connection, from: i64) -> Result<(), UsageDbError> {
     // v9：Cursor 远端计量的覆盖表。按自然日记「已经拉全」，重复拉取不会重复入账。
     if from < 9 {
         upgrade_to_v9(&transaction)?;
+    }
+    // v10：额度事件记窗口长度（周期起点按「重置时刻 − 窗口长度」回推）；
+    // 同时删掉 v7 建的三张周期表——周期改成从事件纯函数推导，不再落盘。
+    if from < 10 {
+        upgrade_to_v10(&transaction)?;
     }
     transaction.commit()?;
     Ok(())
@@ -2572,6 +2583,24 @@ fn upgrade_to_v9(transaction: &rusqlite::Transaction) -> Result<(), UsageDbError
     Ok(())
 }
 
+/// v9 → v10。
+///
+/// - `quota_events` 增加 `window_seconds`：周期起点要靠它回推，而窗口长度随服务与
+///   套餐变化（Cursor 的计费周期桶尤其），不能只按窗口类型猜常量。
+/// - 删掉 v7 建的 `quota_cycles` / `quota_allowance_segments` / `quota_account_segments`：
+///   周期、额度片段与账号分段改为从 `quota_events` 纯函数推导（`usage::cycle`），
+///   不再需要一张要维护的状态机表；留着只会变成第二个事实源。
+fn upgrade_to_v10(transaction: &rusqlite::Transaction) -> Result<(), UsageDbError> {
+    transaction.execute_batch(
+        "ALTER TABLE quota_events ADD COLUMN window_seconds INTEGER;
+         DROP TABLE IF EXISTS quota_allowance_segments;
+         DROP TABLE IF EXISTS quota_account_segments;
+         DROP TABLE IF EXISTS quota_cycles;
+         PRAGMA user_version = 10;",
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2976,44 +3005,6 @@ mod tests {
                 ][..],
             ),
             (
-                "quota_cycles",
-                &[
-                    "id",
-                    "provider",
-                    "identity_key",
-                    "window_kind",
-                    "window_id",
-                    "start_at",
-                    "end_at",
-                    "scheduled_end_at",
-                    "first_sample_at",
-                    "last_sample_at",
-                    "latest_used_percent",
-                    "boundary_quality",
-                    "source",
-                    "updated_at",
-                ][..],
-            ),
-            (
-                "quota_allowance_segments",
-                &[
-                    "id",
-                    "cycle_id",
-                    "start_at",
-                    "end_at",
-                    "baseline_used_percent",
-                    "latest_used_percent",
-                    "maximum_used_percent",
-                    "first_sample_at",
-                    "last_sample_at",
-                    "start_reason",
-                ][..],
-            ),
-            (
-                "quota_account_segments",
-                &["id", "provider", "identity_key", "start_at", "end_at"][..],
-            ),
-            (
                 "dsh_sessions",
                 &[
                     "session_id",
@@ -3058,6 +3049,7 @@ mod tests {
                     "remaining_percent",
                     "observed_at",
                     "resets_at",
+                    "window_seconds",
                 ][..],
             ),
         ];

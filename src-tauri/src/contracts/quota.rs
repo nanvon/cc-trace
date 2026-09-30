@@ -51,9 +51,20 @@ impl ProviderId {
         }
     }
 
-    /// 是否支持本地用量统计（Antigravity 与 Command Code 只提供额度）。
+    /// 是否支持本地用量统计（Antigravity、Cursor 与 Command Code 没有本地会话日志）。
     pub fn has_local_usage(self) -> bool {
-        matches!(self, Self::Codex | Self::Claude)
+        !self.usage_sources().is_empty()
+    }
+
+    /// 属于这个服务的本地用量数据源。周期与片段的用量只按这些来源汇总：
+    /// 把别人的用量算进这个周期是伪造数据。
+    pub fn usage_sources(self) -> &'static [super::usage::UsageSource] {
+        use super::usage::UsageSource;
+        match self {
+            Self::Codex => &[UsageSource::Codex],
+            Self::Claude => &[UsageSource::Claude],
+            Self::Antigravity | Self::Cursor | Self::CommandCode => &[],
+        }
     }
 
     /// 是否有官方 Statuspage 状态链。
@@ -110,7 +121,7 @@ pub enum ProviderAvailability {
 ///
 /// `Total` / `Auto` / `Api` 是 Cursor 的计量桶，`Monthly` 是 Command Code GOAT 套餐的
 /// 月度额度：它们都不是滚动时间窗，但仍是「已用比例 + 重置时刻」的额度过期。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum QuotaWindowKind {
     FiveHour,

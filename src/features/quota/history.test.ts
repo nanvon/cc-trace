@@ -20,6 +20,7 @@ function event(
     windowKind: "fiveHour",
     windowId: "window",
     resetsAt: null,
+    windowSeconds: 18_000,
     ...overrides,
   };
 }

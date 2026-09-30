@@ -296,6 +296,101 @@ pub struct UsageConversationProjectOption {
     pub last_at: String,
 }
 
+/// 额度周期查询。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotaCycleQuery {
+    /// 只取某个服务；`None` 表示全部。
+    pub provider: Option<ProviderId>,
+    /// 只取某个额度主体（导入账号）；`None` 表示全部。
+    pub identity_key: Option<String>,
+    /// 回看天数；缺失按 30 天。
+    pub days: Option<u32>,
+}
+
+/// 周期的用量读数。没有本地用量的服务（Antigravity／Cursor／Command Code）全为 0。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotaCycleUsage {
+    pub tokens: UsageTokenTotals,
+    pub cost: UsageCostTotals,
+    pub request_count: i64,
+}
+
+/// 一个额度片段（周期内的份额度）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotaCycleSegmentView {
+    pub start_at: String,
+    /// 活动片段为 `None`。
+    pub end_at: Option<String>,
+    pub baseline_used_percent: i64,
+    pub latest_used_percent: i64,
+    pub maximum_used_percent: i64,
+    /// 官方口径的观察值：`latest - baseline`。
+    pub observed_used_percent: i64,
+    /// `initial` 或 `extraReset`。
+    pub start_reason: String,
+    pub active: bool,
+    pub usage: QuotaCycleUsage,
+}
+
+/// 用满预估。`confidence` 为 `early` 时不给具体数字。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotaCycleForecast {
+    pub confidence: String,
+    pub observed_percent: i64,
+    pub estimated_full_tokens: Option<i64>,
+    /// 十进制定点纳秒字符串，避免 JSON 数字精度丢失。
+    pub estimated_full_cost_nanos: Option<String>,
+    pub projected_cycle_tokens: Option<i64>,
+    pub projected_cycle_cost_nanos: Option<String>,
+}
+
+/// 一个额度周期。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotaCycleView {
+    /// 稳定标识：同一周期在两次查询之间必须一致。
+    pub id: String,
+    pub provider: ProviderId,
+    pub identity_key: String,
+    /// 主体展示名（导入账号的别名或邮箱）；主账号为 `None`。
+    pub identity_label: Option<String>,
+    pub window_kind: QuotaWindowKind,
+    pub window_id: String,
+    pub window_seconds: Option<u64>,
+    pub start_at: String,
+    pub end_at: String,
+    pub scheduled_end_at: String,
+    pub first_sample_at: String,
+    pub last_sample_at: String,
+    pub latest_used_percent: i64,
+    /// 官方口径的峰值（初始片段与额外片段之和，封顶 100）。
+    pub peak_used_percent: i64,
+    /// `observed`（亲眼看到重置）或 `inferred`（起点由重置时刻回推）。
+    pub boundary_quality: String,
+    pub extra_reset_count: i64,
+    /// 是不是当前正在走的周期。
+    pub active: bool,
+    /// 整周期用量。
+    pub usage: QuotaCycleUsage,
+    /// 当前片段用量。
+    pub current_allowance: QuotaCycleUsage,
+    pub segments: Vec<QuotaCycleSegmentView>,
+    pub forecast: Option<QuotaCycleForecast>,
+}
+
+/// `usage_quota_cycles` 的返回值。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotaCyclePage {
+    /// 按窗口类型与服务排序；同一序列内按周期起点升序。
+    pub cycles: Vec<QuotaCycleView>,
+    pub generated_at: String,
+}
+
 /// 项目列表排序。默认值跟随排行口径，由前端显式传入。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -425,6 +520,9 @@ pub struct QuotaHistoryEvent {
     pub observed_at: String,
     /// 事件时点该窗口的重置时间（ISO 8601 UTC）；缺失或旧数据为 `None`。
     pub resets_at: Option<String>,
+    /// 该窗口的长度（秒）。周期起点按「重置时刻 − 窗口长度」回推，因此必须随事件一起
+    /// 带出来；旧行与「窗口长度未知」的服务为 `None`（那时退回首次观察时刻）。
+    pub window_seconds: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

@@ -8,10 +8,10 @@ use tauri::State;
 
 use crate::app::AppCore;
 use crate::contracts::{
-    PricingCatalogRefreshStatus, QuotaHistory, QuotaHistoryQuery, UsageConversation,
-    UsageConversationBreakdown, UsageConversationPage, UsageConversationProjectOption,
-    UsageConversationQuery, UsageRepriceResult, UsageScanStatus, UsageSource, UsageSummary,
-    UsageSummaryQuery,
+    PricingCatalogRefreshStatus, QuotaCyclePage, QuotaCycleQuery, QuotaHistory, QuotaHistoryQuery,
+    UsageConversation, UsageConversationBreakdown, UsageConversationPage,
+    UsageConversationProjectOption, UsageConversationQuery, UsageRepriceResult, UsageScanStatus,
+    UsageSource, UsageSummary, UsageSummaryQuery,
 };
 use crate::usage::CursorRemoteOutcome;
 use crate::usage::UsageError;
@@ -122,6 +122,18 @@ pub fn usage_get_conversation_breakdown(
 ) -> Result<Option<UsageConversationBreakdown>, CommandError> {
     core.usage()
         .conversation_breakdown(conversation_key)
+        .map_err(map_usage_error)
+}
+
+/// 额度周期与用满预估。周期是从额度事件现算的派生结果，不落盘。
+#[tauri::command]
+pub fn usage_get_quota_cycles(
+    core: State<'_, Arc<AppCore>>,
+    query: QuotaCycleQuery,
+) -> Result<QuotaCyclePage, CommandError> {
+    let labels = core.subject_labels();
+    core.usage()
+        .quota_cycles(query, &labels)
         .map_err(map_usage_error)
 }
 
