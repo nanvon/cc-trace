@@ -3,6 +3,8 @@
 //! 扫描只读外部文件，所有派生数据写入 CC Trace 自己的 SQLite。command 只接收固定
 //! 查询参数，不接收路径；测试通过显式临时根目录覆盖，避免触碰真实用户数据。
 
+pub(crate) mod dsh;
+mod dsh_zstd;
 pub(crate) mod model;
 mod opencode;
 mod parser;
@@ -30,9 +32,9 @@ use crate::contracts::{
 };
 #[cfg(feature = "perf-baseline")]
 use crate::storage::PerfStats;
-use crate::storage::{UsageDb, UsageDbError};
+use crate::storage::{DshSessionUpsert, UsageDb, UsageDbError};
 
-use model::{ClaudeCursor, CodexCursor, ParsedLine, PiCursor, ScanBatch};
+use model::{ClaudeCursor, CodexCursor, ConversationFact, ParsedLine, PiCursor, ScanBatch};
 use parser::{parse_claude_line, parse_codex_line, parse_pi_line};
 use pricing::{
     PricingCatalog, PricingCatalogStore, PricingRefreshMode, PricingRefreshOutcome, PricingUsageKey,
@@ -43,6 +45,8 @@ const MAX_LINE_BYTES: usize = 16 * 1024 * 1024;
 const BATCH_LINES: u64 = 2_000;
 const BATCH_BYTES: u64 = 8 * 1024 * 1024;
 const PREFIX_BYTES: u64 = 4_096;
+/// DSH 父链解析的深度上限。超出即自认根：宁可少归一条，也不做无界遍历。
+const DSH_ROOT_MAX_DEPTH: usize = 32;
 const DEFAULT_LIMIT: u32 = 50;
 const MAX_LIMIT: u32 = 200;
 const MAX_FILTER_LENGTH: usize = 200;
@@ -366,6 +370,10 @@ impl UsageService {
                 .completed_files += 1;
         }
 
+        if let Some(root) = roots.dsh_sessions.as_deref() {
+            self.scan_dsh(root, &catalog, &previous_states)?;
+        }
+
         if let Some(db_path) = roots.opencode_db.as_deref() {
             let outcome = opencode::scan_opencode(&self.db, db_path)?;
             {
@@ -455,6 +463,226 @@ impl UsageService {
         self.db.reprice(&catalog)?;
         self.reprice_pending.store(false, Ordering::Release);
         Ok(true)
+    }
+
+    /// DSH 会话日志扫描。
+    ///
+    /// 与行式 JSONL 不同的三点，都是这条路径独立存在的原因：
+    /// 日志是多帧 zstd 容器、水位按帧边界推进、一个文件里包含整个会话的记录序列
+    /// （槽位替换、种子边界、标题覆盖都要在同一遍里处理）。
+    ///
+    /// 扫完之后统一做三件事：写会话归属表、解析父链把子代理归到根、
+    /// 以及把「日志已经不在了但汇总还在」的会话按天物化回来。
+    fn scan_dsh(
+        &self,
+        root: &Path,
+        catalog: &PricingCatalog,
+        previous_states: &HashMap<String, model::ScanFileState>,
+    ) -> Result<(), UsageError> {
+        let had_previous = previous_states.keys().any(|key| key.starts_with("dsh:"));
+        let selection = dsh::select_logs(root, had_previous);
+        if selection.failed_directories > 0 {
+            let mut status = self.status.lock().expect("usage scan status");
+            status.failed_files = status
+                .failed_files
+                .saturating_add(u64::try_from(selection.failed_directories).unwrap_or(u64::MAX));
+            status.partial_failure = true;
+        }
+        if selection.logs.is_empty() {
+            // 没有日志也要走归根与物化：清掉日志之后历史要能从汇总恢复。
+            self.settle_dsh_sessions(&[], &[])?;
+            return Ok(());
+        }
+        {
+            let mut status = self.status.lock().expect("usage scan status");
+            status.discovered_files = status
+                .discovered_files
+                .saturating_add(u64::try_from(selection.logs.len()).unwrap_or(u64::MAX));
+            status.current_source = Some(UsageSource::Dsh);
+        }
+
+        let mut sessions = Vec::new();
+        let mut touched = Vec::new();
+
+        for log in &selection.logs {
+            if self.cancel.load(Ordering::SeqCst) {
+                break;
+            }
+            let previous = previous_states.get(&log.file_key);
+            let state = previous
+                .and_then(|state| decode_cursor::<dsh::DshScanState>(state.cursor_json.as_deref()));
+            let previous_offset = previous.map(|state| state.offset_bytes).unwrap_or(0);
+            let reset = match previous {
+                None => false,
+                Some(previous) => {
+                    // 文件变小或前缀指纹变了（原地替换）→ 整份重扫。
+                    // 不复用文件身份（device/inode）：Windows 上没有稳定的等价物，
+                    // 前缀指纹是仓库既有的跨平台判据。
+                    previous.offset_bytes > log.size
+                        || prefix_fingerprint(
+                            &log.path,
+                            previous.size_bytes.min(PREFIX_BYTES).min(log.size),
+                        )
+                        .map_err(|_| UsageError::Unavailable)?
+                            != previous.prefix_fingerprint
+                }
+            };
+
+            if !reset
+                && previous.is_some_and(|state| {
+                    state.offset_bytes == log.size && state.mtime_ms == log.mtime_ms
+                })
+            {
+                // 这一轮没有新字节：跳过读取，但会话归属仍从状态里带出来，
+                // 否则「日志没变」的那些会话会从归属表里消失，子代理就归不到根上。
+                if let Some(state) = state.as_ref()
+                    && let Some(session_id) = state.session_id.clone()
+                {
+                    sessions.push(dsh::DshSessionRow {
+                        session_id,
+                        parent_session: state.parent_session.clone(),
+                        cwd: state.cwd.clone(),
+                        title: state.title.clone(),
+                        project_key: state
+                            .cwd
+                            .as_deref()
+                            .map(parser::project_identity)
+                            .and_then(|identity| identity.path),
+                    });
+                }
+                {
+                    let mut status = self.status.lock().expect("usage scan status");
+                    status.completed_files += 1;
+                }
+                continue;
+            }
+
+            let output = dsh::scan_log(log, state.as_ref(), previous_offset, reset);
+            if output.outcome != dsh::DshFileOutcome::Success {
+                let mut status = self.status.lock().expect("usage scan status");
+                status.failed_files += 1;
+                status.partial_failure = true;
+                status.completed_files += 1;
+                continue;
+            }
+
+            let Some(conversation) = output.conversation.as_ref() else {
+                // 成功但没有会话身份：不计入失败，也不写任何东西。
+                self.status
+                    .lock()
+                    .expect("usage scan status")
+                    .completed_files += 1;
+                continue;
+            };
+            let session_id = conversation.session_id.clone();
+            // 逐请求条目回来了：同一会话此前的按天物化条目必须让位，否则两份会并存。
+            let _ = self.db.dsh_drop_contribution_entries(&session_id);
+            sessions.push(dsh::DshSessionRow::from_conversation(conversation));
+            touched.push(session_id);
+
+            let mut batch = ScanBatch::default();
+            for draft in &output.entries {
+                let mut entry = dsh::into_usage_entry(draft);
+                parser::apply_price(&mut entry, catalog);
+                batch.entries.push(entry);
+            }
+            batch.conversations.push(ConversationFact {
+                conversation_key: conversation.conversation_key.clone(),
+                source: UsageSource::Dsh,
+                title: conversation.title.clone(),
+                project_hint: conversation.project_hint.clone(),
+                project_key: conversation.project_key.clone(),
+                worktree_path: conversation.worktree_path.clone(),
+                is_sidechain: conversation.parent_session.is_some(),
+                unattributed: false,
+                occurred_at: conversation.last_at.clone(),
+                source_id: None,
+                branch: None,
+            });
+            batch.consumed_bytes = output.offset.saturating_sub(previous_offset);
+
+            let cursor = encode_cursor(&output.state).map_err(|_| UsageError::Unavailable)?;
+            let prefix = prefix_fingerprint(&log.path, log.size.min(PREFIX_BYTES))
+                .map_err(|_| UsageError::Unavailable)?;
+            let result = self.db.commit_scan_batch(
+                &log.file_key,
+                UsageSource::Dsh,
+                log.mtime_ms,
+                log.size,
+                output.offset,
+                &prefix,
+                Some(&cursor),
+                reset,
+                &batch,
+            )?;
+
+            {
+                let mut status = self.status.lock().expect("usage scan status");
+                status.inserted_entries = status.inserted_entries.saturating_add(result.inserted);
+                status.duplicate_entries =
+                    status.duplicate_entries.saturating_add(result.duplicates);
+                status.completed_files += 1;
+            }
+        }
+
+        let touched: Vec<String> = {
+            let mut unique = touched;
+            unique.sort();
+            unique.dedup();
+            unique
+        };
+        self.settle_dsh_sessions(&sessions, &touched)?;
+        Ok(())
+    }
+
+    /// 会话归属落库、父链归根、贡献汇总与「日志已消失」的物化。
+    fn settle_dsh_sessions(
+        &self,
+        sessions: &[dsh::DshSessionRow],
+        touched: &[String],
+    ) -> Result<(), UsageError> {
+        if !sessions.is_empty() {
+            let now = chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+            let rows: Vec<DshSessionUpsert> = sessions
+                .iter()
+                .map(|session| DshSessionUpsert {
+                    session_id: session.session_id.clone(),
+                    parent_session: session.parent_session.clone(),
+                    cwd: session.cwd.clone(),
+                    title: session.title.clone(),
+                    project_key: session.project_key.clone(),
+                    updated_at: now.clone(),
+                })
+                .collect();
+            self.db.dsh_upsert_sessions(&rows)?;
+        }
+
+        // 汇总必须在归根之前算：归根会把子会话的条目挪到根上，
+        // 之后再算子会话的汇总就只剩空集了。
+        for session_id in touched {
+            self.db.dsh_recompute_rollup(session_id)?;
+        }
+
+        let parents = self.db.dsh_session_parents()?;
+        if !parents.is_empty() {
+            let roots = dsh::resolve_roots(&parents, DSH_ROOT_MAX_DEPTH);
+            let rows: Vec<(String, Option<String>)> = roots
+                .iter()
+                .map(|(session_id, root)| (session_id.clone(), Some(root.clone())))
+                .collect();
+            self.db.dsh_set_roots(&rows)?;
+            for (session_id, root) in &roots {
+                if session_id == root {
+                    continue;
+                }
+                self.db
+                    .dsh_rekey_session(&format!("dsh:{session_id}"), &format!("dsh:{root}"))?;
+            }
+        }
+
+        // 汇总算完之后再物化：日志被清理或条目被重建的会话从这里恢复历史。
+        self.db.dsh_materialize_missing()?;
+        Ok(())
     }
 
     fn scan_file(
@@ -725,6 +953,7 @@ pub struct BenchmarkRoots {
     pub codex_archived: Option<PathBuf>,
     pub claude_projects: Option<PathBuf>,
     pub pi_sessions: Option<PathBuf>,
+    pub dsh_sessions: Option<PathBuf>,
     pub opencode_db: Option<PathBuf>,
     pub codex_title_index: Option<PathBuf>,
     pub claude_history: Option<PathBuf>,
@@ -738,6 +967,7 @@ impl BenchmarkRoots {
             codex_archived: self.codex_archived,
             claude_projects: self.claude_projects,
             pi_sessions: self.pi_sessions,
+            dsh_sessions: self.dsh_sessions,
             opencode_db: self.opencode_db,
             codex_title_index: self.codex_title_index,
             claude_history: self.claude_history,
@@ -750,6 +980,7 @@ struct ScanRoots {
     codex_archived: Option<PathBuf>,
     claude_projects: Option<PathBuf>,
     pi_sessions: Option<PathBuf>,
+    dsh_sessions: Option<PathBuf>,
     opencode_db: Option<PathBuf>,
     codex_title_index: Option<PathBuf>,
     claude_history: Option<PathBuf>,
@@ -767,6 +998,8 @@ impl ScanRoots {
                 .map(|path| path.join(".codex/archived_sessions")),
             claude_projects: home.as_ref().map(|path| path.join(".claude/projects")),
             pi_sessions: home.as_ref().map(|path| path.join(".pi/agent/sessions")),
+            // DSH 的会话日志根。目录结构是 <项目段>/<会话段>/<日志文件>。
+            dsh_sessions: home.as_ref().map(|path| path.join(".dsh/sessions")),
             opencode_db: home
                 .as_ref()
                 .map(|path| path.join(".local/share/opencode/opencode.db")),
@@ -1098,6 +1331,7 @@ mod tests {
             codex_archived: Some(base.join("codex/archived")),
             claude_projects: Some(base.join("claude/projects")),
             pi_sessions: Some(base.join("pi/sessions")),
+            dsh_sessions: Some(base.join("dsh/sessions")),
             opencode_db: Some(base.join("opencode/opencode.db")),
             codex_title_index: Some(base.join("codex/session_index.jsonl")),
             claude_history: Some(base.join("claude/history.jsonl")),
@@ -1246,6 +1480,209 @@ mod tests {
                 .entry_count,
             2
         );
+    }
+
+    /// 在 DSH 日志根下写一个会话目录：`<项目段>/<会话段>/session.jsonl`。
+    fn seed_dsh_session(
+        base: &Path,
+        project: &str,
+        session: &str,
+        lines: &[serde_json::Value],
+    ) -> PathBuf {
+        let root = fixture_roots(base).dsh_sessions.expect("dsh root");
+        let directory = root.join(project).join(session);
+        fs::create_dir_all(&directory).expect("dsh dir");
+        let path = directory.join("session.jsonl");
+        let mut body = String::new();
+        for line in lines {
+            body.push_str(&line.to_string());
+            body.push('\n');
+        }
+        fs::write(&path, body).expect("dsh fixture");
+        path
+    }
+
+    fn dsh_session_line(id: &str, cwd: &str, parent: Option<&str>) -> serde_json::Value {
+        match parent {
+            Some(parent) => serde_json::json!({
+                "type": "session", "id": id, "cwd": cwd, "parentSession": parent
+            }),
+            None => serde_json::json!({ "type": "session", "id": id, "cwd": cwd }),
+        }
+    }
+
+    fn dsh_assistant_line(turn: i64, step: i64, input: i64, output: i64) -> serde_json::Value {
+        serde_json::json!({
+            "type": "assistant/message",
+            "time": 1_790_000_000_000_i64 + turn * 1000 + step,
+            "data": {
+                "turn": turn,
+                "step": step,
+                "usage": { "inputTokens": input, "outputTokens": output },
+                "message": { "source": { "provider": "anthropic", "model": "claude-sonnet-4-5" } }
+            }
+        })
+    }
+
+    #[test]
+    fn dsh_participates_in_the_pricing_catalog() {
+        // DSH 日志没有账单费用，只有 token 用量；按 cc-bar 的做法由价格表估算，
+        // 因此它必须出现在定价参与者集合里，而不是像 Pi／OpenCode 那样自带费用。
+        assert!(UsageSource::ALL.contains(&UsageSource::Dsh));
+        assert!(!UsageSource::Dsh.carries_own_cost());
+        assert!(UsageSource::Pi.carries_own_cost());
+        assert!(UsageSource::Opencode.carries_own_cost());
+        assert!(UsageSource::Cursor.carries_own_cost());
+    }
+
+    #[test]
+    fn dsh_sessions_are_scanned_priced_and_grouped_by_project() {
+        let config = tempfile::tempdir().expect("config");
+        let sources = tempfile::tempdir().expect("sources");
+        seed_dsh_session(
+            sources.path(),
+            "project-a",
+            "session-1",
+            &[
+                dsh_session_line("s-1", "/work/demo", None),
+                dsh_assistant_line(1, 1, 100, 50),
+            ],
+        );
+        seed_dsh_session(
+            sources.path(),
+            "project-b",
+            "session-2",
+            &[
+                dsh_session_line("s-2", "/work/other", None),
+                dsh_assistant_line(1, 1, 20, 10),
+            ],
+        );
+
+        let service = UsageService::new(config.path().to_path_buf());
+        service
+            .run_scan_inner(fixture_roots(sources.path()))
+            .expect("dsh scan");
+
+        let summary = service
+            .summary(UsageSummaryQuery {
+                filter: UsageFilter::default(),
+                group_by: crate::contracts::UsageGroupBy::Source,
+            })
+            .expect("summary");
+        assert_eq!(summary.entry_count, 2);
+        assert_eq!(summary.tokens.uncached_input_tokens, 120);
+        assert_eq!(summary.tokens.output_tokens, 60);
+
+        // DSH 只有 token 用量、没有账单费用，因此必须走价格表：
+        // 要么命中目录（priced），要么明确记成缺价（unpriced）。测试环境没有在线目录，
+        // 所以这里断言的是「两条都进入了定价判定」，而不是「一定有价格」。
+        assert_eq!(
+            summary.cost.priced_entries + summary.cost.unpriced_entries,
+            2,
+            "DSH 的条目必须进入定价判定，不能跳过价格层"
+        );
+
+        let conversations = service
+            .conversations(UsageConversationQuery {
+                filter: UsageFilter::default(),
+                ..UsageConversationQuery::default()
+            })
+            .expect("conversations");
+        assert_eq!(conversations.total, 2);
+        let projects: Vec<&str> = conversations
+            .items
+            .iter()
+            .filter_map(|item| item.project_key.as_deref())
+            .collect();
+        assert!(projects.contains(&"/work/demo"));
+        assert!(projects.contains(&"/work/other"));
+    }
+
+    #[test]
+    fn dsh_child_sessions_merge_into_the_root_conversation() {
+        let config = tempfile::tempdir().expect("config");
+        let sources = tempfile::tempdir().expect("sources");
+        seed_dsh_session(
+            sources.path(),
+            "project-a",
+            "root-session",
+            &[
+                dsh_session_line("root", "/work/demo", None),
+                dsh_assistant_line(1, 1, 100, 50),
+            ],
+        );
+        seed_dsh_session(
+            sources.path(),
+            "project-a",
+            "child-session",
+            &[
+                dsh_session_line("child", "/work/demo", Some("root")),
+                dsh_assistant_line(1, 1, 10, 5),
+            ],
+        );
+
+        let service = UsageService::new(config.path().to_path_buf());
+        service
+            .run_scan_inner(fixture_roots(sources.path()))
+            .expect("dsh scan");
+
+        let conversations = service
+            .conversations(UsageConversationQuery {
+                filter: UsageFilter::default(),
+                ..UsageConversationQuery::default()
+            })
+            .expect("conversations");
+        assert_eq!(conversations.total, 1, "子代理归到根会话，只剩一行");
+        let root = &conversations.items[0];
+        assert_eq!(root.conversation_key, "dsh:root");
+        assert_eq!(root.entry_count, 2);
+        assert_eq!(root.tokens.uncached_input_tokens, 110);
+    }
+
+    #[test]
+    fn dsh_history_survives_losing_the_log_file() {
+        let config = tempfile::tempdir().expect("config");
+        let sources = tempfile::tempdir().expect("sources");
+        let path = seed_dsh_session(
+            sources.path(),
+            "project-a",
+            "session-1",
+            &[
+                dsh_session_line("s-1", "/work/demo", None),
+                dsh_assistant_line(1, 1, 100, 50),
+            ],
+        );
+
+        let service = UsageService::new(config.path().to_path_buf());
+        service
+            .run_scan_inner(fixture_roots(sources.path()))
+            .expect("first scan");
+        let before = service
+            .summary(UsageSummaryQuery {
+                filter: UsageFilter::default(),
+                group_by: crate::contracts::UsageGroupBy::Source,
+            })
+            .expect("summary");
+
+        // 日志被清理（cc-bar 的「源日志被删也不倒扣历史」），然后重建用量。
+        fs::remove_file(&path).expect("remove log");
+        service
+            .rebuild_with_roots(None, fixture_roots(sources.path()))
+            .expect("rebuild");
+        // 重建是异步起线程的：不等它结束就读汇总会拿到中间状态。
+        wait_for_idle(&service);
+
+        let after = service
+            .summary(UsageSummaryQuery {
+                filter: UsageFilter::default(),
+                group_by: crate::contracts::UsageGroupBy::Source,
+            })
+            .expect("summary after rebuild");
+        assert_eq!(
+            after.tokens.uncached_input_tokens, before.tokens.uncached_input_tokens,
+            "重建后历史不能倒扣"
+        );
+        assert_eq!(after.entry_count, 1, "按天粒度物化回一条");
     }
 
     #[test]

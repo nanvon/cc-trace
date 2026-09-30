@@ -58,6 +58,9 @@ sha2 = "0.10"
 # GB 级本地 JSONL 的派生索引留在 Rust 层；bundled 固定 SQLite 能力并避免目标机
 # 系统库差异。前端不获得 SQL 权限，见 ADR-0018。
 rusqlite = { version = "0.32", features = ["bundled"] }
+# DSH 会话日志是多帧 zstd 容器（docs/决策/ADR-0031）。用官方绑定而不是纯 Rust 实现：
+# checksum 校验与错误名要和 DSH 随包的 libzstd 行为一致。
+zstd = { version = "0.13", default-features = false }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # 解 Claude Desktop 的 Electron safeStorage 缓存（ADR-0035）：

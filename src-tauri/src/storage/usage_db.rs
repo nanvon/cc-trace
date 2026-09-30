@@ -28,7 +28,7 @@ use crate::usage::model::{
 use crate::usage::pricing::{PricingCatalog, PricingUsageKey};
 
 const DATABASE_FILE: &str = "usage.db";
-const SCHEMA_VERSION: i64 = 7;
+const SCHEMA_VERSION: i64 = 8;
 
 #[derive(Debug)]
 pub enum UsageDbError {
@@ -440,6 +440,252 @@ impl UsageDb {
                 .map_err(|_| UsageDbError::Sql)?,
             files_removed: u64::try_from(files_removed).map_err(|_| UsageDbError::Sql)?,
         })
+    }
+
+    // ---- DSH 会话归属与贡献汇总（schema v8） ----
+
+    /// 写入或更新会话归属信息。
+    ///
+    /// 父会话与标题都按「新值非空才覆盖」合并：同一会话在后续轮次里可能只写出部分字段，
+    /// 用空值覆盖会把已有的父子关系抹掉，子代理就再也归不到根上。
+    pub fn dsh_upsert_sessions(&self, rows: &[DshSessionUpsert]) -> Result<(), UsageDbError> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        self.initialize()?;
+        let _guard = self.write_lock.lock().expect("usage db write lock");
+        let mut connection = self.open_write_unchecked()?;
+        let transaction = connection.transaction()?;
+        {
+            let mut statement = transaction.prepare(
+                "INSERT INTO dsh_sessions (
+                   session_id, parent_session, cwd, title, project_key, updated_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT(session_id) DO UPDATE SET
+                   parent_session = COALESCE(excluded.parent_session, dsh_sessions.parent_session),
+                   cwd = COALESCE(excluded.cwd, dsh_sessions.cwd),
+                   title = COALESCE(excluded.title, dsh_sessions.title),
+                   project_key = COALESCE(excluded.project_key, dsh_sessions.project_key),
+                   updated_at = excluded.updated_at",
+            )?;
+            for row in rows {
+                statement.execute(params![
+                    row.session_id,
+                    row.parent_session,
+                    row.cwd,
+                    row.title,
+                    row.project_key,
+                    row.updated_at,
+                ])?;
+            }
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// 全部会话的父子关系，供父链解析使用。
+    pub fn dsh_session_parents(&self) -> Result<Vec<(String, Option<String>)>, UsageDbError> {
+        let connection = self.open_read()?;
+        let mut statement =
+            connection.prepare("SELECT session_id, parent_session FROM dsh_sessions")?;
+        let rows = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// 写入解析出的根会话。`None` 表示「缺失」，此时保留旧值。
+    pub fn dsh_set_roots(&self, roots: &[(String, Option<String>)]) -> Result<(), UsageDbError> {
+        if roots.is_empty() {
+            return Ok(());
+        }
+        self.initialize()?;
+        let _guard = self.write_lock.lock().expect("usage db write lock");
+        let mut connection = self.open_write_unchecked()?;
+        let transaction = connection.transaction()?;
+        {
+            let mut statement = transaction.prepare(
+                "UPDATE dsh_sessions SET root_session = COALESCE(?2, root_session)
+                  WHERE session_id = ?1",
+            )?;
+            for (session_id, root) in roots {
+                statement.execute(params![session_id, root])?;
+            }
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// 把一个子会话的条目与对话行重挂到根会话。返回是否发生了移动。
+    ///
+    /// 对话行按「根的信息优先、子会话只补空」合并：根自己的标题与项目不能被
+    /// 子会话的取值覆盖，否则合并后列表上会出现子会话的标题。
+    pub fn dsh_rekey_session(&self, from_key: &str, to_key: &str) -> Result<bool, UsageDbError> {
+        if from_key == to_key {
+            return Ok(false);
+        }
+        self.initialize()?;
+        let _guard = self.write_lock.lock().expect("usage db write lock");
+        let mut connection = self.open_write_unchecked()?;
+        let transaction = connection.transaction()?;
+
+        let moved_entries = transaction.execute(
+            "UPDATE usage_entries SET conversation_key = ?2 WHERE conversation_key = ?1",
+            params![from_key, to_key],
+        )?;
+
+        let exists: i64 = transaction.query_row(
+            "SELECT COUNT(*) FROM conversations WHERE conversation_key = ?1",
+            params![from_key],
+            |row| row.get(0),
+        )?;
+        if exists > 0 {
+            transaction.execute(
+                "INSERT INTO conversations (
+                   conversation_key, source, title, project_hint, project_key, worktree_path,
+                   is_sidechain, unattributed, first_at, last_at, source_id, branch
+                 )
+                 SELECT ?2, source, title, project_hint, project_key, worktree_path,
+                        1, unattributed, first_at, last_at, source_id, branch
+                   FROM conversations WHERE conversation_key = ?1
+                 ON CONFLICT(conversation_key) DO UPDATE SET
+                   title = COALESCE(conversations.title, excluded.title),
+                   project_hint = COALESCE(conversations.project_hint, excluded.project_hint),
+                   project_key = COALESCE(conversations.project_key, excluded.project_key),
+                   worktree_path = COALESCE(conversations.worktree_path, excluded.worktree_path),
+                   is_sidechain = MAX(conversations.is_sidechain, excluded.is_sidechain),
+                   unattributed = MAX(conversations.unattributed, excluded.unattributed),
+                   first_at = MIN(conversations.first_at, excluded.first_at),
+                   last_at = MAX(conversations.last_at, excluded.last_at),
+                   source_id = COALESCE(conversations.source_id, excluded.source_id),
+                   branch = COALESCE(conversations.branch, excluded.branch)",
+                params![from_key, to_key],
+            )?;
+            transaction.execute(
+                "DELETE FROM conversations WHERE conversation_key = ?1",
+                params![from_key],
+            )?;
+        }
+
+        transaction.commit()?;
+        Ok(moved_entries > 0)
+    }
+
+    /// 重算一个会话的贡献汇总（按自然日 × 模型 × 速度）。
+    ///
+    /// 汇总来自 `usage_entries`，是「重建后仍能还原历史」的唯一依据；
+    /// 因此重建前必须已经把汇总写好。
+    pub fn dsh_recompute_rollup(&self, session_id: &str) -> Result<(), UsageDbError> {
+        self.initialize()?;
+        let _guard = self.write_lock.lock().expect("usage db write lock");
+        let mut connection = self.open_write_unchecked()?;
+        let conversation_key = format!("dsh:{session_id}");
+        let transaction = connection.transaction()?;
+        transaction.execute(
+            "DELETE FROM dsh_session_usage WHERE session_id = ?1",
+            params![session_id],
+        )?;
+        transaction.execute(
+            "INSERT INTO dsh_session_usage (
+               session_id, day_local, model, speed, request_count,
+               uncached_input_tokens, output_tokens, reasoning_output_tokens,
+               cache_read_input_tokens, cache_write_5m_input_tokens,
+               cache_write_1h_input_tokens, api_equivalent_cost_nanos, updated_at
+             )
+             SELECT ?1, day_local, COALESCE(model, ''), speed,
+                    COALESCE(SUM(request_count), 0),
+                    COALESCE(SUM(uncached_input_tokens), 0),
+                    COALESCE(SUM(output_tokens), 0),
+                    COALESCE(SUM(reasoning_output_tokens), 0),
+                    COALESCE(SUM(cache_read_input_tokens), 0),
+                    COALESCE(SUM(cache_write_5m_input_tokens), 0),
+                    COALESCE(SUM(cache_write_1h_input_tokens), 0),
+                    COALESCE(SUM(api_equivalent_cost_nanos), 0),
+                    strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+               FROM usage_entries
+              WHERE conversation_key = ?2
+              GROUP BY day_local, COALESCE(model, ''), speed",
+            params![session_id, conversation_key],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// 删掉某个会话的「汇总物化」条目。日志回来了就用逐请求条目，两者不能共存。
+    pub fn dsh_drop_contribution_entries(&self, session_id: &str) -> Result<u64, UsageDbError> {
+        let prefix = contribution_dedup_prefix(session_id);
+        self.initialize()?;
+        let _guard = self.write_lock.lock().expect("usage db write lock");
+        let connection = self.open_write_unchecked()?;
+        let removed = connection.execute(
+            "DELETE FROM usage_entries
+              WHERE source = 'dsh' AND substr(dedup_key, 1, ?1) = ?2",
+            params![prefix.len() as i64, prefix],
+        )?;
+        u64::try_from(removed).map_err(|_| UsageDbError::Sql)
+    }
+
+    /// 源日志已经不在、但汇总还在的会话，按天粒度把历史物化回 `usage_entries`。
+    ///
+    /// 只在「这个会话一条条目都没有」时物化：日志还在时扫描会写出逐请求条目，
+    /// 再补一份按天的就是双份。返回物化的行数。
+    ///
+    /// `occurred_at` 取「本地日零点换算成的 UTC 时刻」：按天粒度的事实只有自然日一个
+    /// 时间锚点，直接写 `T00:00:00Z` 会让西半球时区的行落到当天的查询窗口之外。
+    /// SQLite 的 `'utc'` 修饰符按当前时区换算，跨夏令时的历史日期可能差一小时——
+    /// 对按天的账不影响总量，只影响极端时区下的边界归日。
+    pub fn dsh_materialize_missing(&self) -> Result<u64, UsageDbError> {
+        self.initialize()?;
+        let _guard = self.write_lock.lock().expect("usage db write lock");
+        let mut connection = self.open_write_unchecked()?;
+        let transaction = connection.transaction()?;
+
+        let sessions: Vec<String> = {
+            let mut statement = transaction.prepare(
+                "SELECT r.session_id
+                   FROM dsh_session_usage r
+                  WHERE r.request_count > 0
+                    AND NOT EXISTS (
+                          SELECT 1 FROM usage_entries e
+                           WHERE e.conversation_key = 'dsh:' || r.session_id
+                        )
+                  GROUP BY r.session_id",
+            )?;
+            let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+
+        let mut inserted = 0_u64;
+        for session_id in sessions {
+            let file_key = format!("dsh:contribution:{session_id}");
+            let dedup_prefix = contribution_dedup_prefix(&session_id);
+            let conversation_key = format!("dsh:{session_id}");
+            inserted += transaction.execute(
+                "INSERT OR REPLACE INTO usage_entries (
+                   file_key, source, dedup_key, conversation_key, model, speed,
+                   inference_geo, occurred_at, day_local, uncached_input_tokens,
+                   output_tokens, reasoning_output_tokens, cache_read_input_tokens,
+                   cache_write_5m_input_tokens, cache_write_1h_input_tokens,
+                   api_equivalent_cost_nanos, billing_equivalent_tokens_nanos,
+                   fast_multiplier_nanos, pricing_fingerprint, request_count,
+                   granularity
+                 )
+                 SELECT ?1, 'dsh',
+                        ?2 || r.day_local || ':' || r.model || ':' || r.speed,
+                        ?3, r.model, r.speed, 'unknown',
+                        strftime('%Y-%m-%dT%H:%M:%SZ', r.day_local || ' 00:00:00', 'utc'),
+                        r.day_local,
+                        r.uncached_input_tokens, r.output_tokens,
+                        r.reasoning_output_tokens, r.cache_read_input_tokens,
+                        r.cache_write_5m_input_tokens, r.cache_write_1h_input_tokens,
+                        r.api_equivalent_cost_nanos, NULL, NULL, NULL,
+                        r.request_count, 'day'
+                   FROM dsh_session_usage r
+                  WHERE r.session_id = ?4 AND r.request_count > 0",
+                params![file_key, dedup_prefix, conversation_key, session_id],
+            )? as u64;
+        }
+
+        transaction.commit()?;
+        Ok(inserted)
     }
 
     pub fn summary(&self, query: &UsageSummaryQuery) -> Result<UsageSummary, UsageDbError> {
@@ -1344,7 +1590,7 @@ impl UsageDb {
 }
 
 fn migrate(connection: &mut Connection, from: i64) -> Result<(), UsageDbError> {
-    if !matches!(from, 0..=6) {
+    if !matches!(from, 0..=7) {
         return Err(UsageDbError::UnsupportedSchema);
     }
     let transaction = connection.transaction()?;
@@ -1469,6 +1715,10 @@ fn migrate(connection: &mut Connection, from: i64) -> Result<(), UsageDbError> {
     // 与 `from` 无关地统一从这里升，新建库也走同一条路径，避免两套 schema 文本分叉。
     if from < 7 {
         upgrade_to_v7(&transaction)?;
+    }
+    // v8：DSH 的会话归属与「源日志被清理后仍保留历史」所需的贡献汇总。
+    if from < 8 {
+        upgrade_to_v8(&transaction)?;
     }
     transaction.commit()?;
     Ok(())
@@ -1922,6 +2172,22 @@ fn speed_from_db(value: &str) -> rusqlite::Result<UsageSpeed> {
     }
 }
 
+/// 写入 `dsh_sessions` 的一行。父会话与标题按「新值非空才覆盖」合并。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DshSessionUpsert {
+    pub session_id: String,
+    pub parent_session: Option<String>,
+    pub cwd: Option<String>,
+    pub title: Option<String>,
+    pub project_key: Option<String>,
+    pub updated_at: String,
+}
+
+/// 会话汇总物化条目在 `dedup_key` 上的前缀。
+fn contribution_dedup_prefix(session_id: &str) -> String {
+    format!("dsh-contribution:{session_id}:")
+}
+
 fn provider_db(provider: ProviderId) -> &'static str {
     provider.key()
 }
@@ -2044,6 +2310,48 @@ impl DateTimeValidator {
     fn is_rfc3339(value: &str) -> bool {
         chrono::DateTime::parse_from_rfc3339(value).is_ok()
     }
+}
+
+/// v7 → v8。
+///
+/// - `dsh_sessions`：会话 → 父会话 → 根会话。父链在每轮扫描后重算，子会话的条目与
+///   对话行重挂到根上（子代理归并，对齐 cc-bar 的 `includesSubtasks`）。
+/// - `dsh_session_usage`：按会话 × 自然日 × 模型 × 速度的贡献汇总。
+///   `usage_entries` 被重建（「重新计算用量」）或源日志被清理后，用它把历史重新物化，
+///   避免「清一次日志就倒扣历史」。
+fn upgrade_to_v8(transaction: &rusqlite::Transaction) -> Result<(), UsageDbError> {
+    transaction.execute_batch(
+        "CREATE TABLE dsh_sessions (
+           session_id TEXT PRIMARY KEY,
+           parent_session TEXT,
+           root_session TEXT,
+           cwd TEXT,
+           title TEXT,
+           project_key TEXT,
+           updated_at TEXT NOT NULL
+         );
+         CREATE INDEX ix_dsh_sessions_root ON dsh_sessions(root_session);
+         CREATE TABLE dsh_session_usage (
+           session_id TEXT NOT NULL,
+           day_local TEXT NOT NULL,
+           model TEXT NOT NULL,
+           speed TEXT NOT NULL,
+           request_count INTEGER NOT NULL CHECK(request_count >= 0),
+           uncached_input_tokens INTEGER NOT NULL CHECK(uncached_input_tokens >= 0),
+           output_tokens INTEGER NOT NULL CHECK(output_tokens >= 0),
+           reasoning_output_tokens INTEGER NOT NULL CHECK(reasoning_output_tokens >= 0),
+           cache_read_input_tokens INTEGER NOT NULL CHECK(cache_read_input_tokens >= 0),
+           cache_write_5m_input_tokens INTEGER NOT NULL
+             CHECK(cache_write_5m_input_tokens >= 0),
+           cache_write_1h_input_tokens INTEGER NOT NULL
+             CHECK(cache_write_1h_input_tokens >= 0),
+           api_equivalent_cost_nanos INTEGER,
+           updated_at TEXT NOT NULL,
+           PRIMARY KEY (session_id, day_local, model, speed)
+         );
+         PRAGMA user_version = 8;",
+    )?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -2486,6 +2794,36 @@ mod tests {
             (
                 "quota_account_segments",
                 &["id", "provider", "identity_key", "start_at", "end_at"][..],
+            ),
+            (
+                "dsh_sessions",
+                &[
+                    "session_id",
+                    "parent_session",
+                    "root_session",
+                    "cwd",
+                    "title",
+                    "project_key",
+                    "updated_at",
+                ][..],
+            ),
+            (
+                "dsh_session_usage",
+                &[
+                    "session_id",
+                    "day_local",
+                    "model",
+                    "speed",
+                    "request_count",
+                    "uncached_input_tokens",
+                    "output_tokens",
+                    "reasoning_output_tokens",
+                    "cache_read_input_tokens",
+                    "cache_write_5m_input_tokens",
+                    "cache_write_1h_input_tokens",
+                    "api_equivalent_cost_nanos",
+                    "updated_at",
+                ][..],
             ),
             (
                 "quota_events",

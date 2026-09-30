@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::contracts::{UsageSource, UsageSpeed};
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Granularity {
     /// 逐请求事实（本地日志扫描）。
     Request,
@@ -44,7 +44,7 @@ impl InferenceGeo {
     }
 }
 
-#[derive(Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TokenFacts {
     pub uncached_input_tokens: i64,
     pub output_tokens: i64,

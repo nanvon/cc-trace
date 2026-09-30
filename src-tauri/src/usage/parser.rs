@@ -782,7 +782,7 @@ fn hash_parts(parts: &[&str]) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-fn apply_price(entry: &mut UsageEntry, catalog: &PricingCatalog) {
+pub(crate) fn apply_price(entry: &mut UsageEntry, catalog: &PricingCatalog) {
     let estimate = catalog.estimate_entry(entry);
     let (billing_equivalent, multiplier) = catalog.fast_billing_equivalent(
         entry.source,

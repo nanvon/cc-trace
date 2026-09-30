@@ -20,9 +20,12 @@ pub enum UsageSource {
 }
 
 impl UsageSource {
-    /// 参与在线定价与 fingerprint 的数据源；Pi、OpenCode、DSH 自带 cost，
-    /// Cursor 用服务端计量费用，都不参与价格目录。
-    pub const ALL: [Self; 2] = [Self::Codex, Self::Claude];
+    /// 参与在线定价与 fingerprint 的数据源。
+    ///
+    /// DSH 日志只有 token 用量、没有可当作账单的费用，按 cc-bar 的做法用价格表估算，
+    /// 因此它也是价格目录的参与者；Pi 与 OpenCode 的日志自带 cost、
+    /// Cursor 用服务端计量费用，三者都不参与。
+    pub const ALL: [Self; 3] = [Self::Codex, Self::Claude, Self::Dsh];
 
     /// 需要本地扫描的数据源；Cursor 不在其中。
     pub const LOCAL_SCAN: [Self; 5] = [
@@ -59,9 +62,9 @@ impl UsageSource {
         !matches!(self, Self::Cursor)
     }
 
-    /// 是否自带费用真值、不参与价格表（Pi／OpenCode／DSH 是日志自带，Cursor 是服务端计量）。
+    /// 是否自带费用真值、不参与价格表（Pi／OpenCode 是日志自带，Cursor 是服务端计量）。
     pub fn carries_own_cost(self) -> bool {
-        matches!(self, Self::Pi | Self::Opencode | Self::Dsh | Self::Cursor)
+        matches!(self, Self::Pi | Self::Opencode | Self::Cursor)
     }
 }
 
