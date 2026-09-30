@@ -347,7 +347,9 @@ impl CodexProvider {
             Discovery::Missing => return ProviderFetchOutcome::NoCredentials,
             Discovery::Unsupported => return ProviderFetchOutcome::Unsupported,
             // 有登录态但读不出来。说成「没有凭据」会把权限问题伪装成未登录。
-            Discovery::Unreadable => {
+            // 有登录态但读不出来或已过期。说成「没有凭据」会把权限问题与过期
+            // 伪装成未登录，两者的处置完全不同。
+            Discovery::Unreadable | Discovery::Expired => {
                 return ProviderFetchOutcome::Failed {
                     kind: ErrorKind::Credentials,
                 };

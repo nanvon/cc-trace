@@ -11,6 +11,7 @@ pub mod claude;
 pub mod codex;
 pub mod command_code;
 pub mod credentials;
+pub mod cursor;
 pub mod http;
 pub mod service_status;
 pub mod synthetic;

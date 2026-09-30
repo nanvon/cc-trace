@@ -23,6 +23,7 @@ use crate::providers::QuotaProvider;
 use crate::providers::claude::ClaudeProvider;
 use crate::providers::codex::CodexProvider;
 use crate::providers::command_code::CommandCodeProvider;
+use crate::providers::cursor::CursorProvider;
 #[cfg(debug_assertions)]
 use crate::providers::synthetic::{Scenario, ScenarioHandle, SyntheticProvider};
 use crate::scheduler::params::jittered_seconds;
@@ -765,6 +766,10 @@ fn build_slots(
     insert(
         QuotaSubject::primary(ProviderId::Claude),
         ClaudeProvider::new(),
+    );
+    insert(
+        QuotaSubject::primary(ProviderId::Cursor),
+        CursorProvider::new(),
     );
     insert(
         QuotaSubject::primary(ProviderId::CommandCode),

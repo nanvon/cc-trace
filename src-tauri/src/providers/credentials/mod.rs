@@ -13,6 +13,7 @@
 pub mod claude;
 pub mod codex;
 pub mod command_code;
+pub mod cursor;
 mod jwt;
 
 use std::fmt;
@@ -31,6 +32,9 @@ pub enum Discovery<T> {
     /// 来源存在但读不出来：权限被拒、钥匙串授权被拒、IO 失败 → 凭据类 `error`。
     /// 不并入 `Missing`，否则会把「有登录态但拿不到」说成「没有登录」。
     Unreadable,
+    /// 来源里的登录态已经过期或即将过期（剩余寿命不足刷新余量）→ 凭据类 `error`。
+    /// 不并入 `Missing`：这不是「没登录过」，而是「登录过期了，去重新登录」。
+    Expired,
 }
 
 /// 持有秘密的字符串。

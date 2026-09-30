@@ -480,7 +480,7 @@ impl ClaudeProvider {
             Discovery::Missing => return ProviderFetchOutcome::NoCredentials,
             Discovery::Unsupported => return ProviderFetchOutcome::Unsupported,
             // 钥匙串授权被拒也落这里：有登录态，只是我们拿不到。
-            Discovery::Unreadable => {
+            Discovery::Unreadable | Discovery::Expired => {
                 return ProviderFetchOutcome::Failed {
                     kind: ErrorKind::Credentials,
                 };

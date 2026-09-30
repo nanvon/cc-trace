@@ -81,7 +81,7 @@ impl CommandCodeProvider {
             Discovery::Found(credentials) => credentials,
             Discovery::Missing => return ProviderFetchOutcome::NoCredentials,
             Discovery::Unsupported => return ProviderFetchOutcome::Unsupported,
-            Discovery::Unreadable => {
+            Discovery::Unreadable | Discovery::Expired => {
                 return ProviderFetchOutcome::Failed {
                     kind: ErrorKind::Credentials,
                 };

@@ -28,6 +28,33 @@ pub fn expires_at(token: &str) -> Option<DateTime<Utc>> {
     DateTime::from_timestamp(exp as i64, 0)
 }
 
+/// base64url（RFC 4648 §5）编码，不带 padding。
+///
+/// 只用于测试构造真实形状的 token 与 fixtures：生产路径只解码，不编码，
+/// 所以这里也不引入 base64 依赖，就着解码器的手写风格写一遍。
+#[cfg(test)]
+pub(crate) fn base64url_encode(input: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+    let mut output = String::with_capacity(input.len().div_ceil(3) * 4);
+    for chunk in input.chunks(3) {
+        let first = u32::from(chunk[0]);
+        let second = chunk.get(1).copied().map(u32::from).unwrap_or(0);
+        let third = chunk.get(2).copied().map(u32::from).unwrap_or(0);
+        let bits = (first << 16) | (second << 8) | third;
+
+        output.push(ALPHABET[((bits >> 18) & 0x3F) as usize] as char);
+        output.push(ALPHABET[((bits >> 12) & 0x3F) as usize] as char);
+        if chunk.len() > 1 {
+            output.push(ALPHABET[((bits >> 6) & 0x3F) as usize] as char);
+        }
+        if chunk.len() > 2 {
+            output.push(ALPHABET[(bits & 0x3F) as usize] as char);
+        }
+    }
+    output
+}
+
 /// base64url（RFC 4648 §5）解码，padding 可有可无。
 fn decode_base64url(input: &str) -> Option<Vec<u8>> {
     let input = input.trim_end_matches('=');

@@ -90,6 +90,9 @@ pub fn discover() -> Discovery<ClaudeCredentials> {
         Discovery::Missing | Discovery::Unsupported => read_keychain(),
         // 文件存在却读不出来（权限）不能悄悄换来源，否则用户永远不知道文件有问题。
         Discovery::Unreadable => Discovery::Unreadable,
+        // Claude 的凭据是文件或钥匙串，没有本地可判定的过期时刻；
+        // 过期只在服务端 401 时才暴露。这个分支保留给将来引入本地过期判断的场合。
+        Discovery::Expired => Discovery::Expired,
     };
 
     match discovery {
