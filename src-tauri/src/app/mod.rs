@@ -15,8 +15,8 @@ use chrono::{DateTime, Utc};
 use tauri::{AppHandle, Emitter};
 
 use crate::contracts::{
-    ProviderId, QuotaState, RefreshState, RefreshStatePayload, ServiceStatusState, Settings,
-    SettingsUpdate,
+    ProviderId, QuotaState, QuotaSubject, RefreshState, RefreshStatePayload, ServiceStatusState,
+    Settings, SettingsUpdate,
 };
 use crate::providers::QuotaProvider;
 use crate::providers::claude::ClaudeProvider;
@@ -56,17 +56,23 @@ pub struct SettingsOutcome {
     pub schedule_changed: bool,
 }
 
+/// 一个额度主体的来源与其静态描述。导入账号增删只改这张表。
+struct ProviderSlot {
+    subject: QuotaSubject,
+    source: Arc<dyn QuotaProvider>,
+}
+
 pub struct AppCore {
     store: SettingsStore,
     cache_store: QuotaCacheStore,
     usage: Arc<UsageService>,
     settings: Mutex<Settings>,
-    runtimes: Mutex<BTreeMap<ProviderId, ProviderRuntime>>,
-    /// 真实额度来源。release 构建里这是唯一的来源。
-    providers: BTreeMap<ProviderId, Arc<dyn QuotaProvider>>,
+    runtimes: Mutex<BTreeMap<String, ProviderRuntime>>,
+    /// 真实额度来源。release 构建里这是唯一的来源。键是额度主体标识。
+    providers: Mutex<BTreeMap<String, ProviderSlot>>,
     /// debug 构建的合成来源，只在显式切换到某个验证场景时才被使用。
     #[cfg(debug_assertions)]
-    synthetic: BTreeMap<ProviderId, Arc<dyn QuotaProvider>>,
+    synthetic: Mutex<BTreeMap<String, ProviderSlot>>,
     #[cfg(debug_assertions)]
     scenario: ScenarioHandle,
     /// 每次重启自动刷新循环时自增，旧循环发现代次不符就自行退出。
@@ -83,25 +89,27 @@ impl AppCore {
         let cache_store = QuotaCacheStore::new(config_dir.clone());
         let usage = UsageService::new(config_dir);
 
-        let mut providers: BTreeMap<ProviderId, Arc<dyn QuotaProvider>> = BTreeMap::new();
-        providers.insert(ProviderId::Codex, CodexProvider::new());
-        providers.insert(ProviderId::Claude, ClaudeProvider::new());
+        let mut providers: BTreeMap<String, ProviderSlot> = BTreeMap::new();
+        for (subject, source) in primary_subjects() {
+            providers.insert(subject.subject_id.clone(), ProviderSlot { subject, source });
+        }
 
         let mut runtimes = BTreeMap::new();
-        for provider in ProviderId::ORDER {
-            runtimes.insert(provider, ProviderRuntime::new(provider));
+        for subject in providers.values().map(|slot| slot.subject.clone()) {
+            runtimes.insert(subject.subject_id.clone(), ProviderRuntime::new(&subject));
         }
         restore_cached_snapshots(&cache_store, &mut runtimes);
 
         #[cfg(debug_assertions)]
         let scenario = ScenarioHandle::default();
         #[cfg(debug_assertions)]
-        let synthetic = ProviderId::ORDER
+        let synthetic: BTreeMap<String, ProviderSlot> = ProviderId::ORDER
             .iter()
             .map(|provider| {
+                let subject = QuotaSubject::primary(*provider);
                 let source: Arc<dyn QuotaProvider> =
                     Arc::new(SyntheticProvider::new(*provider, scenario.clone()));
-                (*provider, source)
+                (subject.subject_id.clone(), ProviderSlot { subject, source })
             })
             .collect();
 
@@ -111,9 +119,9 @@ impl AppCore {
             usage,
             settings: Mutex::new(settings),
             runtimes: Mutex::new(runtimes),
-            providers,
+            providers: Mutex::new(providers),
             #[cfg(debug_assertions)]
-            synthetic,
+            synthetic: Mutex::new(synthetic),
             #[cfg(debug_assertions)]
             scenario,
             schedule_generation: AtomicU64::new(0),
@@ -128,13 +136,39 @@ impl AppCore {
     /// release 构建里永远是真实 Provider。debug 构建里只有显式切到某个合成验证场景时
     /// 才用合成来源，切回 [`Scenario::Live`] 立刻恢复真实数据——合成数据不是第二套
     /// 业务状态源，见 [ADR-0009](../../../docs/决策/ADR-0009-合成数据下沉Rust并提前使用正式契约.md)。
-    fn source_for(&self, provider: ProviderId) -> Option<Arc<dyn QuotaProvider>> {
+    fn source_for(&self, subject_id: &str) -> Option<Arc<dyn QuotaProvider>> {
         #[cfg(debug_assertions)]
         if self.scenario.get() != Scenario::Live {
-            return self.synthetic.get(&provider).cloned();
+            return self
+                .synthetic
+                .lock()
+                .expect("synthetic lock")
+                .get(subject_id)
+                .map(|slot| Arc::clone(&slot.source));
         }
 
-        self.providers.get(&provider).cloned()
+        self.providers
+            .lock()
+            .expect("providers lock")
+            .get(subject_id)
+            .map(|slot| Arc::clone(&slot.source))
+    }
+
+    /// 按 Provider 顺序、主账号在前、导入账号按用户顺序排列的额度主体清单。
+    /// 展示、调度与缓存都使用这一个顺序，不在别处再排一次。
+    fn ordered_subjects(&self) -> Vec<QuotaSubject> {
+        let providers = self.providers.lock().expect("providers lock");
+        let mut subjects: Vec<QuotaSubject> = providers
+            .values()
+            .map(|slot| slot.subject.clone())
+            .collect();
+        subjects.sort_by(|left, right| {
+            provider_rank(left.provider)
+                .cmp(&provider_rank(right.provider))
+                .then(left.order_index.cmp(&right.order_index))
+                .then(left.subject_id.cmp(&right.subject_id))
+        });
+        subjects
     }
 
     /// 当前是否在使用真实数据。合成场景下不写额度缓存，避免污染真实快照。
@@ -214,10 +248,11 @@ impl AppCore {
         let now = Utc::now();
         let mut runtimes = self.runtimes.lock().expect("runtimes lock");
 
-        let providers = ProviderId::ORDER
+        let providers = self
+            .ordered_subjects()
             .iter()
-            .filter_map(|provider| {
-                let runtime = runtimes.get_mut(provider)?;
+            .filter_map(|subject| {
+                let runtime = runtimes.get_mut(&subject.subject_id)?;
                 runtime.expire_if_stale(now, interval);
                 Some(runtime.snapshot.clone())
             })
@@ -228,8 +263,8 @@ impl AppCore {
 
     /// 刷新全部 Provider。两个 Provider 互不等待，一个失败不影响另一个。
     pub fn refresh_all(self: &Arc<Self>, app: &AppHandle, trigger: RefreshTrigger) {
-        for provider in ProviderId::ORDER {
-            self.refresh_provider(app, provider, trigger);
+        for subject in self.ordered_subjects() {
+            self.refresh_subject(app, &subject.subject_id, trigger);
         }
     }
 
@@ -245,11 +280,11 @@ impl AppCore {
         let now = Utc::now();
         let stale = {
             let mut runtimes = self.runtimes.lock().expect("runtimes lock");
-            ProviderId::ORDER
+            self.ordered_subjects()
                 .iter()
-                .copied()
-                .filter(|provider| {
-                    let Some(runtime) = runtimes.get_mut(provider) else {
+                .map(|subject| subject.subject_id.clone())
+                .filter(|subject_id| {
+                    let Some(runtime) = runtimes.get_mut(subject_id) else {
                         return false;
                     };
                     let should_refresh = runtime.is_older_than(now, interval);
@@ -264,23 +299,32 @@ impl AppCore {
         }
 
         self.emit_quota_state(app);
-        for provider in stale {
-            self.refresh_provider(app, provider, RefreshTrigger::Startup);
+        for subject_id in stale {
+            self.refresh_subject(app, &subject_id, RefreshTrigger::Startup);
         }
     }
 
-    /// 刷新一个 Provider。并发触发合并到已在飞的任务；退避期内不发起真实请求。
-    pub fn refresh_provider(
+    /// 刷新一个额度主体。并发触发合并到已在飞的任务；退避期内不发起真实请求。
+    pub fn refresh_subject(
         self: &Arc<Self>,
         app: &AppHandle,
-        provider: ProviderId,
+        subject_id: &str,
         trigger: RefreshTrigger,
     ) {
         let now = Utc::now();
+        // 关闭额度轮询的服务不发请求；界面继续展示上一次的快照。
+        if let Some(subject) = self
+            .ordered_subjects()
+            .into_iter()
+            .find(|subject| subject.subject_id == subject_id)
+            && !self.settings().quota_enabled(subject.provider)
+        {
+            return;
+        }
 
         let started = {
             let mut runtimes = self.runtimes.lock().expect("runtimes lock");
-            let Some(runtime) = runtimes.get_mut(&provider) else {
+            let Some(runtime) = runtimes.get_mut(subject_id) else {
                 return;
             };
 
@@ -301,11 +345,12 @@ impl AppCore {
         // `begin` 同时清除上一次的可用性错误与重试时间，必须先广播完整三维状态；
         // 否则现有窗口和系统区域会在请求期间继续展示旧错误。
         self.emit_quota_state(app);
-        self.emit_refresh_state(app, provider, refresh_state);
+        self.emit_refresh_state(app, subject_id, refresh_state);
 
-        let Some(source) = self.source_for(provider) else {
+        let Some(source) = self.source_for(subject_id) else {
             return;
         };
+        let subject_id = subject_id.to_owned();
         let core = Arc::clone(self);
         let app = app.clone();
 
@@ -324,19 +369,21 @@ impl AppCore {
                 None
             };
 
+            let mut provider = None;
             {
                 let mut runtimes = core.runtimes.lock().expect("runtimes lock");
-                if let Some(runtime) = runtimes.get_mut(&provider) {
+                if let Some(runtime) = runtimes.get_mut(&subject_id) {
+                    provider = Some(runtime.snapshot.provider);
                     runtime.apply(outcome, Utc::now());
                 }
             }
 
-            if let Some((identity_key, snapshot)) = quota_event {
+            if let (Some((identity_key, snapshot)), Some(provider)) = (quota_event, provider) {
                 core.usage
                     .record_quota_snapshot(provider, &identity_key, &snapshot);
             }
             core.persist_cache();
-            core.emit_refresh_state(&app, provider, RefreshState::Idle);
+            core.emit_refresh_state(&app, &subject_id, RefreshState::Idle);
             core.emit_quota_state(&app);
         });
     }
@@ -351,12 +398,15 @@ impl AppCore {
 
         let providers: Vec<CachedProvider> = {
             let runtimes = self.runtimes.lock().expect("runtimes lock");
-            ProviderId::ORDER
+            self.ordered_subjects()
                 .iter()
-                .filter_map(|provider| {
-                    let runtime = runtimes.get(provider)?;
+                .filter_map(|subject| {
+                    let runtime = runtimes.get(&subject.subject_id)?;
                     Some(CachedProvider {
-                        provider: *provider,
+                        subject_id: subject.subject_id.clone(),
+                        provider: subject.provider,
+                        kind: subject.kind,
+                        label: subject.label.clone(),
                         identity: runtime.snapshot.identity.clone(),
                         identity_key: runtime.identity_key().map(str::to_owned),
                         snapshot: runtime.snapshot.snapshot.clone()?,
@@ -382,7 +432,7 @@ impl AppCore {
             let seeded_at = Utc::now() - Duration::minutes(SEEDED_SNAPSHOT_AGE_MINUTES);
             let mut runtimes = self.runtimes.lock().expect("runtimes lock");
             for provider in ProviderId::ORDER {
-                let Some(runtime) = runtimes.get_mut(&provider) else {
+                let Some(runtime) = runtimes.get_mut(provider.key()) else {
                     continue;
                 };
                 runtime.reset();
@@ -415,13 +465,16 @@ impl AppCore {
         let core = Arc::clone(self);
         let app = app.clone();
         tauri::async_runtime::spawn(async move {
-            // 两个请求并发发起；单请求超时互不影响（共享 HTTP Client、15 秒超时不变）。
-            let (codex, claude) = tokio::join!(
+            // 三条状态链并发发起；单请求超时互不影响（共享 HTTP Client、15 秒超时不变）。
+            let (codex, claude, cursor) = tokio::join!(
                 crate::providers::service_status::fetch_status(
                     crate::providers::service_status::OPENAI_STATUS_URL,
                 ),
                 crate::providers::service_status::fetch_status(
                     crate::providers::service_status::ANTHROPIC_STATUS_URL,
+                ),
+                crate::providers::service_status::fetch_status(
+                    crate::providers::service_status::CURSOR_STATUS_URL,
                 ),
             );
 
@@ -432,6 +485,9 @@ impl AppCore {
                 }
                 if let Ok(status) = claude {
                     state.set(ProviderId::Claude, status);
+                }
+                if let Ok(status) = cursor {
+                    state.set(ProviderId::Cursor, status);
                 }
             }
 
@@ -445,7 +501,13 @@ impl AppCore {
     /// 因此它在这里更新，而不是自己订阅事件再算一遍。
     pub fn emit_quota_state(&self, app: &AppHandle) {
         let state = self.quota_state();
-        crate::platform::tray::present_quota(app, &state);
+        let settings = self.settings();
+        let menu_bar: Vec<ProviderId> = ProviderId::ORDER
+            .iter()
+            .copied()
+            .filter(|provider| settings.services.get(*provider).menu_bar)
+            .collect();
+        crate::platform::tray::present_quota(app, &state, &menu_bar);
         let _ = app.emit(EVENT_QUOTA_UPDATED, state);
     }
 
@@ -457,10 +519,23 @@ impl AppCore {
         let _ = app.emit(EVENT_SERVICE_STATUS_UPDATED, self.service_status());
     }
 
-    fn emit_refresh_state(&self, app: &AppHandle, provider: ProviderId, refresh: RefreshState) {
+    fn emit_refresh_state(&self, app: &AppHandle, subject_id: &str, refresh: RefreshState) {
+        let provider = self
+            .runtimes
+            .lock()
+            .expect("runtimes lock")
+            .get(subject_id)
+            .map(|runtime| runtime.snapshot.provider);
+        let Some(provider) = provider else {
+            return;
+        };
         let _ = app.emit(
             EVENT_QUOTA_REFRESH_STATE,
-            RefreshStatePayload { provider, refresh },
+            RefreshStatePayload {
+                subject_id: subject_id.to_owned(),
+                provider,
+                refresh,
+            },
         );
     }
 }
@@ -471,14 +546,14 @@ impl AppCore {
 /// `docs/技术架构.md`「UI 启动顺序」。
 fn restore_cached_snapshots(
     cache_store: &QuotaCacheStore,
-    runtimes: &mut BTreeMap<ProviderId, ProviderRuntime>,
+    runtimes: &mut BTreeMap<String, ProviderRuntime>,
 ) {
     let Some(cache) = cache_store.load() else {
         return;
     };
 
     for cached in cache.providers {
-        let Some(runtime) = runtimes.get_mut(&cached.provider) else {
+        let Some(runtime) = runtimes.get_mut(&cached.subject_id) else {
             continue;
         };
 
@@ -522,9 +597,10 @@ pub fn start_auto_refresh(core: &Arc<AppCore>, app: &AppHandle) {
         });
     }
 
-    for (index, provider) in ProviderId::ORDER.iter().copied().enumerate() {
+    for (index, subject) in core.ordered_subjects().into_iter().enumerate() {
         let core = Arc::clone(core);
         let app = app.clone();
+        let subject_id = subject.subject_id.clone();
 
         tauri::async_runtime::spawn(async move {
             let mut tick: u64 = 0;
@@ -541,7 +617,7 @@ pub fn start_auto_refresh(core: &Arc<AppCore>, app: &AppHandle) {
                     break;
                 }
 
-                core.refresh_provider(&app, provider, RefreshTrigger::Auto);
+                core.refresh_subject(&app, &subject_id, RefreshTrigger::Auto);
                 tick = tick.wrapping_add(1);
             }
         });
@@ -587,6 +663,29 @@ pub fn start_auto_service_status(core: &Arc<AppCore>, app: &AppHandle) {
             core.refresh_service_status(&app);
         }
     });
+}
+
+/// Provider 在固定展示顺序里的位置。
+fn provider_rank(provider: ProviderId) -> usize {
+    ProviderId::ORDER
+        .iter()
+        .position(|candidate| *candidate == provider)
+        .unwrap_or(usize::MAX)
+}
+
+/// 真实额度来源的主账号清单。新增 Provider 只在这里加一行，顺序由
+/// [`ProviderId::ORDER`] 决定，界面与调度不再各自维护第二份顺序。
+fn primary_subjects() -> Vec<(QuotaSubject, Arc<dyn QuotaProvider>)> {
+    vec![
+        (
+            QuotaSubject::primary(ProviderId::Codex),
+            CodexProvider::new() as Arc<dyn QuotaProvider>,
+        ),
+        (
+            QuotaSubject::primary(ProviderId::Claude),
+            ClaudeProvider::new() as Arc<dyn QuotaProvider>,
+        ),
+    ]
 }
 
 #[cfg(test)]

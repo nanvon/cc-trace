@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
-import type { ProviderId, QuotaState, RefreshStatePayload } from "./contracts";
+import type { QuotaState, RefreshStatePayload } from "./contracts";
 
 export const EVENT_QUOTA_UPDATED = "quota://updated";
 export const EVENT_QUOTA_REFRESH_STATE = "quota://refresh-state";
@@ -11,13 +11,13 @@ export function getQuotaSnapshot(): Promise<QuotaState> {
 }
 
 /**
- * 请求一次刷新。省略 `provider` 时刷新全部。
+ * 请求一次刷新。省略 `subjectId` 时刷新全部额度主体（含导入账号）。
  *
  * 请求合并、节流与退避都在 Rust 侧决定：本函数返回不代表真的发起了请求，
  * 界面应当等 `quota://updated` 而不是等这个 Promise。
  */
-export function refreshQuota(provider?: ProviderId): Promise<void> {
-  return invoke("quota_refresh", { provider: provider ?? null });
+export function refreshQuota(subjectId?: string): Promise<void> {
+  return invoke("quota_refresh", { subjectId: subjectId ?? null });
 }
 
 export function onQuotaUpdated(handler: (state: QuotaState) => void): Promise<UnlistenFn> {

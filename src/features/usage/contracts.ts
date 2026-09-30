@@ -7,20 +7,47 @@
 
 import type { ProviderId, QuotaWindowKind } from "../quota/contracts";
 
-/** 本地用量数据源。Pi 与 OpenCode 无订阅额度，只进本地用量统计。 */
-export type UsageSource = "codex" | "claude" | "pi" | "opencode";
+/**
+ * 本地用量数据源。Pi、OpenCode、DSH 无订阅额度，只进本地用量统计；
+ * Cursor 没有本机会话，用量来自账号级远端计量。
+ */
+export type UsageSource = "codex" | "claude" | "pi" | "opencode" | "dsh" | "cursor";
 
 /** 用量页的空间顺序与 Provider 卡／图例／模型分组一致。 */
-export const USAGE_SOURCES: readonly UsageSource[] = ["codex", "claude", "pi", "opencode"] as const;
+export const USAGE_SOURCES: readonly UsageSource[] = [
+  "codex",
+  "claude",
+  "pi",
+  "opencode",
+  "dsh",
+  "cursor",
+] as const;
+
+/** 需要本地扫描的数据源；Cursor 不在其中。 */
+export const LOCAL_SCAN_SOURCES: readonly UsageSource[] = [
+  "codex",
+  "claude",
+  "pi",
+  "opencode",
+  "dsh",
+] as const;
+
 export type UsageScanState = "idle" | "running" | "cancelling";
-export type UsageGroupBy = "day" | "source" | "model" | "speed";
+export type UsageGroupBy =
+  "day" | "week" | "month" | "source" | "provider" | "model" | "project" | "speed";
+
+/** 统计粒度。日／周／月决定时间桶，其余是构成维度。 */
+export type UsageGranularity = "day" | "week" | "month";
 
 export interface UsageFilter {
   from: string | null;
   to: string | null;
-  source: UsageSource | null;
+  /** 可见服务集合；null 表示不过滤，空数组表示一个服务都不可见。 */
+  sources: UsageSource[] | null;
   model: string | null;
   speed: "standard" | "fast" | "unknown" | null;
+  /** 项目身份键（规范化项目路径）。 */
+  project: string | null;
 }
 
 export interface UsageSummaryQuery {
@@ -59,9 +86,12 @@ export interface UsageFastTotals {
 }
 
 export interface UsageSummaryRow {
-  /** Provider、YYYY-MM-DD 或模型名，取决于 `groupBy`。 */
+  /** Provider、YYYY-MM-DD、YYYY-MM、YYYY-Www 或模型名，取决于 `groupBy`。 */
   key: string;
+  /** 事实行数（日粒度远端计量算一行）。 */
   entryCount: number;
+  /** 请求数；日粒度远端计量为 0。 */
+  requestCount: number;
   tokens: UsageTokenTotals;
   fast: UsageFastTotals;
   cost: UsageCostTotals;
@@ -70,6 +100,7 @@ export interface UsageSummaryRow {
 export interface UsageSummary {
   rows: UsageSummaryRow[];
   entryCount: number;
+  requestCount: number;
   tokens: UsageTokenTotals;
   fast: UsageFastTotals;
   cost: UsageCostTotals;
@@ -158,11 +189,9 @@ export type UsageConversationSort = "recent" | "tokens" | "cost";
 export interface UsageConversationQuery {
   filter: UsageFilter;
   search: string | null;
-  /** 精确匹配脱敏项目提示。 */
+  /** 项目身份键（规范化项目路径）。 */
   project: string | null;
   sort: UsageConversationSort | null;
-  /** 可见服务集合；为空或缺失时不额外过滤。 */
-  sources: UsageSource[] | null;
   limit: number | null;
   offset: number | null;
 }
@@ -172,10 +201,18 @@ export interface UsageConversation {
   source: UsageSource;
   title: string | null;
   projectHint: string | null;
+  /** 项目身份键（规范化项目路径）；未归属或未解析时为 null。 */
+  projectKey: string | null;
+  /** 对话自身的工作目录路径，用于 worktree 明细。 */
+  worktreePath: string | null;
+  /** 未归属：Cursor 远端计量与补录历史。不进入对话列表。 */
+  unattributed: boolean;
   isSidechain: boolean;
   firstAt: string;
   lastAt: string;
   entryCount: number;
+  /** 请求数；日粒度远端计量为 0。 */
+  requestCount: number;
   tokens: UsageTokenTotals;
   fast: UsageFastTotals;
   cost: UsageCostTotals;
@@ -187,11 +224,49 @@ export interface UsageConversation {
   models: string[];
 }
 
-/** 对话项目筛选选项：脱敏项目名与其可见对话数、最近活动时间。 */
+/** 对话项目筛选选项：项目身份键、展示名与其可见对话数、最近活动时间。 */
 export interface UsageConversationProjectOption {
+  key: string | null;
   name: string;
   conversationCount: number;
   lastAt: string;
+}
+
+export type UsageProjectSort = "recent" | "tokens" | "cost";
+
+export interface UsageProjectQuery {
+  filter: UsageFilter;
+  search: string | null;
+  sort: UsageProjectSort | null;
+  limit: number | null;
+  offset: number | null;
+}
+
+/** 一个项目的用量汇总。`key` 为空串表示未归属分组。 */
+export interface UsageProjectSummary {
+  /** 项目身份键（规范化仓库根路径）；未归属分组为空串。 */
+  key: string;
+  /** 展示名（路径尾段）；未归属分组使用固定文案。 */
+  name: string;
+  /** 完整项目路径；未归属分组为 null。 */
+  path: string | null;
+  unattributed: boolean;
+  conversationCount: number;
+  activeDays: number;
+  firstAt: string | null;
+  lastAt: string;
+  entryCount: number;
+  requestCount: number;
+  tokens: UsageTokenTotals;
+  fast: UsageFastTotals;
+  cost: UsageCostTotals;
+}
+
+export interface UsageProjectPage {
+  items: UsageProjectSummary[];
+  total: number;
+  limit: number;
+  offset: number;
 }
 
 export interface UsageConversationPage {

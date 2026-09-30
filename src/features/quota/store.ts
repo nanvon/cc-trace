@@ -15,12 +15,19 @@ export const useQuotaStore = defineStore("quota", () => {
   const providers = ref<ProviderSnapshot[]>([]);
   const loaded = ref(false);
 
-  /** 空间顺序永远稳定，风险只改变视觉权重。 */
-  const ordered = computed(() =>
-    PROVIDER_ORDER.map((id) => providers.value.find((provider) => provider.provider === id)).filter(
-      (provider): provider is ProviderSnapshot => provider !== undefined,
-    ),
-  );
+  /** 空间顺序永远稳定，风险只改变视觉权重。
+   * Provider 顺序固定，同一 Provider 内主账号在前、导入账号在后（Rust 已排好，这里只做防御性重排）。 */
+  const ordered = computed(() => {
+    const rank = new Map(PROVIDER_ORDER.map((id, index) => [id, index]));
+    return [...providers.value].sort((left, right) => {
+      const providerDelta =
+        (rank.get(left.provider) ?? PROVIDER_ORDER.length) -
+        (rank.get(right.provider) ?? PROVIDER_ORDER.length);
+      if (providerDelta !== 0) return providerDelta;
+      if (left.kind !== right.kind) return left.kind === "primary" ? -1 : 1;
+      return left.subjectId.localeCompare(right.subjectId);
+    });
+  });
 
   const overall = computed(() => presentOverall(ordered.value));
 
@@ -43,7 +50,9 @@ export const useQuotaStore = defineStore("quota", () => {
    */
   function adoptRefreshState(payload: RefreshStatePayload): void {
     providers.value = providers.value.map((provider) =>
-      provider.provider === payload.provider ? { ...provider, refresh: payload.refresh } : provider,
+      provider.subjectId === payload.subjectId
+        ? { ...provider, refresh: payload.refresh }
+        : provider,
     );
   }
 

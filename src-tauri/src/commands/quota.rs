@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tauri::{AppHandle, State};
 
 use crate::app::AppCore;
-use crate::contracts::{ProviderId, QuotaState};
+use crate::contracts::QuotaState;
 use crate::scheduler::RefreshTrigger;
 
 /// 读取当前展示状态。启动时先用它渲染，再等 `quota://updated`。
@@ -21,10 +21,10 @@ pub fn quota_get_snapshot(core: State<'_, Arc<AppCore>>) -> QuotaState {
 /// 服务状态是独立状态链，失败只影响自己的圆点，见 [ADR-0026]。
 /// [ADR-0026]: ../../../../docs/决策/ADR-0026-Statuspage状态链进入首版.md
 #[tauri::command]
-pub fn quota_refresh(app: AppHandle, core: State<'_, Arc<AppCore>>, provider: Option<ProviderId>) {
+pub fn quota_refresh(app: AppHandle, core: State<'_, Arc<AppCore>>, subject_id: Option<String>) {
     let core = core.inner();
-    match provider {
-        Some(provider) => core.refresh_provider(&app, provider, RefreshTrigger::Manual),
+    match subject_id {
+        Some(subject_id) => core.refresh_subject(&app, &subject_id, RefreshTrigger::Manual),
         None => {
             core.refresh_all(&app, RefreshTrigger::Manual);
             core.refresh_service_status(&app);

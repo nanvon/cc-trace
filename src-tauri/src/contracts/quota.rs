@@ -4,6 +4,11 @@
 //! 序列化，不得压成一个互斥枚举，语义见 `docs/状态与错误模型.md` 第 1 节。
 //! 额度字段与窗口分层规则见 `docs/额度领域模型.md` 第 1～2 节。
 //!
+//! 展示单位是**额度主体**（`ProviderSnapshot.subject_id`），不是 Provider：Codex 支持
+//! 导入多个副账号，每个账号独立刷新、独立退避、独立失败，见
+//! [ADR-0031](../../../docs/决策/ADR-0031-功能基准改为cc-bar-v1.1.1.md)。
+//! `ProviderId` 只表达归属与展示分组，顺序固定不随风险重排。
+//!
 //! 所有载荷都是脱敏 DTO：不含凭据、端点原文、请求头或本机路径。
 //! 唯一例外是 `ProviderIdentity.account`：按 [ADR-0025] 展示完整账号
 //! 需要它进入 command 载荷与本地缓存；token、凭据与响应原文仍不进入载荷。
@@ -13,17 +18,58 @@ use serde::{Deserialize, Serialize};
 
 use super::error::AppError;
 
-/// Provider 标识。空间顺序固定 Codex → Claude Code，不随风险重排。
+/// Provider 标识。空间顺序固定 Codex → Claude → Antigravity → Cursor → Command Code，
+/// 与 cc-bar 菜单栏顺序一致。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ProviderId {
     Codex,
     Claude,
+    Antigravity,
+    Cursor,
+    CommandCode,
 }
 
 impl ProviderId {
     /// 界面与调度共用的稳定顺序。
-    pub const ORDER: [ProviderId; 2] = [ProviderId::Codex, ProviderId::Claude];
+    pub const ORDER: [ProviderId; 5] = [
+        ProviderId::Codex,
+        ProviderId::Claude,
+        ProviderId::Antigravity,
+        ProviderId::Cursor,
+        ProviderId::CommandCode,
+    ];
+
+    /// 持久化与命令载荷里使用的稳定短名。
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Codex => "codex",
+            Self::Claude => "claude",
+            Self::Antigravity => "antigravity",
+            Self::Cursor => "cursor",
+            Self::CommandCode => "commandCode",
+        }
+    }
+
+    /// 是否支持本地用量统计（Antigravity 与 Command Code 只提供额度）。
+    pub fn has_local_usage(self) -> bool {
+        matches!(self, Self::Codex | Self::Claude)
+    }
+
+    /// 是否有官方 Statuspage 状态链。
+    pub fn has_service_status(self) -> bool {
+        matches!(self, Self::Codex | Self::Claude | Self::Cursor)
+    }
+}
+
+/// 额度主体的类型。主账号与导入账号在界面上是同级条目，但导入账号可被删除与排序。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum QuotaSubjectKind {
+    /// 自动发现的当前账号。
+    Primary,
+    /// 用户粘贴 `auth.json` 导入的副账号。
+    Imported,
 }
 
 /// 活动维度：现在是否正在工作。
@@ -61,12 +107,19 @@ pub enum ProviderAvailability {
 }
 
 /// 额度窗口类型。无法判定时保留 `Unknown`，不得猜成 `FiveHour` 或 `Weekly`。
+///
+/// `Total` / `Auto` / `Api` 是 Cursor 的计量桶，`Monthly` 是 Command Code GOAT 套餐的
+/// 月度额度：它们都不是滚动时间窗，但仍是「已用比例 + 重置时刻」的额度过期。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum QuotaWindowKind {
     FiveHour,
     Weekly,
     ModelWeekly,
+    Monthly,
+    Total,
+    Auto,
+    Api,
     Unknown,
 }
 
@@ -77,7 +130,8 @@ pub struct QuotaWindow {
     /// 跨刷新稳定的窗口标识，用于匹配旧快照。不使用展示名或数组下标匹配。
     pub id: String,
     pub kind: QuotaWindowKind,
-    /// 只在 `kind` 无法完整表达时使用，例如 `ModelWeekly` 的模型或场景名。
+    /// 只在 `kind` 无法完整表达时使用：模型专项额度的模型名、Antigravity 的
+    /// `Gemini` / `Claude` 分组、Cursor 的 `Auto` / `API` 桶名。
     /// 前端优先按 `kind` 取 i18n 文案，此字段作为补充。
     pub display_name: Option<String>,
     pub used_percent: f64,
@@ -89,6 +143,8 @@ pub struct QuotaWindow {
     pub is_active: bool,
     /// 是否为返回顺序中的第一项。展示主次始终以 `QuotaSnapshot.windows` 顺序为准。
     pub is_primary: bool,
+    /// 无上限额度（Cursor Unlimited）：界面显示 `∞`，不渲染伪造百分比或进度条。
+    pub unlimited: bool,
 }
 
 impl QuotaWindow {
@@ -118,11 +174,17 @@ pub struct ProviderIdentity {
     pub plan: Option<String>,
 }
 
-/// 一个 Provider 的完整展示状态：数据 + 三个独立维度。
+/// 一个额度主体的完整展示状态：数据 + 三个独立维度。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderSnapshot {
+    /// 额度主体标识：主账号用 Provider 短名（`codex`），导入账号用 `codex:<序号>`。
+    /// 它是缓存、退避与历史序列的键，不承载账号明文。
+    pub subject_id: String,
     pub provider: ProviderId,
+    pub kind: QuotaSubjectKind,
+    /// 导入账号的用户可见名称（脱敏邮箱）；主账号为 `None`，账号在 `identity` 里。
+    pub label: Option<String>,
     pub refresh: RefreshState,
     pub freshness: SnapshotFreshness,
     pub availability: ProviderAvailability,
@@ -138,10 +200,28 @@ pub struct ProviderSnapshot {
 }
 
 impl ProviderSnapshot {
-    /// 尚未发起任何请求时的初始状态。真正开始请求后由调度层进入 `loading`。
+    /// 主账号的初始状态。真正开始请求后由调度层进入 `loading`。
     pub fn initial(provider: ProviderId) -> Self {
-        Self {
+        Self::for_subject(
+            provider.key().to_owned(),
             provider,
+            QuotaSubjectKind::Primary,
+            None,
+        )
+    }
+
+    /// 任一度量主体的初始状态。
+    pub fn for_subject(
+        subject_id: String,
+        provider: ProviderId,
+        kind: QuotaSubjectKind,
+        label: Option<String>,
+    ) -> Self {
+        Self {
+            subject_id,
+            provider,
+            kind,
+            label,
             refresh: RefreshState::Idle,
             freshness: SnapshotFreshness::Empty,
             availability: ProviderAvailability::Ready,
@@ -159,7 +239,45 @@ impl ProviderSnapshot {
     }
 }
 
-/// `quota_get_snapshot` 的返回值。Provider 顺序固定为 `ProviderId::ORDER`。
+/// 一个额度主体的静态描述：身份、归属与展示顺序信息。运行时用它建 `ProviderSnapshot`
+/// 与刷新运行时，不含任何凭据。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotaSubject {
+    pub subject_id: String,
+    pub provider: ProviderId,
+    pub kind: QuotaSubjectKind,
+    /// 导入账号的展示名；主账号为 `None`。
+    pub label: Option<String>,
+    /// 导入账号的用户排序位置；主账号恒为 0。
+    pub order_index: u32,
+}
+
+impl QuotaSubject {
+    /// 主账号：每个 Provider 至少有一个，`subject_id` 就是 Provider 短名。
+    pub fn primary(provider: ProviderId) -> Self {
+        Self {
+            subject_id: provider.key().to_owned(),
+            provider,
+            kind: QuotaSubjectKind::Primary,
+            label: None,
+            order_index: 0,
+        }
+    }
+
+    /// 导入的 Codex 副账号。`index` 是用户排序位置，从 0 开始。
+    pub fn imported_codex(index: u32, label: Option<String>) -> Self {
+        Self {
+            subject_id: format!("codex:imported:{index}"),
+            provider: ProviderId::Codex,
+            kind: QuotaSubjectKind::Imported,
+            label,
+            order_index: index,
+        }
+    }
+}
+
+/// `quota_get_snapshot` 的返回值。顺序固定：Provider 顺序，主账号在前，导入账号按用户顺序在后。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QuotaState {
@@ -170,6 +288,7 @@ pub struct QuotaState {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RefreshStatePayload {
+    pub subject_id: String,
     pub provider: ProviderId,
     pub refresh: RefreshState,
 }
@@ -199,6 +318,8 @@ mod tests {
         assert_eq!(json["refresh"], "refreshing");
         assert_eq!(json["freshness"], "stale");
         assert_eq!(json["availability"], "rate_limited");
+        assert_eq!(json["subjectId"], "codex");
+        assert_eq!(json["kind"], "primary");
     }
 
     #[test]
@@ -218,6 +339,46 @@ mod tests {
 
     #[test]
     fn provider_order_is_stable() {
-        assert_eq!(ProviderId::ORDER, [ProviderId::Codex, ProviderId::Claude]);
+        assert_eq!(
+            ProviderId::ORDER,
+            [
+                ProviderId::Codex,
+                ProviderId::Claude,
+                ProviderId::Antigravity,
+                ProviderId::Cursor,
+                ProviderId::CommandCode
+            ]
+        );
+    }
+
+    #[test]
+    fn window_kinds_cover_the_remote_quota_shapes() {
+        for (kind, expected) in [
+            (QuotaWindowKind::FiveHour, "fiveHour"),
+            (QuotaWindowKind::Weekly, "weekly"),
+            (QuotaWindowKind::ModelWeekly, "modelWeekly"),
+            (QuotaWindowKind::Monthly, "monthly"),
+            (QuotaWindowKind::Total, "total"),
+            (QuotaWindowKind::Auto, "auto"),
+            (QuotaWindowKind::Api, "api"),
+            (QuotaWindowKind::Unknown, "unknown"),
+        ] {
+            let json = serde_json::to_value(kind).expect("kind serializes");
+            assert_eq!(json, expected);
+        }
+    }
+
+    #[test]
+    fn imported_subjects_keep_their_own_identity() {
+        let imported = ProviderSnapshot::for_subject(
+            "codex:1".to_owned(),
+            ProviderId::Codex,
+            QuotaSubjectKind::Imported,
+            Some("second@example.com".to_owned()),
+        );
+        assert_eq!(imported.subject_id, "codex:1");
+        assert_eq!(imported.kind, QuotaSubjectKind::Imported);
+        assert_eq!(imported.label.as_deref(), Some("second@example.com"));
+        assert!(imported.identity.is_none());
     }
 }

@@ -3,6 +3,23 @@ use serde::{Deserialize, Serialize};
 use crate::contracts::{UsageSource, UsageSpeed};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Granularity {
+    /// 逐请求事实（本地日志扫描）。
+    Request,
+    /// 按自然日聚合的远端计量事实（Cursor 服务端只提供天粒度）。
+    Day,
+}
+
+impl Granularity {
+    pub fn as_db(self) -> &'static str {
+        match self {
+            Self::Request => "request",
+            Self::Day => "day",
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum InferenceGeo {
     Global,
     Us,
@@ -75,6 +92,31 @@ pub struct UsageEntry {
     pub billing_equivalent_tokens_nanos: Option<i64>,
     pub fast_multiplier_nanos: Option<i64>,
     pub pricing_fingerprint: Option<String>,
+    /// 这条事实代表的请求数。日粒度远端计量为 0（服务端不提供请求数）。
+    pub request_count: i64,
+    pub granularity: Granularity,
+}
+
+impl Default for UsageEntry {
+    fn default() -> Self {
+        Self {
+            source: UsageSource::Codex,
+            dedup_key: String::new(),
+            conversation_key: String::new(),
+            model: None,
+            speed: UsageSpeed::Unknown,
+            inference_geo: InferenceGeo::Unknown,
+            occurred_at: String::new(),
+            day_local: String::new(),
+            tokens: TokenFacts::default(),
+            api_equivalent_cost_nanos: None,
+            billing_equivalent_tokens_nanos: None,
+            fast_multiplier_nanos: None,
+            pricing_fingerprint: None,
+            request_count: 1,
+            granularity: Granularity::Request,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -83,7 +125,13 @@ pub struct ConversationFact {
     pub source: UsageSource,
     pub title: Option<String>,
     pub project_hint: Option<String>,
+    /// 项目身份键：规范化后的仓库根路径（不是 Git 仓库时就是对话工作目录）。
+    pub project_key: Option<String>,
+    /// 对话自身的工作目录路径（worktree 明细用；与 `project_key` 相同时即主仓库）。
+    pub worktree_path: Option<String>,
     pub is_sidechain: bool,
+    /// 未归属：Cursor 远端计量与补录/早期按天汇总的历史，不属于任何项目。
+    pub unattributed: bool,
     pub occurred_at: String,
     /// 原始会话 id（会话 UUID），供详情页对话 ID 与标题索引回查。
     pub source_id: Option<String>,
@@ -135,6 +183,9 @@ pub struct CodexCursor {
     /// 会话 cwd 的脱敏项目提示（惰性解析后缓存，避免逐行重复解析）。
     #[serde(default)]
     pub project_hint: Option<String>,
+    /// 规范化后的项目路径（项目身份键）。
+    #[serde(default)]
+    pub project_path: Option<String>,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -154,6 +205,9 @@ pub struct PiCursor {
     pub model: Option<String>,
     /// 会话 cwd 的脱敏项目提示（惰性解析后缓存，避免逐行重复解析）。
     pub project_hint: Option<String>,
+    /// 规范化后的项目路径（项目身份键）。
+    #[serde(default)]
+    pub project_path: Option<String>,
     /// 首个 user 消息的标题兜底；消费一次后清空，避免后续批次覆盖既有标题。
     pub pending_title: Option<String>,
     /// 文件名末尾 UUID 兜底会话键；session entry 出现后覆盖。

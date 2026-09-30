@@ -5,7 +5,10 @@ import { hasQuotaValues, presentOverall, presentProvider } from "./status";
 
 function snapshot(overrides: Partial<ProviderSnapshot> = {}): ProviderSnapshot {
   return {
+    subjectId: "codex",
     provider: "codex",
+    kind: "primary",
+    label: null,
     refresh: "idle",
     freshness: "live",
     availability: "ready",
@@ -22,6 +25,7 @@ function snapshot(overrides: Partial<ProviderSnapshot> = {}): ProviderSnapshot {
           windowSeconds: 18000,
           isActive: true,
           isPrimary: true,
+          unlimited: false,
         },
       ],
       capturedAt: "2026-07-25T10:00:00Z",

@@ -507,6 +507,38 @@ macOS 侧已通过正式验收，也不授权在双平台实机验收前公开�
 - [ ] 验证新应用未来版本之间的升级基础。（未验证——已知缺口）
 - [ ] 发布后再决定旧 cc-bar 的维护或归档计划。（未做）
 
+
+## 18. cc-bar v1.1.1 Windows 等价移植（2026-10-01 启动）
+
+功能基准改为 cc-bar v1.1.1 的**实际行为**，见 [ADR-0031](决策/ADR-0031-功能基准改为cc-bar-v1.1.1.md)。
+本仓库现有产品范围边界、导航结构、数据模型可以改；视觉风格不变。本地只跑快速校验
+（`cargo fmt --check`、`cargo check`、`cargo clippy -D warnings`、`cargo test`、`pnpm test`、
+esbuild 语法校验），Windows 编译与打包走 GitHub CI 矩阵，**不本地跑 `tauri dev` 与打包**。
+Windows 行为在实机验证前一律标注未验证。
+
+### 批次 1：契约与存储地基（2026-10-01 完成）
+
+- [x] `ProviderId` 扩到五个（Codex／Claude／Antigravity／Cursor／Command Code），空间顺序固定。
+- [x] 额度窗口类型扩到八种（五小时／每周／模型每周／月度／Total／Auto／API／未知），新增 `unlimited`。
+- [x] 额度主体模型落地：`QuotaSubject`、`ProviderSnapshot.subjectId`／`kind`／`label`，调度、缓存、事件与前端都以主体为键（[ADR-0032](决策/ADR-0032-额度主体与多账号.md)）。
+- [x] 用量数据源扩到六个（新增 DSH 与 Cursor），扫描集与统计集分开。
+- [x] 设置 schema v2：按服务分组的四组开关矩阵（额度／菜单栏／悬浮窗／统计）、日志扫描间隔、排行口径、重置时间显示、悬浮窗位置、启动检查更新、详细日志；v1 的 `usageServiceVisibility` 读入即迁移、不再写回。
+- [x] `usage.db` schema v7：六源 CHECK、`request_count`／`granularity`、`conversations.project_key`／`worktree_path`／`unattributed`、周期三表；v5 夹具补全为真实 v5 结构。
+- [x] 项目身份与未归属口径定稿（[ADR-0034](决策/ADR-0034-项目身份与未归属口径.md)），扫描层先落纯文本身份键，Git 根与 worktree 归组在批次 5 补齐。
+- [x] 校验：Rust 255 项测试、`cargo fmt`、`cargo clippy -D warnings` 全通过；前端 111 项 vitest、`vue-tsc`、eslint、prettier 全通过。
+
+### 批次 2～8、10：待做
+
+- [ ] 批次 2：五个额度 Provider 的凭据发现与额度客户端（含 Windows 凭据存储）。
+- [ ] 批次 3：本地数据源扩展（DSH zstd、Cursor 远端计量）。
+- [ ] 批次 4：额度页（周期记录、用满预估、多账号分区）。
+- [ ] 批次 5：项目分析页（Git 根、worktree 归组、未归属分组）。
+- [ ] 批次 6：概览页重构（粒度日／周／月、范围分档、构成四维、高消耗对话、排行口径）。
+- [ ] 批次 7：悬浮窗与系统区域显示配置。
+- [ ] 批次 8：设置页四分类与服务矩阵、隐私模式全覆盖、诊断导出、检查更新、引导。
+- [ ] 批次 10：文档同步与全量校验。
+- [x] 批次 9（cc-bar 历史迁移器）**取消**：产品所有者 2026-10-01 明确应用仍处开发阶段，旧数据直接弃用，不写导入器；ADR-0003 继续有效。
+
 ## 执行门禁
 
 - [x] 第 1～3 阶段未确认前，不创建正式工程。

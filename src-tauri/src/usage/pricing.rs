@@ -523,8 +523,11 @@ impl PricingCatalog {
             UsageSource::Codex => codex_fast_multiplier_nanos(&model),
             UsageSource::Claude => claude_fast_multiplier_nanos(&model)
                 .or_else(|| self.derived_claude_fast_multiplier_nanos(&model)),
-            // Pi／OpenCode 无 Fast 概念，且不进价格目录；此路径只在断言失败时到达。
-            UsageSource::Pi | UsageSource::Opencode => None,
+            // Pi／OpenCode／DSH 无 Fast 概念；Cursor 用服务端计量费用。
+            // 这几个来源都不进价格目录，此路径只在断言失败时到达。
+            UsageSource::Pi | UsageSource::Opencode | UsageSource::Dsh | UsageSource::Cursor => {
+                None
+            }
         };
         let Some(multiplier_nanos) = multiplier_nanos else {
             return (None, None);
@@ -974,6 +977,8 @@ mod tests {
             billing_equivalent_tokens_nanos: None,
             fast_multiplier_nanos: None,
             pricing_fingerprint: None,
+            request_count: 1,
+            granularity: crate::usage::model::Granularity::Request,
         }
     }
 

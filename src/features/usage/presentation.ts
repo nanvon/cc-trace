@@ -52,6 +52,9 @@ export function presentUsageCost(cost: UsagePeriodCost | null): UsageCostDisplay
   return { amountNanos: cost.apiEquivalentCostNanos };
 }
 
+/** 没有本地用量数据源的服务的费用读数占位值。 */
+export const EMPTY_PROVIDER_COSTS: UsageProviderCosts = { today: null, week: null };
+
 export function buildProviderCosts(
   source: UsageSource,
   today: UsageSummary | null,

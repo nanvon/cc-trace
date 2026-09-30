@@ -145,12 +145,12 @@ pub fn relocalize(app: &AppHandle, lang: Lang) -> tauri::Result<()> {
 /// 按最新额度重画系统区域。
 ///
 /// 失败一律静默：系统区域展示不到位不该影响刷新本身，图标也不会因此消失。
-pub fn present_quota(app: &AppHandle, state: &QuotaState) {
+pub fn present_quota(app: &AppHandle, state: &QuotaState, menu_bar: &[ProviderId]) {
     let Some(tray) = app.tray_by_id(TRAY_ID) else {
         return;
     };
 
-    let segments = badge_segments(state);
+    let segments = badge_segments(state, menu_bar);
     let _ = tray.set_tooltip(Some(tooltip_text(&segments)));
 
     #[cfg(target_os = "macos")]
@@ -161,10 +161,12 @@ pub fn present_quota(app: &AppHandle, state: &QuotaState) {
     }
 }
 
-/// 每个 Provider 一段，顺序固定 Codex → Claude Code，与界面一致。
-fn badge_segments(state: &QuotaState) -> Vec<BadgeSegment> {
+/// 系统区域里启用的服务一段，顺序固定 Codex → Claude → Antigravity → Cursor →
+/// Command Code，与界面一致。启用集合来自设置的服务矩阵，不由系统区域自己判断。
+fn badge_segments(state: &QuotaState, menu_bar: &[ProviderId]) -> Vec<BadgeSegment> {
     ProviderId::ORDER
         .iter()
+        .filter(|provider| menu_bar.contains(provider))
         .map(|provider| BadgeSegment {
             provider: *provider,
             text: primary_window_text(state, *provider),
@@ -254,6 +256,7 @@ mod tests {
             window_seconds: None,
             is_active: true,
             is_primary: false,
+            unlimited: false,
         }
     }
 
@@ -346,11 +349,15 @@ mod tests {
     }
 
     #[test]
-    fn both_providers_always_get_a_segment_in_a_stable_order() {
-        let segments = badge_segments(&state(vec![with_windows(
-            ProviderId::Claude,
-            vec![window(QuotaWindowKind::FiveHour, 78.0)],
-        )]));
+    fn enabled_providers_always_get_a_segment_in_a_stable_order() {
+        let enabled = [ProviderId::Codex, ProviderId::Claude];
+        let segments = badge_segments(
+            &state(vec![with_windows(
+                ProviderId::Claude,
+                vec![window(QuotaWindowKind::FiveHour, 78.0)],
+            )]),
+            &enabled,
+        );
 
         assert_eq!(segments.len(), 2);
         assert_eq!(segments[0].provider, ProviderId::Codex);
@@ -360,18 +367,47 @@ mod tests {
     }
 
     #[test]
-    fn the_tooltip_names_both_providers() {
-        let segments = badge_segments(&state(vec![
-            with_windows(
-                ProviderId::Codex,
-                vec![window(QuotaWindowKind::FiveHour, 62.0)],
-            ),
-            with_windows(
+    fn a_disabled_service_never_reaches_the_system_area() {
+        let enabled = [ProviderId::Codex];
+        let segments = badge_segments(
+            &state(vec![with_windows(
                 ProviderId::Claude,
                 vec![window(QuotaWindowKind::FiveHour, 78.0)],
-            ),
-        ]));
+            )]),
+            &enabled,
+        );
+
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].provider, ProviderId::Codex);
+    }
+
+    #[test]
+    fn the_tooltip_names_the_enabled_providers() {
+        let enabled = [ProviderId::Codex, ProviderId::Claude];
+        let segments = badge_segments(
+            &state(vec![
+                with_windows(
+                    ProviderId::Codex,
+                    vec![window(QuotaWindowKind::FiveHour, 62.0)],
+                ),
+                with_windows(
+                    ProviderId::Claude,
+                    vec![window(QuotaWindowKind::FiveHour, 78.0)],
+                ),
+            ]),
+            &enabled,
+        );
 
         assert_eq!(tooltip_text(&segments), "Codex 62% · Claude Code 78%");
+    }
+
+    #[test]
+    fn the_tooltip_lists_the_five_services_in_product_order() {
+        let segments = badge_segments(&state(Vec::new()), &ProviderId::ORDER);
+
+        assert_eq!(
+            tooltip_text(&segments),
+            "Codex -- · Claude Code -- · Antigravity -- · Cursor -- · Command Code --"
+        );
     }
 }

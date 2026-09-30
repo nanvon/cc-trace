@@ -20,6 +20,8 @@ const INDICATOR_MAINTENANCE: &str = "maintenance";
 pub const OPENAI_STATUS_URL: &str = "https://status.openai.com/api/v2/status.json";
 /// Anthropic 官方状态页（Claude Code 的服务状态来源）。
 pub const ANTHROPIC_STATUS_URL: &str = "https://status.claude.com/api/v2/status.json";
+/// Cursor 官方状态页（Cursor 的服务状态来源）。
+pub const CURSOR_STATUS_URL: &str = "https://status.cursor.com/api/v2/status.json";
 
 /// 一次状态拉取的失败。不携带响应体、端点原文或路径，只够区分「不可用」。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

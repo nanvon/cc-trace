@@ -27,15 +27,29 @@ function render() {
     global: { plugins: [pinia, i18n] },
   });
   useSettingsStore(pinia).adopt({
-    schemaVersion: 1,
+    schemaVersion: 2,
     language: "zh-CN",
     appearance: "system",
     refreshInterval: "2m",
+    scanInterval: "5m",
     launchAtLogin: false,
     privacyMode: false,
     showServiceStatus: true,
+    menuBarWindowMode: "primary",
+    services: {
+      codex: { quota: true, menuBar: true, hud: true, stats: true },
+      claude: { quota: true, menuBar: true, hud: true, stats: true },
+      antigravity: { quota: false, menuBar: false, hud: false, stats: false },
+      cursor: { quota: false, menuBar: false, hud: false, stats: false },
+      commandCode: { quota: false, menuBar: false, hud: false, stats: false },
+      localAgentStats: true,
+    },
+    hud: { enabled: false, position: null },
+    rankingBasis: "tokens",
+    resetTimeDisplay: "duration",
+    checkUpdatesOnStart: true,
+    verboseLogging: false,
     onboarding: { completed: true, completedAt: null },
-    usageServiceVisibility: { codex: true, claude: true, pi: true, opencode: true },
   });
   return wrapper;
 }

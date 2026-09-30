@@ -9,6 +9,10 @@ export interface UsageChartColors {
   claude: string;
   pi: string;
   opencode: string;
+  dsh: string;
+  cursor: string;
+  antigravity: string;
+  commandCode: string;
   fontFamily: string;
   text: string;
   muted: string;
@@ -27,6 +31,10 @@ export function usageChartColors(): UsageChartColors {
     claude: cssVariable("--cat-claude", "#d97757"),
     pi: cssVariable("--cat-pi", "#2f5f8a"),
     opencode: cssVariable("--cat-opencode", "#0f766e"),
+    dsh: cssVariable("--cat-dsh", "#4176e6"),
+    cursor: cssVariable("--cat-cursor", "#2c2c2e"),
+    antigravity: cssVariable("--cat-antigravity", "#4285f4"),
+    commandCode: cssVariable("--cat-commandcode", "#18181b"),
     fontFamily: cssVariable(
       "--font-ui",
       '-apple-system, BlinkMacSystemFont, "Segoe UI Variable", "Segoe UI", sans-serif',

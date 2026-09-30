@@ -46,12 +46,14 @@ function summary(
       {
         key: source,
         entryCount: options.priced + options.unpriced,
+        requestCount: 0,
         tokens: EMPTY_TOKENS,
         fast: EMPTY_FAST,
         cost,
       },
     ],
     entryCount: options.priced + options.unpriced,
+    requestCount: 0,
     tokens: EMPTY_TOKENS,
     fast: EMPTY_FAST,
     cost,
@@ -63,6 +65,7 @@ describe("buildProviderCosts", () => {
     const empty: UsageSummary = {
       rows: [],
       entryCount: 0,
+      requestCount: 0,
       tokens: EMPTY_TOKENS,
       fast: EMPTY_FAST,
       cost: {

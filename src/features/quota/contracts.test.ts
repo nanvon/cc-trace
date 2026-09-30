@@ -13,6 +13,7 @@ function window(id: string, isPrimary: boolean): QuotaWindow {
     windowSeconds: null,
     isActive: true,
     isPrimary,
+    unlimited: false,
   };
 }
 

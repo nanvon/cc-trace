@@ -267,7 +267,12 @@ fn normalize_legacy_window(
     let window_seconds = match kind {
         QuotaWindowKind::FiveHour => Some(FIVE_HOUR_SECONDS),
         QuotaWindowKind::Weekly | QuotaWindowKind::ModelWeekly => Some(WEEKLY_SECONDS),
-        QuotaWindowKind::Unknown => None,
+        // 其余计量桶不属于 Claude 额度协议的旧窗口分支。
+        QuotaWindowKind::Monthly
+        | QuotaWindowKind::Total
+        | QuotaWindowKind::Auto
+        | QuotaWindowKind::Api
+        | QuotaWindowKind::Unknown => None,
     };
 
     Ok(window(
@@ -300,6 +305,7 @@ fn window(
         window_seconds,
         is_active,
         is_primary: false,
+        unlimited: false,
     }
 }
 

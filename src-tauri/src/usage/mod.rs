@@ -164,7 +164,7 @@ impl UsageService {
         if i64::try_from(offset).is_err() {
             return Err(UsageError::InvalidQuery);
         }
-        if let Some(sources) = &query.sources
+        if let Some(sources) = &query.filter.sources
             && sources.len() > 8
         {
             return Err(UsageError::InvalidQuery);
@@ -207,7 +207,7 @@ impl UsageService {
         mut query: UsageConversationQuery,
     ) -> Result<Vec<UsageConversationProjectOption>, UsageError> {
         normalize_filter(&mut query.filter)?;
-        if let Some(sources) = &query.sources
+        if let Some(sources) = &query.filter.sources
             && sources.len() > 8
         {
             return Err(UsageError::InvalidQuery);
@@ -480,6 +480,9 @@ impl UsageService {
             UsageSource::Pi => decode_cursor::<PiCursor>(state.cursor_json.as_deref()).is_some(),
             // OpenCode 是库级扫描，不产生文件级 cursor。
             UsageSource::Opencode => true,
+            // DSH 是多帧 zstd 容器，有自己的水位语义（批次 3 实装）；
+            // Cursor 来自远端计量，不经过文件扫描。两者当前都没有文件级 cursor 需要校验。
+            UsageSource::Dsh | UsageSource::Cursor => true,
         });
 
         let previous_prefix = match &previous {
@@ -607,6 +610,8 @@ impl UsageService {
                     UsageSource::Pi => parse_pi_line(&line, &mut pi_cursor, &pi_filename_key),
                     // OpenCode 走库级扫描，不经过文件解析。
                     UsageSource::Opencode => ParsedLine::Ignored,
+                    // DSH 是多帧容器、Cursor 是远端计量，都不走行式 JSONL 解析。
+                    UsageSource::Dsh | UsageSource::Cursor => ParsedLine::Ignored,
                 };
                 match parsed {
                     ParsedLine::Ignored => {}
@@ -679,6 +684,8 @@ impl UsageService {
             UsageSource::Claude => encode_cursor(claude_cursor),
             UsageSource::Pi => encode_cursor(pi_cursor),
             UsageSource::Opencode => encode_cursor(&PiCursor::default()),
+            // DSH 与 Cursor 不用行式 cursor；写入一个空对象保持列非空且可解析。
+            UsageSource::Dsh | UsageSource::Cursor => encode_cursor(&PiCursor::default()),
         }
         .map_err(|_| UsageError::Unavailable)?;
         let consumed = batch.consumed_bytes;
@@ -929,6 +936,19 @@ fn source_file(source: UsageSource, path: PathBuf, source_root: Option<&Path>) -
             hasher.update(b"opencode-sqlite-v1");
             hasher.update(path.as_os_str().as_encoded_bytes());
         }
+        // DSH 的会话身份由会话目录与版本号决定（批次 3 实装）；
+        // Cursor 没有文件级扫描，file_key 只在间接调用时出现。
+        UsageSource::Dsh | UsageSource::Cursor => {
+            hasher.update(b"relative-path-v1");
+            let identity = source_root
+                .and_then(|root| path.strip_prefix(root).ok())
+                .unwrap_or(&path);
+            for component in identity.components() {
+                let component = component.as_os_str().to_string_lossy();
+                hasher.update((component.len() as u64).to_le_bytes());
+                hasher.update(component.as_bytes());
+            }
+        }
     }
     SourceFile {
         source,
@@ -1012,6 +1032,16 @@ fn normalize_filter(filter: &mut UsageFilter) -> Result<(), UsageError> {
     filter.from = normalize_time(filter.from.as_deref())?;
     filter.to = normalize_time(filter.to.as_deref())?;
     filter.model = normalize_optional(&filter.model)?;
+    filter.project = normalize_optional(&filter.project)?;
+    // 可见服务集合由设置决定，前端负责传下来，Rust 不猜默认值：
+    // `None` 表示不过滤，空数组表示一个服务都不可见（结果为空）。
+    if let Some(sources) = &mut filter.sources {
+        if sources.len() > UsageSource::ORDER.len() {
+            return Err(UsageError::InvalidQuery);
+        }
+        sources.sort();
+        sources.dedup();
+    }
     if let (Some(from), Some(to)) = (&filter.from, &filter.to)
         && from >= to
     {
@@ -1311,7 +1341,6 @@ mod tests {
         let projects = service
             .conversation_projects(UsageConversationQuery {
                 filter: UsageFilter::default(),
-                sources: None,
                 ..UsageConversationQuery::default()
             })
             .expect("projects");

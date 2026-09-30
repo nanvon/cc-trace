@@ -137,6 +137,7 @@ fn normalize_window(
         window_seconds,
         is_active: true,
         is_primary: false,
+        unlimited: false,
     })
 }
 
@@ -160,6 +161,13 @@ fn stable_window_id(kind: QuotaWindowKind, window_seconds: Option<u64>) -> Strin
         ),
         QuotaWindowKind::ModelWeekly => {
             unreachable!("Codex Usage API does not produce model-weekly windows")
+        }
+        // 其余计量桶只在 Cursor 与 Command Code 上出现，Codex 永不产生。
+        QuotaWindowKind::Monthly
+        | QuotaWindowKind::Total
+        | QuotaWindowKind::Auto
+        | QuotaWindowKind::Api => {
+            unreachable!("Codex Usage API does not produce metered quota buckets")
         }
     }
 }

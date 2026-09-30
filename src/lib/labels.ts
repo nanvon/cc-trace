@@ -44,6 +44,10 @@ export function windowLabel(t: ComposerTranslation, window: QuotaWindow): string
  * Claude Code 的周窗口是全模型合计，读作 `ALL`；Codex 的周窗口就是周窗口。
  */
 export function windowCode(provider: ProviderId, window: QuotaWindow): string {
+  // Antigravity 与 Cursor 的窗口带官方组名（`GEMINI 5H`、`TOTAL`），组名优先于类型短码。
+  if ((provider === "antigravity" || provider === "cursor") && window.displayName) {
+    return window.displayName.toUpperCase();
+  }
   switch (window.kind) {
     case "fiveHour":
       return "5HOUR";
@@ -51,6 +55,14 @@ export function windowCode(provider: ProviderId, window: QuotaWindow): string {
       return provider === "claude" ? "ALL" : "WEEKLY";
     case "modelWeekly":
       return window.displayName?.toUpperCase() ?? "MODEL";
+    case "monthly":
+      return window.displayName?.toUpperCase() ?? "MONTHLY";
+    case "total":
+      return window.displayName?.toUpperCase() ?? "TOTAL";
+    case "auto":
+      return window.displayName?.toUpperCase() ?? "AUTO";
+    case "api":
+      return window.displayName?.toUpperCase() ?? "API";
     default:
       return window.displayName?.toUpperCase() ?? "CURRENT";
   }

@@ -9,7 +9,7 @@ use super::backoff::Backoff;
 use super::params::{MANUAL_REFRESH_MIN_INTERVAL_SECS, STALE_AGE_INTERVAL_MULTIPLIER};
 use crate::contracts::{
     AppError, ProviderAvailability, ProviderId, ProviderIdentity, ProviderSnapshot, QuotaSnapshot,
-    RefreshState, SnapshotFreshness,
+    QuotaSubject, RefreshState, SnapshotFreshness,
 };
 use crate::providers::ProviderFetchOutcome;
 
@@ -38,7 +38,7 @@ pub enum RefreshDecision {
     },
 }
 
-/// 一个 Provider 的完整运行时状态。
+/// 一个额度主体的完整运行时状态。
 #[derive(Debug, Clone)]
 pub struct ProviderRuntime {
     pub snapshot: ProviderSnapshot,
@@ -51,9 +51,14 @@ pub struct ProviderRuntime {
 }
 
 impl ProviderRuntime {
-    pub fn new(provider: ProviderId) -> Self {
+    pub fn new(subject: &QuotaSubject) -> Self {
         Self {
-            snapshot: ProviderSnapshot::initial(provider),
+            snapshot: ProviderSnapshot::for_subject(
+                subject.subject_id.clone(),
+                subject.provider,
+                subject.kind,
+                subject.label.clone(),
+            ),
             backoff: Backoff::default(),
             in_flight: false,
             last_manual_refresh: None,
@@ -94,6 +99,10 @@ impl ProviderRuntime {
 
     pub fn provider(&self) -> ProviderId {
         self.snapshot.provider
+    }
+
+    pub fn subject_id(&self) -> &str {
+        &self.snapshot.subject_id
     }
 
     /// 决定是否发起请求。不改变任何状态。
@@ -347,6 +356,7 @@ mod tests {
                 window_seconds: Some(18_000),
                 is_active: true,
                 is_primary: true,
+                unlimited: false,
             }],
             captured_at: now.to_rfc3339(),
         }
@@ -365,7 +375,7 @@ mod tests {
     }
 
     fn refreshed_runtime() -> ProviderRuntime {
-        let mut runtime = ProviderRuntime::new(ProviderId::Codex);
+        let mut runtime = ProviderRuntime::new(&QuotaSubject::primary(ProviderId::Codex));
         runtime.begin(RefreshTrigger::Startup, at(0));
         runtime.apply(success(at(0)), at(0));
         runtime
@@ -375,7 +385,7 @@ mod tests {
 
     #[test]
     fn matrix_waiting_for_first_check() {
-        let runtime = ProviderRuntime::new(ProviderId::Codex);
+        let runtime = ProviderRuntime::new(&QuotaSubject::primary(ProviderId::Codex));
 
         assert_eq!(runtime.snapshot.refresh, RefreshState::Idle);
         assert_eq!(runtime.snapshot.freshness, SnapshotFreshness::Empty);
@@ -384,7 +394,7 @@ mod tests {
 
     #[test]
     fn matrix_first_load() {
-        let mut runtime = ProviderRuntime::new(ProviderId::Codex);
+        let mut runtime = ProviderRuntime::new(&QuotaSubject::primary(ProviderId::Codex));
         assert_eq!(
             runtime.begin(RefreshTrigger::Startup, at(0)),
             RefreshState::Loading
@@ -471,7 +481,7 @@ mod tests {
 
     #[test]
     fn matrix_unsupported_is_not_downgraded_to_error() {
-        let mut runtime = ProviderRuntime::new(ProviderId::Codex);
+        let mut runtime = ProviderRuntime::new(&QuotaSubject::primary(ProviderId::Codex));
         runtime.begin(RefreshTrigger::Startup, at(0));
         runtime.apply(ProviderFetchOutcome::Unsupported, at(0));
 
@@ -496,7 +506,7 @@ mod tests {
 
     #[test]
     fn matrix_offline_without_snapshot_stays_empty() {
-        let mut runtime = ProviderRuntime::new(ProviderId::Claude);
+        let mut runtime = ProviderRuntime::new(&QuotaSubject::primary(ProviderId::Claude));
         runtime.begin(RefreshTrigger::Startup, at(0));
         runtime.apply(ProviderFetchOutcome::Offline, at(0));
 
@@ -549,7 +559,7 @@ mod tests {
 
     #[test]
     fn matrix_error_without_snapshot_stays_empty() {
-        let mut runtime = ProviderRuntime::new(ProviderId::Codex);
+        let mut runtime = ProviderRuntime::new(&QuotaSubject::primary(ProviderId::Codex));
         runtime.begin(RefreshTrigger::Startup, at(0));
         runtime.apply(
             ProviderFetchOutcome::Failed {
@@ -595,7 +605,7 @@ mod tests {
 
     #[test]
     fn concurrent_refreshes_merge_into_the_in_flight_task() {
-        let mut runtime = ProviderRuntime::new(ProviderId::Codex);
+        let mut runtime = ProviderRuntime::new(&QuotaSubject::primary(ProviderId::Codex));
         runtime.begin(RefreshTrigger::Manual, at(0));
 
         assert_eq!(
@@ -767,7 +777,7 @@ mod tests {
 
     #[test]
     fn a_cached_snapshot_is_restored_as_stale_never_as_a_fresh_success() {
-        let mut runtime = ProviderRuntime::new(ProviderId::Codex);
+        let mut runtime = ProviderRuntime::new(&QuotaSubject::primary(ProviderId::Codex));
         runtime.restore_from_cache(None, None, snapshot_with(73.0, at(0)), Some(at(0)));
 
         assert_eq!(runtime.snapshot.refresh, RefreshState::Idle);
@@ -782,7 +792,7 @@ mod tests {
 
     #[test]
     fn a_refresh_over_a_restored_snapshot_is_refreshing_not_loading() {
-        let mut runtime = ProviderRuntime::new(ProviderId::Codex);
+        let mut runtime = ProviderRuntime::new(&QuotaSubject::primary(ProviderId::Codex));
         runtime.restore_from_cache(None, None, snapshot_with(73.0, at(0)), Some(at(0)));
 
         assert_eq!(
@@ -794,7 +804,7 @@ mod tests {
 
     #[test]
     fn a_restored_identity_key_lets_the_first_refresh_after_restart_detect_a_change() {
-        let mut runtime = ProviderRuntime::new(ProviderId::Codex);
+        let mut runtime = ProviderRuntime::new(&QuotaSubject::primary(ProviderId::Codex));
         runtime.restore_identity_key(Some("identity-one".to_owned()));
 
         runtime.begin(RefreshTrigger::Startup, at(0));

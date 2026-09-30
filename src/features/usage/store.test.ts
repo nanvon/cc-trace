@@ -31,6 +31,7 @@ const idleStatus = (finishedAt: string | null): UsageScanStatus => ({
 const emptySummary: UsageSummary = {
   rows: [],
   entryCount: 0,
+  requestCount: 0,
   tokens: {
     uncachedInputTokens: 0,
     outputTokens: 0,
@@ -93,17 +94,12 @@ describe("usage store", () => {
 
     await store.loadDashboard(usageDashboardRanges(new Date(2026, 6, 30)).thisMonth);
 
+    const visible = store.dashboardSources;
     expect(vi.mocked(getUsageSummary).mock.calls.map(([query]) => query.groupBy)).toEqual([
       "source",
       "source",
-      "day",
-      "day",
-      "day",
-      "day",
-      "model",
-      "model",
-      "model",
-      "model",
+      ...visible.map(() => "day"),
+      ...visible.map(() => "model"),
     ]);
     expect(store.dashboardLoaded).toBe(true);
     expect(store.dashboardLoading).toBe(false);
@@ -114,15 +110,29 @@ describe("usage store", () => {
     vi.mocked(getUsageScanStatus).mockResolvedValue(idleStatus("2026-07-30T10:00:00Z"));
     const settings = useSettingsStore();
     settings.adopt({
-      schemaVersion: 1,
+      schemaVersion: 2,
       language: "zh-CN",
       appearance: "system",
       refreshInterval: "2m",
+      scanInterval: "5m",
       launchAtLogin: false,
       privacyMode: false,
       showServiceStatus: true,
+      menuBarWindowMode: "primary",
+      services: {
+        codex: { quota: true, menuBar: true, hud: true, stats: true },
+        claude: { quota: true, menuBar: true, hud: true, stats: true },
+        antigravity: { quota: false, menuBar: false, hud: false, stats: false },
+        cursor: { quota: false, menuBar: false, hud: false, stats: false },
+        commandCode: { quota: false, menuBar: false, hud: false, stats: false },
+        localAgentStats: false,
+      },
+      hud: { enabled: false, position: null },
+      rankingBasis: "tokens",
+      resetTimeDisplay: "duration",
+      checkUpdatesOnStart: true,
+      verboseLogging: false,
       onboarding: { completed: true, completedAt: null },
-      usageServiceVisibility: { codex: true, claude: true, pi: false, opencode: false },
     });
     const store = useUsageStore();
 
@@ -132,8 +142,8 @@ describe("usage store", () => {
     const sources = vi
       .mocked(getUsageSummary)
       .mock.calls.slice(2)
-      .map(([query]) => query.filter.source);
-    expect(sources).toEqual(["codex", "claude", "codex", "claude"]);
+      .map(([query]) => query.filter.sources);
+    expect(sources).toEqual([["codex"], ["claude"], ["codex"], ["claude"]]);
   });
 
   it("narrows dashboard queries to the selected source (global filter, not persisted)", async () => {
@@ -150,8 +160,8 @@ describe("usage store", () => {
     const sources = vi
       .mocked(getUsageSummary)
       .mock.calls.slice(2)
-      .map(([query]) => query.filter.source);
-    expect(sources).toEqual(["claude", "claude"]);
+      .map(([query]) => query.filter.sources);
+    expect(sources).toEqual([["claude"], ["claude"]]);
     expect(store.visibleSourceSummary).toBeNull();
   });
 
@@ -159,15 +169,29 @@ describe("usage store", () => {
     vi.mocked(getUsageScanStatus).mockResolvedValue(idleStatus("2026-07-30T10:00:00Z"));
     const settings = useSettingsStore();
     settings.adopt({
-      schemaVersion: 1,
+      schemaVersion: 2,
       language: "zh-CN",
       appearance: "system",
       refreshInterval: "2m",
+      scanInterval: "5m",
       launchAtLogin: false,
       privacyMode: false,
       showServiceStatus: true,
+      menuBarWindowMode: "primary",
+      services: {
+        codex: { quota: true, menuBar: true, hud: true, stats: true },
+        claude: { quota: true, menuBar: true, hud: true, stats: false },
+        antigravity: { quota: false, menuBar: false, hud: false, stats: false },
+        cursor: { quota: false, menuBar: false, hud: false, stats: false },
+        commandCode: { quota: false, menuBar: false, hud: false, stats: false },
+        localAgentStats: false,
+      },
+      hud: { enabled: false, position: null },
+      rankingBasis: "tokens",
+      resetTimeDisplay: "duration",
+      checkUpdatesOnStart: true,
+      verboseLogging: false,
       onboarding: { completed: true, completedAt: null },
-      usageServiceVisibility: { codex: true, claude: false, pi: false, opencode: false },
     });
     const store = useUsageStore();
 
@@ -185,6 +209,7 @@ describe("usage store", () => {
         {
           key,
           entryCount: 1,
+          requestCount: 0,
           tokens: emptySummary.tokens,
           fast: emptySummary.fast,
           cost: emptySummary.cost,
@@ -192,39 +217,28 @@ describe("usage store", () => {
       ],
     });
 
-    vi.mocked(getUsageSummary)
-      .mockResolvedValueOnce(labeled("source-all"))
-      .mockResolvedValueOnce(labeled("day-codex"))
-      .mockResolvedValueOnce(labeled("day-claude"))
-      .mockResolvedValueOnce(labeled("day-pi"))
-      .mockResolvedValueOnce(labeled("day-opencode"))
-      .mockResolvedValueOnce(labeled("model-codex"))
-      .mockResolvedValueOnce(labeled("model-claude"))
-      .mockResolvedValueOnce(labeled("model-pi"))
-      .mockResolvedValueOnce(labeled("model-opencode"));
+    const visible = store.dashboardSources;
+    const mocked = vi.mocked(getUsageSummary);
+    mocked.mockResolvedValueOnce(labeled("source-all"));
+    for (const source of visible) {
+      mocked.mockResolvedValueOnce(labeled(`day-${source}`));
+    }
+    for (const source of visible) {
+      mocked.mockResolvedValueOnce(labeled(`model-${source}`));
+    }
 
     await store.loadDashboard(usageDashboardRanges(new Date(2026, 6, 30)).all);
 
     expect(vi.mocked(getUsageSummary).mock.calls.map(([query]) => query.groupBy)).toEqual([
       "source",
-      "day",
-      "day",
-      "day",
-      "day",
-      "model",
-      "model",
-      "model",
-      "model",
+      ...visible.map(() => "day"),
+      ...visible.map(() => "model"),
     ]);
     expect(store.dashboardPrevious).toBeNull();
-    expect(store.dashboard.day.codex?.rows[0]?.key).toBe("day-codex");
-    expect(store.dashboard.day.claude?.rows[0]?.key).toBe("day-claude");
-    expect(store.dashboard.day.pi?.rows[0]?.key).toBe("day-pi");
-    expect(store.dashboard.day.opencode?.rows[0]?.key).toBe("day-opencode");
-    expect(store.dashboard.model.codex?.rows[0]?.key).toBe("model-codex");
-    expect(store.dashboard.model.claude?.rows[0]?.key).toBe("model-claude");
-    expect(store.dashboard.model.pi?.rows[0]?.key).toBe("model-pi");
-    expect(store.dashboard.model.opencode?.rows[0]?.key).toBe("model-opencode");
+    for (const source of visible) {
+      expect(store.dashboard.day[source]?.rows[0]?.key).toBe(`day-${source}`);
+      expect(store.dashboard.model[source]?.rows[0]?.key).toBe(`model-${source}`);
+    }
   });
 
   it("uses the wider context only for daily summaries in a single-day range", async () => {
@@ -236,15 +250,12 @@ describe("usage store", () => {
 
     const queries = vi.mocked(getUsageSummary).mock.calls.map(([query]) => query);
     const previous = usagePreviousRange(today);
+    const visible = store.dashboardSources;
     expect(queries[0]?.filter.from).toBe(today.from);
     expect(queries[1]?.filter.from).toBe(previous?.from);
-    expect(queries[2]?.filter.from).toBe(usageChartRange(today).from);
-    expect(queries[3]?.filter.from).toBe(usageChartRange(today).from);
-    expect(queries[4]?.filter.from).toBe(usageChartRange(today).from);
-    expect(queries[5]?.filter.from).toBe(usageChartRange(today).from);
-    expect(queries[6]?.filter.from).toBe(today.from);
-    expect(queries[7]?.filter.from).toBe(today.from);
-    expect(queries[8]?.filter.from).toBe(today.from);
-    expect(queries[9]?.filter.from).toBe(today.from);
+    for (const index of visible.keys()) {
+      expect(queries[2 + index]?.filter.from).toBe(usageChartRange(today).from);
+      expect(queries[2 + visible.length + index]?.filter.from).toBe(today.from);
+    }
   });
 });

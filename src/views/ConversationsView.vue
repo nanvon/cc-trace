@@ -10,14 +10,12 @@ import { useI18n } from "vue-i18n";
 
 import ConversationDetailPane from "../components/ConversationDetailPane.vue";
 import MenuSelect, { type MenuSelectOption } from "../components/MenuSelect.vue";
-import { useSettingsStore } from "../features/settings/store";
 import type {
   UsageConversation,
   UsageConversationPage,
   UsageConversationProjectOption,
   UsageConversationSort,
 } from "../features/usage/contracts";
-import { USAGE_SOURCES } from "../features/usage/contracts";
 import { listConversationProjects, listConversations } from "../features/usage/api";
 import { formatUsageCost, presentUsageTokens } from "../features/usage/presentation";
 import { useUsageStore } from "../features/usage/store";
@@ -25,7 +23,6 @@ import { useUsageStore } from "../features/usage/store";
 const PAGE_SIZE = 20;
 
 const { t, locale } = useI18n();
-const settings = useSettingsStore();
 const usage = useUsageStore();
 
 const loading = ref(true);
@@ -37,6 +34,7 @@ const offset = ref(0);
 const pendingSearch = ref("");
 const selectedKey = ref<string | null>(null);
 const projects = ref<UsageConversationProjectOption[]>([]);
+/** 项目筛选菜单的取值是项目身份键（规范化项目路径），展示用项目名。 */
 const projectFilter = ref<string | null>(null);
 
 const SORT_OPTIONS: Array<{ value: UsageConversationSort; label: string }> = [
@@ -52,18 +50,16 @@ const sortOptions = computed<MenuSelectOption<UsageConversationSort>[]>(() =>
 /** 项目菜单：首项「全部项目」，其余带对话计数（对齐 cc-bar menuLabel）。 */
 const projectOptions = computed<MenuSelectOption<string>[]>(() => [
   { value: "", label: t("conversations.projectFilter") },
-  ...projects.value.map((option) => ({
-    value: option.name,
-    label: option.name,
-    count: option.conversationCount,
-  })),
+  ...projects.value
+    .filter((option) => option.key !== null)
+    .map((option) => ({
+      value: option.key ?? "",
+      label: option.name,
+      count: option.conversationCount,
+    })),
 ]);
 
-const visibleSources = computed(() => {
-  const visibility = settings.settings?.usageServiceVisibility;
-  if (!visibility) return [...USAGE_SOURCES];
-  return USAGE_SOURCES.filter((source) => visibility[source]);
-});
+const visibleSources = computed(() => usage.visibleSources);
 
 const allServicesOff = computed(() => visibleSources.value.length === 0);
 const total = computed(() => page.value?.total ?? 0);
@@ -77,20 +73,23 @@ function conversationFilter() {
   return {
     from: range.preset === "all" ? null : range.from,
     to: range.preset === "all" ? null : range.to,
-    source: usage.sourceFilter === "all" ? null : usage.sourceFilter,
+    sources:
+      usage.sourceFilter === "all"
+        ? [...usage.visibleSources]
+        : usage.visibleSources.includes(usage.sourceFilter)
+          ? [usage.sourceFilter]
+          : [],
     model: null,
     speed: null,
+    project: projectFilter.value,
   };
 }
 function queryArgs() {
-  const sources =
-    usage.sourceFilter === "all" && visibleSources.value.length > 0 ? visibleSources.value : null;
   return {
     filter: conversationFilter(),
     search: pendingSearch.value || null,
-    project: projectFilter.value === "" ? null : projectFilter.value,
+    project: projectFilter.value,
     sort: sort.value,
-    sources,
     limit: null,
     offset: null,
   };
@@ -99,7 +98,7 @@ async function loadProjects(): Promise<void> {
   try {
     const options = await listConversationProjects(queryArgs());
     projects.value = options;
-    if (projectFilter.value && !options.some((option) => option.name === projectFilter.value)) {
+    if (projectFilter.value && !options.some((option) => option.key === projectFilter.value)) {
       projectFilter.value = null;
     }
   } catch {

@@ -14,6 +14,7 @@ function makeWindow(kind: QuotaWindowKind, displayName: string | null = null): Q
     windowSeconds: null,
     isActive: true,
     isPrimary: true,
+    unlimited: false,
   };
 }
 

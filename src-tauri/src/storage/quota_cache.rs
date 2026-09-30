@@ -17,18 +17,22 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::contracts::{ProviderId, ProviderIdentity, QuotaSnapshot};
+use crate::contracts::{ProviderId, ProviderIdentity, QuotaSnapshot, QuotaSubjectKind};
 
-pub const QUOTA_CACHE_SCHEMA_VERSION: u32 = 1;
+pub const QUOTA_CACHE_SCHEMA_VERSION: u32 = 2;
 
 const CACHE_FILE: &str = "quota-cache.json";
 const TEMP_FILE: &str = "quota-cache.json.tmp";
 
-/// 一个 Provider 的最新有效快照。首版只保留最新一份，不建立历史序列。
+/// 一个额度主体的最新有效快照。只保留最新一份，不建立历史序列。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CachedProvider {
+    /// 额度主体标识；导入账号各自一条，见 `docs/决策/ADR-0031-功能基准改为cc-bar-v1.1.1.md`。
+    pub subject_id: String,
     pub provider: ProviderId,
+    pub kind: QuotaSubjectKind,
+    pub label: Option<String>,
     pub identity: Option<ProviderIdentity>,
     /// 身份指纹，见 `providers::credentials::identity_fingerprint`。单向摘要，
     /// 不可反推 account id 或邮箱。
@@ -120,7 +124,10 @@ mod tests {
 
     fn cached(provider: ProviderId) -> CachedProvider {
         CachedProvider {
+            subject_id: provider.key().to_owned(),
             provider,
+            kind: QuotaSubjectKind::Primary,
+            label: None,
             identity: Some(ProviderIdentity {
                 account: Some("user@example.test".to_owned()),
                 plan: Some("plus".to_owned()),
@@ -137,6 +144,7 @@ mod tests {
                     window_seconds: Some(18_000),
                     is_active: true,
                     is_primary: true,
+                    unlimited: false,
                 }],
                 captured_at: "2026-07-27T08:00:00+00:00".to_owned(),
             },

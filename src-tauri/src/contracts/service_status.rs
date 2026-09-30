@@ -1,7 +1,7 @@
 //! 官方服务状态契约（Statuspage.io 状态链）。
 //!
 //! 这条状态链与额度三维状态（`docs/状态与错误模型.md`）是**两条独立状态链**：
-//! 它报告 OpenAI／Anthropic 官方服务的公开故障，不参与 `ProviderAvailability`、
+//! 它报告 OpenAI／Anthropic／Cursor 官方服务的公开故障，不参与 `ProviderAvailability`、
 //! Overall Signal、退避与刷新调度，见 [ADR-0026]。
 //! [ADR-0026]: ../../../../docs/决策/ADR-0026-Statuspage状态链进入首版.md
 //!
@@ -37,29 +37,35 @@ pub struct ServiceStatus {
 
 /// `service_status_get` 的返回值与 `service-status://updated` 事件载荷。
 ///
-/// 两个 Provider 独立存在：一个失败只影响自己的 `None`，不影响另一个。
+/// 有 Statuspage 状态链的 Provider（Codex／Claude／Cursor）各自独立存在：
+/// 一个失败只影响自己的 `None`，不影响另一个。
 /// 语义是「没有可展示的服务状态」，不是错误。
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServiceStatusState {
     pub codex: Option<ServiceStatus>,
     pub claude: Option<ServiceStatus>,
+    pub cursor: Option<ServiceStatus>,
 }
 
 impl ServiceStatusState {
-    /// 取某个 Provider 的状态；未知 Provider 返回 `None`。
+    /// 取某个 Provider 的状态；没有状态链的 Provider 返回 `None`。
     pub fn get(&self, provider: ProviderId) -> Option<&ServiceStatus> {
         match provider {
             ProviderId::Codex => self.codex.as_ref(),
             ProviderId::Claude => self.claude.as_ref(),
+            ProviderId::Cursor => self.cursor.as_ref(),
+            ProviderId::Antigravity | ProviderId::CommandCode => None,
         }
     }
 
-    /// 更新某个 Provider 的状态；未知 Provider 是 no-op。
+    /// 更新某个 Provider 的状态；没有状态链的 Provider 是 no-op。
     pub fn set(&mut self, provider: ProviderId, status: ServiceStatus) {
         match provider {
             ProviderId::Codex => self.codex = Some(status),
             ProviderId::Claude => self.claude = Some(status),
+            ProviderId::Cursor => self.cursor = Some(status),
+            ProviderId::Antigravity | ProviderId::CommandCode => {}
         }
     }
 }
@@ -98,6 +104,7 @@ mod tests {
         let mut state = ServiceStatusState::default();
         assert!(state.codex.is_none());
         assert!(state.claude.is_none());
+        assert!(state.cursor.is_none());
 
         state.set(
             ProviderId::Codex,
@@ -114,5 +121,33 @@ mod tests {
             Some(ServiceStatusIndicator::Minor)
         );
         assert_eq!(state.get(ProviderId::Claude).map(|s| s.indicator), None);
+        assert_eq!(state.get(ProviderId::Cursor).map(|s| s.indicator), None);
+    }
+
+    #[test]
+    fn providers_without_a_status_page_are_a_no_op() {
+        let mut state = ServiceStatusState::default();
+        state.set(
+            ProviderId::Antigravity,
+            ServiceStatus {
+                indicator: ServiceStatusIndicator::Major,
+                description: None,
+                updated_at: None,
+                fetched_at: "2026-09-01T00:00:00Z".to_owned(),
+            },
+        );
+        state.set(
+            ProviderId::CommandCode,
+            ServiceStatus {
+                indicator: ServiceStatusIndicator::Major,
+                description: None,
+                updated_at: None,
+                fetched_at: "2026-09-01T00:00:00Z".to_owned(),
+            },
+        );
+
+        assert_eq!(state, ServiceStatusState::default());
+        assert!(state.get(ProviderId::Antigravity).is_none());
+        assert!(state.get(ProviderId::CommandCode).is_none());
     }
 }

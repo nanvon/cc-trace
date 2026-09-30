@@ -5,7 +5,10 @@
  * 空数组或 `0` 推断状态，见 `docs/状态与错误模型.md` 第 1 节。
  */
 
-export type ProviderId = "codex" | "claude";
+export type ProviderId = "codex" | "claude" | "antigravity" | "cursor" | "commandCode";
+
+/** 额度主体类型：主账号或用户导入的副账号（目前只有 Codex 支持导入多账号）。 */
+export type QuotaSubjectKind = "primary" | "imported";
 
 /** 活动维度：现在是否正在工作。 */
 export type RefreshState = "idle" | "loading" | "refreshing";
@@ -17,7 +20,8 @@ export type SnapshotFreshness = "empty" | "live" | "stale";
 export type ProviderAvailability =
   "ready" | "no_credentials" | "unsupported" | "offline" | "rate_limited" | "error";
 
-export type QuotaWindowKind = "fiveHour" | "weekly" | "modelWeekly" | "unknown";
+export type QuotaWindowKind =
+  "fiveHour" | "weekly" | "modelWeekly" | "monthly" | "total" | "auto" | "api" | "unknown";
 
 /** `error` 的两个文案分支：凭据类指向重新登录，协议类指向稍后重试。 */
 export type ErrorKind = "credentials" | "protocol";
@@ -40,6 +44,8 @@ export interface QuotaWindow {
   isActive: boolean;
   /** 是否为返回顺序中的第一项；仅作契约标记，展示主次始终以 `windows` 顺序为准。 */
   isPrimary: boolean;
+  /** 无上限额度（Cursor Unlimited）：显示 `∞`，不渲染伪造百分比。 */
+  unlimited: boolean;
 }
 
 export interface QuotaSnapshot {
@@ -53,8 +59,22 @@ export interface ProviderIdentity {
   plan: string | null;
 }
 
-export interface ProviderSnapshot {
+/** 额度主体描述，用于导入账号的增删与排序。 */
+export interface QuotaSubject {
+  subjectId: string;
   provider: ProviderId;
+  kind: QuotaSubjectKind;
+  label: string | null;
+  orderIndex: number;
+}
+
+export interface ProviderSnapshot {
+  /** 额度主体标识：主账号是 Provider 短名，导入账号是 `codex:imported:<n>`。 */
+  subjectId: string;
+  provider: ProviderId;
+  kind: QuotaSubjectKind;
+  /** 导入账号的展示名；主账号为 `null`，账号在 `identity` 里。 */
+  label: string | null;
   refresh: RefreshState;
   freshness: SnapshotFreshness;
   availability: ProviderAvailability;
@@ -72,12 +92,19 @@ export interface QuotaState {
 }
 
 export interface RefreshStatePayload {
+  subjectId: string;
   provider: ProviderId;
   refresh: RefreshState;
 }
 
 /** Provider 的空间顺序永远稳定，不随风险重排。 */
-export const PROVIDER_ORDER: readonly ProviderId[] = ["codex", "claude"] as const;
+export const PROVIDER_ORDER: readonly ProviderId[] = [
+  "codex",
+  "claude",
+  "antigravity",
+  "cursor",
+  "commandCode",
+] as const;
 
 /** Provider 返回的第一项就是主要额度，不按类型或 `isPrimary` 重新排序。 */
 export function primaryWindow(snapshot: QuotaSnapshot | null): QuotaWindow | null {

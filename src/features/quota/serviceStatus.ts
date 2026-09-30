@@ -11,6 +11,8 @@ import { listen } from "@tauri-apps/api/event";
 import { defineStore } from "pinia";
 import { ref } from "vue";
 
+import type { ProviderId } from "./contracts";
+
 export type ServiceStatusIndicator =
   "none" | "minor" | "major" | "critical" | "maintenance" | "unknown";
 
@@ -27,6 +29,7 @@ export interface ServiceStatus {
 /** `service_status_get` 的返回值与 `service-status://updated` 载荷。 */
 export interface ServiceStatusState {
   codex: ServiceStatus | null;
+  cursor: ServiceStatus | null;
   claude: ServiceStatus | null;
 }
 
@@ -45,7 +48,7 @@ export function onServiceStatusUpdated(
 }
 
 export const useServiceStatusStore = defineStore("serviceStatus", () => {
-  const state = ref<ServiceStatusState>({ codex: null, claude: null });
+  const state = ref<ServiceStatusState>({ codex: null, claude: null, cursor: null });
   const loaded = ref(false);
 
   function load(): Promise<void> {
@@ -61,5 +64,16 @@ export const useServiceStatusStore = defineStore("serviceStatus", () => {
     loaded.value = true;
   }
 
-  return { state, loaded, load, adopt };
+  /**
+   * 某个 Provider 的服务状态。没有 Statuspage 状态链的服务恒为 `null`，
+   * 由这一处决定，组件不再各自判断。
+   */
+  function statusFor(provider: ProviderId): ServiceStatus | null {
+    if (provider === "codex") return state.value.codex;
+    if (provider === "claude") return state.value.claude;
+    if (provider === "cursor") return state.value.cursor;
+    return null;
+  }
+
+  return { state, loaded, load, adopt, statusFor };
 });

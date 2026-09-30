@@ -8,8 +8,8 @@ use sha2::{Digest, Sha256};
 use crate::contracts::{UsageSource, UsageSpeed};
 
 use super::model::{
-    ClaudeCursor, CodexCursor, ConversationFact, InferenceGeo, ParsedLine, PiCursor, TokenFacts,
-    UsageEntry,
+    ClaudeCursor, CodexCursor, ConversationFact, Granularity, InferenceGeo, ParsedLine, PiCursor,
+    TokenFacts, UsageEntry,
 };
 use super::pricing::PricingCatalog;
 
@@ -40,7 +40,9 @@ pub fn parse_codex_line(
                 cursor.model = normalized_optional(model);
             }
             if let Some(cwd) = payload.get("cwd").and_then(Value::as_str) {
-                cursor.project_hint = project_hint(cwd);
+                let identity = project_identity(cwd);
+                cursor.project_hint = identity.hint;
+                cursor.project_path = identity.path;
             }
             ParsedLine::Ignored
         }
@@ -147,6 +149,8 @@ pub fn parse_codex_line(
                 billing_equivalent_tokens_nanos: None,
                 fast_multiplier_nanos: None,
                 pricing_fingerprint: None,
+                request_count: 1,
+                granularity: Granularity::Request,
             };
             apply_price(&mut entry, catalog);
             cursor.last_total_signature = Some(total_signature);
@@ -163,7 +167,10 @@ pub fn parse_codex_line(
                         .cloned()
                         .or_else(|| cursor.pending_title.clone()),
                     project_hint: cursor.project_hint.clone(),
+                    project_key: cursor.project_path.clone(),
+                    worktree_path: cursor.project_path.clone(),
                     is_sidechain: false,
+                    unattributed: false,
                     occurred_at,
                     source_id: cursor.source_id.clone(),
                     branch: None,
@@ -257,13 +264,16 @@ pub fn parse_claude_line(
         billing_equivalent_tokens_nanos: None,
         fast_multiplier_nanos: None,
         pricing_fingerprint: None,
+        request_count: 1,
+        granularity: Granularity::Request,
     };
     apply_price(&mut entry, catalog);
 
-    let project_hint = value
+    let identity = value
         .get("cwd")
         .and_then(Value::as_str)
-        .and_then(project_hint);
+        .map(project_identity)
+        .unwrap_or_default();
 
     ParsedLine::Fact {
         entry: Box::new(entry),
@@ -274,11 +284,14 @@ pub fn parse_claude_line(
                 .get(session_id)
                 .cloned()
                 .or_else(|| cursor.pending_title.clone()),
-            project_hint,
+            project_hint: identity.hint,
+            project_key: identity.path.clone(),
+            worktree_path: identity.path,
             is_sidechain: value
                 .get("isSidechain")
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
+            unattributed: false,
             occurred_at,
             source_id: Some(session_id.to_owned()),
             branch: value
@@ -314,7 +327,9 @@ pub fn parse_pi_line(line: &[u8], cursor: &mut PiCursor, filename_key: &str) -> 
                 cursor.conversation_key = Some(opaque_key("pi-conversation", id));
             }
             if let Some(cwd) = value.get("cwd").and_then(Value::as_str) {
-                cursor.project_hint = project_hint(cwd);
+                let identity = project_identity(cwd);
+                cursor.project_hint = identity.hint;
+                cursor.project_path = identity.path;
             }
             ParsedLine::Ignored
         }
@@ -423,9 +438,10 @@ fn pi_usage_fact(
         billing_equivalent_tokens_nanos: None,
         fast_multiplier_nanos: None,
         pricing_fingerprint: None,
+        request_count: 1,
+        granularity: Granularity::Request,
     };
 
-    let project_hint = cursor.project_hint.clone();
     let title = cursor.pending_title.take();
     ParsedLine::Fact {
         entry: Box::new(fact_entry),
@@ -433,8 +449,11 @@ fn pi_usage_fact(
             conversation_key,
             source: UsageSource::Pi,
             title,
-            project_hint,
+            project_hint: cursor.project_hint.clone(),
+            project_key: cursor.project_path.clone(),
+            worktree_path: cursor.project_path.clone(),
             is_sidechain: false,
+            unattributed: false,
             occurred_at,
             source_id: None,
             branch: None,
@@ -707,6 +726,31 @@ fn normalize_speed(value: Option<&str>) -> UsageSpeed {
     }
 }
 
+/// 一个对话的项目归属：展示名、项目身份键与对话工作目录。
+///
+/// 规范化只做纯文本处理，**不访问文件系统**：受保护目录（桌面、文稿、下载等）
+/// 与家目录以外的路径都不允许为归组触发系统授权弹窗。Git 根与 worktree 归组
+/// 由扫描层在允许访问的目录上补全，见 `docs/决策/ADR-0034-项目身份与未归属口径.md`。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct ProjectIdentity {
+    pub hint: Option<String>,
+    /// 项目身份键；当前等于规范化后的对话工作目录路径。
+    pub path: Option<String>,
+}
+
+pub(crate) fn project_identity(value: &str) -> ProjectIdentity {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return ProjectIdentity::default();
+    }
+    let normalized = normalize_project_path(trimmed);
+    ProjectIdentity {
+        hint: project_hint(trimmed),
+        path: (!normalized.is_empty()).then_some(normalized),
+    }
+}
+
+/// 路径尾段作为展示名。不调用文件系统。
 pub(crate) fn project_hint(value: &str) -> Option<String> {
     Path::new(value)
         .file_name()
@@ -714,6 +758,15 @@ pub(crate) fn project_hint(value: &str) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(|value| value.chars().take(120).collect())
+}
+
+/// 去掉尾部分隔符并限长。保留原分隔符，Windows 路径仍以反斜杠展示。
+fn normalize_project_path(value: &str) -> String {
+    let mut path = value.to_owned();
+    while path.len() > 1 && (path.ends_with('/') || path.ends_with('\\')) {
+        path.pop();
+    }
+    path.chars().take(1024).collect()
 }
 
 fn opaque_key(namespace: &str, value: &str) -> String {
@@ -761,6 +814,7 @@ mod tests {
             project_hint: Some("project".to_owned()),
             pending_title: None,
             filename_key: None,
+            project_path: None,
         };
         let parsed = parse_pi_line(
             &line(
@@ -828,6 +882,7 @@ mod tests {
             project_hint: None,
             pending_title: None,
             filename_key: None,
+            project_path: None,
         };
         let parsed = parse_pi_line(
             &line(

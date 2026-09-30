@@ -16,8 +16,10 @@ use sha2::{Digest, Sha256};
 use crate::contracts::{UsageSource, UsageSpeed};
 use crate::storage::{UsageDb, UsageDbError};
 
-use super::model::{ConversationFact, OpencodeScanState, ScanBatch, TokenFacts, UsageEntry};
-use super::parser::project_hint;
+use super::model::{
+    ConversationFact, Granularity, OpencodeScanState, ScanBatch, TokenFacts, UsageEntry,
+};
+use super::parser::project_identity;
 
 const SEEN_CAP: usize = 20_000;
 const OPENDCODE_FILE_KEY: &str = "opencode-sqlite-v1";
@@ -122,7 +124,7 @@ pub fn scan_opencode(db: &UsageDb, db_path: &Path) -> Result<OpencodeScanOutcome
                 } else {
                     Some(session_title.trim().to_owned())
                 };
-                let project = project_hint(&directory);
+                let identity = project_identity(&directory);
 
                 batch.entries.push(UsageEntry {
                     source: UsageSource::Opencode,
@@ -138,13 +140,18 @@ pub fn scan_opencode(db: &UsageDb, db_path: &Path) -> Result<OpencodeScanOutcome
                     billing_equivalent_tokens_nanos: None,
                     fast_multiplier_nanos: None,
                     pricing_fingerprint: None,
+                    request_count: 1,
+                    granularity: Granularity::Request,
                 });
                 batch.conversations.push(ConversationFact {
                     conversation_key,
                     source: UsageSource::Opencode,
                     title,
-                    project_hint: project,
+                    project_hint: identity.hint,
+                    project_key: identity.path.clone(),
+                    worktree_path: identity.path,
                     is_sidechain: false,
+                    unattributed: false,
                     occurred_at,
                     source_id: None,
                     branch: None,

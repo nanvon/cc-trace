@@ -7,18 +7,41 @@ use serde::{Deserialize, Serialize};
 
 use super::quota::{ProviderId, QuotaWindowKind};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum UsageSource {
     Codex,
     Claude,
     Pi,
     Opencode,
+    Dsh,
+    /// Cursor 没有本机会话：用量来自账号级远端计量，单独入库、单独补拉。
+    Cursor,
 }
 
 impl UsageSource {
-    /// 参与在线定价与 fingerprint 的数据源；Pi 与 OpenCode 自带 cost，不参与价格目录。
+    /// 参与在线定价与 fingerprint 的数据源；Pi、OpenCode、DSH 自带 cost，
+    /// Cursor 用服务端计量费用，都不参与价格目录。
     pub const ALL: [Self; 2] = [Self::Codex, Self::Claude];
+
+    /// 需要本地扫描的数据源；Cursor 不在其中。
+    pub const LOCAL_SCAN: [Self; 5] = [
+        Self::Codex,
+        Self::Claude,
+        Self::Pi,
+        Self::Opencode,
+        Self::Dsh,
+    ];
+
+    /// 全部数据源，顺序固定：本地扫描源在前，远端计量源在后。
+    pub const ORDER: [Self; 6] = [
+        Self::Codex,
+        Self::Claude,
+        Self::Pi,
+        Self::Opencode,
+        Self::Dsh,
+        Self::Cursor,
+    ];
 
     pub fn as_db(self) -> &'static str {
         match self {
@@ -26,7 +49,19 @@ impl UsageSource {
             Self::Claude => "claude",
             Self::Pi => "pi",
             Self::Opencode => "opencode",
+            Self::Dsh => "dsh",
+            Self::Cursor => "cursor",
         }
+    }
+
+    /// 是否来自本地日志扫描（决定重建、重计价与扫描水位的适用范围）。
+    pub fn is_local_scan(self) -> bool {
+        !matches!(self, Self::Cursor)
+    }
+
+    /// 是否自带费用真值、不参与价格表（Pi／OpenCode／DSH 是日志自带，Cursor 是服务端计量）。
+    pub fn carries_own_cost(self) -> bool {
+        matches!(self, Self::Pi | Self::Opencode | Self::Dsh | Self::Cursor)
     }
 }
 
@@ -51,9 +86,18 @@ impl UsageSpeed {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum UsageGroupBy {
+    /// 自然日桶。
     Day,
+    /// 自然周桶，周一为周起点。
+    Week,
+    /// 自然月桶。
+    Month,
     Source,
+    /// 模型提供商归属（展示层推导，见 [ADR-0031]）。
+    /// [ADR-0031]: ../../../../docs/决策/ADR-0031-功能基准改为cc-bar-v1.1.1.md
+    Provider,
     Model,
+    Project,
     Speed,
 }
 
@@ -62,9 +106,12 @@ pub enum UsageGroupBy {
 pub struct UsageFilter {
     pub from: Option<String>,
     pub to: Option<String>,
-    pub source: Option<UsageSource>,
+    /// 可见服务集合。`None` 或空表示不过滤；空数组在规范化时视为 `None`。
+    pub sources: Option<Vec<UsageSource>>,
     pub model: Option<String>,
     pub speed: Option<UsageSpeed>,
+    /// 项目身份键（规范化项目路径）。`None` 表示不按项目过滤。
+    pub project: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -159,7 +206,10 @@ impl UsageFastTotals {
 #[serde(rename_all = "camelCase")]
 pub struct UsageSummaryRow {
     pub key: String,
+    /// 事实行数（日粒度远端计量算一行）。
     pub entry_count: i64,
+    /// 请求数；日粒度远端计量的请求数为 0。
+    pub request_count: i64,
     pub tokens: UsageTokenTotals,
     pub fast: UsageFastTotals,
     pub cost: UsageCostTotals,
@@ -170,6 +220,7 @@ pub struct UsageSummaryRow {
 pub struct UsageSummary {
     pub rows: Vec<UsageSummaryRow>,
     pub entry_count: i64,
+    pub request_count: i64,
     pub tokens: UsageTokenTotals,
     pub fast: UsageFastTotals,
     pub cost: UsageCostTotals,
@@ -192,11 +243,9 @@ pub struct UsageConversationQuery {
     #[serde(default)]
     pub filter: UsageFilter,
     pub search: Option<String>,
-    /// 精确匹配脱敏项目提示。
+    /// 项目身份键；`None` 表示不过滤。
     pub project: Option<String>,
     pub sort: Option<UsageConversationSort>,
-    /// 可见服务集合；为空或缺失时不额外过滤（由前端保证传可见集合以统一服务过滤）。
-    pub sources: Option<Vec<UsageSource>>,
     pub limit: Option<u32>,
     pub offset: Option<u64>,
 }
@@ -207,31 +256,98 @@ pub struct UsageConversation {
     pub conversation_key: String,
     pub source: UsageSource,
     pub title: Option<String>,
+    /// 脱敏展示名（项目路径尾段），未归属对话为 `None`。
     pub project_hint: Option<String>,
+    /// 项目身份键（规范化项目路径）；未归属或未解析时为 `None`。
+    pub project_key: Option<String>,
+    /// 对话自身的工作目录路径，用于 worktree 明细与「在文件管理器中显示」。
+    pub worktree_path: Option<String>,
+    /// 未归属：Cursor 远端计量、补录与早期按天汇总历史。
+    pub unattributed: bool,
     pub is_sidechain: bool,
     pub first_at: String,
     pub last_at: String,
+    /// 事实行数。
     pub entry_count: i64,
+    /// 请求数；日粒度远端计量为 0。
+    pub request_count: i64,
     pub tokens: UsageTokenTotals,
     pub fast: UsageFastTotals,
     pub cost: UsageCostTotals,
     /// 原始会话 id（会话 UUID），供详情页展示与复制；非账号明文。
     pub source_id: Option<String>,
-    /// Claude 会话的 git 分支（JSONL `gitBranch`）；Codex 不提供。
+    /// 会话 git 分支；只有记录分支的数据源提供。
     pub branch: Option<String>,
     /// 会话涉及的去重模型列表，按模型名排序；不受查询过滤影响。
     pub models: Vec<String>,
 }
 
-/// 对话项目筛选选项：脱敏项目名与其可见对话数、最近活动时间。
+/// 对话项目筛选选项：项目身份键、展示名与其可见对话数、最近活动时间。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageConversationProjectOption {
+    /// 项目身份键；未归属项目为 `None`。
+    pub key: Option<String>,
     pub name: String,
     pub conversation_count: i64,
     pub last_at: String,
 }
 
+/// 项目列表排序。默认值跟随排行口径，由前端显式传入。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum UsageProjectSort {
+    Recent,
+    Tokens,
+    Cost,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageProjectQuery {
+    #[serde(default)]
+    pub filter: UsageFilter,
+    /// 按项目名或路径搜索。
+    pub search: Option<String>,
+    pub sort: Option<UsageProjectSort>,
+    pub limit: Option<u32>,
+    pub offset: Option<u64>,
+}
+
+/// 一个项目的用量汇总。`key` 为空串表示未归属（Cursor 远端计量与补录历史）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageProjectSummary {
+    /// 项目身份键：规范化后的仓库根路径；未归属项目为空串。
+    pub key: String,
+    /// 展示名（路径尾段）；未归属项目是固定文案。
+    pub name: String,
+    /// 完整项目路径；未归属项目为 `None`。
+    pub path: Option<String>,
+    pub unattributed: bool,
+    pub conversation_count: i64,
+    pub active_days: i64,
+    pub first_at: Option<String>,
+    pub last_at: String,
+    /// 事实行数。
+    pub entry_count: i64,
+    /// 请求数；日粒度远端计量为 0。
+    pub request_count: i64,
+    pub tokens: UsageTokenTotals,
+    pub fast: UsageFastTotals,
+    pub cost: UsageCostTotals,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageProjectPage {
+    pub items: Vec<UsageProjectSummary>,
+    pub total: i64,
+    pub limit: u32,
+    pub offset: u64,
+}
+
+/// 把十进制定点纳秒值序列化成不丢精度的字符串。
 pub(crate) fn decimal_nanos_string(value: i64) -> String {
     let whole = value / 1_000_000_000;
     let fraction = value % 1_000_000_000;

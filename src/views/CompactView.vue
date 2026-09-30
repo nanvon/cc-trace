@@ -301,12 +301,12 @@ onBeforeUnmount(() => {
       <div ref="lanesInnerRef" class="panel__lanes-inner">
         <ProviderLane
           v-for="provider in quota.ordered"
-          :key="provider.provider"
+          :key="provider.subjectId"
           :provider="provider"
           variant="compact"
           :usage-costs="usage.costs[provider.provider]"
           :usage-scanning="usage.loading"
-          :service-status="serviceStatus.state[provider.provider]"
+          :service-status="serviceStatus.statusFor(provider.provider)"
         />
       </div>
     </section>

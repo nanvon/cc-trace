@@ -14,27 +14,66 @@ export interface OnboardingState {
   completedAt: string | null;
 }
 
-/** 统计服务可见性：关闭的服务从本地用量统计统一过滤。默认全开。 */
-export type StatsServiceSource = "codex" | "claude" | "pi" | "opencode";
+/** 计入统计的数据源；Antigravity 与 Command Code 只提供额度，没有本地用量。 */
+export type StatsServiceSource = "codex" | "claude" | "pi" | "opencode" | "dsh" | "cursor";
 
-export interface UsageServiceVisibility {
-  codex: boolean;
-  claude: boolean;
-  pi: boolean;
-  opencode: boolean;
+/** 单个服务的四组开关。四组互相独立。 */
+export interface ServiceSettings {
+  quota: boolean;
+  menuBar: boolean;
+  hud: boolean;
+  stats: boolean;
+}
+
+export interface ServicesSettings {
+  codex: ServiceSettings;
+  claude: ServiceSettings;
+  antigravity: ServiceSettings;
+  cursor: ServiceSettings;
+  commandCode: ServiceSettings;
+  /** Pi／OpenCode／DSH 三个无额度数据源共用统计开关。 */
+  localAgentStats: boolean;
+}
+
+/** 排行口径：用量构成、高消耗对话、项目与对话列表的默认排序依据。 */
+export type RankingBasis = "tokens" | "cost";
+
+/** 重置时间显示方式。 */
+export type ResetTimeDisplay = "duration" | "dateTime";
+
+/** 系统区域承载哪个额度窗口。 */
+export type MenuBarWindowMode = "primary" | "weekly" | "both";
+
+export interface HudPosition {
+  x: number;
+  y: number;
+}
+
+export interface HudSettings {
+  enabled: boolean;
+  position: HudPosition | null;
 }
 
 export interface Settings {
   schemaVersion: number;
   language: LanguagePreference;
   appearance: AppearancePreference;
+  /** 额度自动刷新间隔。 */
   refreshInterval: RefreshIntervalOption;
+  /** 本地日志扫描间隔；与额度间隔相互独立。 */
+  scanInterval: RefreshIntervalOption;
   launchAtLogin: boolean;
   privacyMode: boolean;
   /** 服务状态圆点：只控制紧凑面板绘制，后台拉取不受影响（ADR-0026）。 */
   showServiceStatus: boolean;
+  menuBarWindowMode: MenuBarWindowMode;
+  services: ServicesSettings;
+  hud: HudSettings;
+  rankingBasis: RankingBasis;
+  resetTimeDisplay: ResetTimeDisplay;
+  checkUpdatesOnStart: boolean;
+  verboseLogging: boolean;
   onboarding: OnboardingState;
-  usageServiceVisibility: UsageServiceVisibility;
 }
 
 /** 部分更新。省略的字段保持原值。 */
@@ -42,11 +81,29 @@ export interface SettingsUpdate {
   language?: LanguagePreference;
   appearance?: AppearancePreference;
   refreshInterval?: RefreshIntervalOption;
+  scanInterval?: RefreshIntervalOption;
   launchAtLogin?: boolean;
   privacyMode?: boolean;
   showServiceStatus?: boolean;
-  usageServiceVisibility?: UsageServiceVisibility;
+  menuBarWindowMode?: MenuBarWindowMode;
+  services?: ServicesSettings;
+  hud?: HudSettings;
+  rankingBasis?: RankingBasis;
+  resetTimeDisplay?: ResetTimeDisplay;
+  checkUpdatesOnStart?: boolean;
+  verboseLogging?: boolean;
 }
+
+export const RANKING_BASIS_OPTIONS: readonly RankingBasis[] = ["tokens", "cost"] as const;
+export const RESET_TIME_DISPLAY_OPTIONS: readonly ResetTimeDisplay[] = [
+  "duration",
+  "dateTime",
+] as const;
+export const MENU_BAR_WINDOW_MODE_OPTIONS: readonly MenuBarWindowMode[] = [
+  "primary",
+  "weekly",
+  "both",
+] as const;
 
 export const LANGUAGE_OPTIONS: readonly LanguagePreference[] = ["system", "zh-CN", "en"] as const;
 export const APPEARANCE_OPTIONS: readonly AppearancePreference[] = [

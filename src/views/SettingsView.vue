@@ -19,7 +19,6 @@ import {
   type RefreshIntervalOption,
   type SettingsUpdate,
   type StatsServiceSource,
-  type UsageServiceVisibility,
 } from "../features/settings/contracts";
 import { useSettingsStore } from "../features/settings/store";
 
@@ -28,7 +27,27 @@ const STATS_SERVICE_SOURCES: readonly StatsServiceSource[] = [
   "claude",
   "pi",
   "opencode",
+  "dsh",
+  "cursor",
 ] as const;
+
+/** 统计开关的当前取值；由服务矩阵派生，界面不自己维护第二份真值。 */
+function isStatsServiceOn(source: StatsServiceSource): boolean {
+  const services = current.value?.services;
+  if (!services) return false;
+  switch (source) {
+    case "codex":
+      return services.codex.stats;
+    case "claude":
+      return services.claude.stats;
+    case "cursor":
+      return services.cursor.stats;
+    case "pi":
+    case "opencode":
+    case "dsh":
+      return services.localAgentStats;
+  }
+}
 
 const { t } = useI18n();
 const settings = useSettingsStore();
@@ -163,16 +182,31 @@ async function commitToggle(
   // 写入失败时 store 保持原值，控件由 :checked 绑定自然回到原值。
 }
 
+/**
+ * 统计开关写入服务矩阵。单个数据源开关在 v2 里合并成每服务一组：
+ * Codex／Claude／Cursor 各自一行，Pi／OpenCode／DSH 共用本地数据源总开关。
+ */
 async function commitStatsService(source: StatsServiceSource, checked: boolean): Promise<void> {
-  const visibility: UsageServiceVisibility = {
-    codex: true,
-    claude: true,
-    pi: true,
-    opencode: true,
-    ...(current.value?.usageServiceVisibility ?? {}),
-  };
-  visibility[source] = checked;
-  await settings.update({ usageServiceVisibility: visibility });
+  const services = current.value?.services;
+  if (!services) return;
+  const next = structuredClone(services);
+  switch (source) {
+    case "codex":
+      next.codex.stats = checked;
+      break;
+    case "claude":
+      next.claude.stats = checked;
+      break;
+    case "cursor":
+      next.cursor.stats = checked;
+      break;
+    case "pi":
+    case "opencode":
+    case "dsh":
+      next.localAgentStats = checked;
+      break;
+  }
+  await settings.update({ services: next });
 }
 
 async function updatePricingCatalog(): Promise<void> {
@@ -390,10 +424,10 @@ async function updatePricingCatalog(): Promise<void> {
               <button
                 type="button"
                 class="toggle"
-                :class="{ off: !current.usageServiceVisibility[source] }"
+                :class="{ off: !isStatsServiceOn(source) }"
                 role="switch"
-                :aria-checked="current.usageServiceVisibility[source]"
-                @click="commitStatsService(source, !current.usageServiceVisibility[source])"
+                :aria-checked="isStatsServiceOn(source)"
+                @click="commitStatsService(source, !isStatsServiceOn(source))"
               >
                 <span class="visually-hidden">{{ t(`provider.${source}`) }}</span>
               </button>

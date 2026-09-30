@@ -45,6 +45,9 @@ const FONT_WEIGHT: u16 = 500;
 
 const CODEX_LOGO: &str = include_str!("../../icons/providers/codex.svg");
 const CLAUDE_LOGO: &str = include_str!("../../icons/providers/claude.svg");
+const ANTIGRAVITY_LOGO: &str = include_str!("../../icons/providers/antigravity.svg");
+const CURSOR_LOGO: &str = include_str!("../../icons/providers/cursor.svg");
+const COMMAND_CODE_LOGO: &str = include_str!("../../icons/providers/commandcode.svg");
 
 /// 渲染结果：RGBA 像素与尺寸。
 pub struct BadgeImage {
@@ -57,6 +60,9 @@ fn logo_source(provider: ProviderId) -> &'static str {
     match provider {
         ProviderId::Codex => CODEX_LOGO,
         ProviderId::Claude => CLAUDE_LOGO,
+        ProviderId::Antigravity => ANTIGRAVITY_LOGO,
+        ProviderId::Cursor => CURSOR_LOGO,
+        ProviderId::CommandCode => COMMAND_CODE_LOGO,
     }
 }
 

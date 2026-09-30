@@ -46,10 +46,18 @@
   --cat-claude: #d97757;
   --cat-pi: #2f5f8a;
   --cat-opencode: #0f766e;
+  --cat-dsh: #4176e6;
+  --cat-antigravity: #4285f4;
+  --cat-cursor: #2c2c2e;
+  --cat-commandcode: #18181b;
   --cat-codex-dim: rgb(108 108 112 / 12%);
   --cat-claude-dim: rgb(217 119 87 / 11%);
   --cat-pi-dim: rgb(47 95 138 / 12%);
   --cat-opencode-dim: rgb(15 118 110 / 12%);
+  --cat-dsh-dim: rgb(65 118 230 / 12%);
+  --cat-antigravity-dim: rgb(66 133 244 / 12%);
+  --cat-cursor-dim: rgb(44 44 46 / 12%);
+  --cat-commandcode-dim: rgb(24 24 27 / 12%);
 
   /* 紧凑面板是悬浮层，阴影比主窗口里的卡片更明显（原型评审稿 🚩 加档） */
   --shadow-panel: 0 24px 56px -18px rgb(16 16 20 / 26%), 0 4px 12px rgb(16 16 20 / 7%);
@@ -109,10 +117,18 @@
     --cat-claude: #f0a080;
     --cat-pi: #5082b4;
     --cat-opencode: #2dd4bf;
+    --cat-dsh: #679efe;
+    --cat-antigravity: #669df6;
+    --cat-cursor: #dcdce0;
+    --cat-commandcode: #e4e4e7;
     --cat-codex-dim: rgb(152 152 157 / 14%);
     --cat-claude-dim: rgb(240 160 128 / 14%);
     --cat-pi-dim: rgb(80 130 180 / 14%);
     --cat-opencode-dim: rgb(45 212 191 / 14%);
+    --cat-dsh-dim: rgb(103 158 254 / 14%);
+    --cat-antigravity-dim: rgb(102 157 246 / 14%);
+    --cat-cursor-dim: rgb(220 220 224 / 14%);
+    --cat-commandcode-dim: rgb(228 228 231 / 14%);
 
     --shadow-panel: 0 24px 56px -18px rgb(0 0 0 / 65%), 0 4px 12px rgb(0 0 0 / 40%);
     --ring-panel: rgb(255 255 255 / 9%);
@@ -142,6 +158,18 @@
   --cat-claude: #f0a080;
   --cat-pi: #5082b4;
   --cat-opencode: #2dd4bf;
+  --cat-dsh: #679efe;
+  --cat-antigravity: #669df6;
+  --cat-cursor: #dcdce0;
+  --cat-commandcode: #e4e4e7;
+  --cat-codex-dim: rgb(152 152 157 / 14%);
+  --cat-claude-dim: rgb(240 160 128 / 14%);
+  --cat-pi-dim: rgb(80 130 180 / 14%);
+  --cat-opencode-dim: rgb(45 212 191 / 14%);
+  --cat-dsh-dim: rgb(103 158 254 / 14%);
+  --cat-antigravity-dim: rgb(102 157 246 / 14%);
+  --cat-cursor-dim: rgb(220 220 224 / 14%);
+  --cat-commandcode-dim: rgb(228 228 231 / 14%);
   --cat-codex-dim: rgb(152 152 157 / 14%);
   --cat-claude-dim: rgb(240 160 128 / 14%);
   --cat-pi-dim: rgb(80 130 180 / 14%);

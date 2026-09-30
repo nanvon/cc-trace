@@ -71,24 +71,25 @@ impl Scenario {
             (Self::NoCredentials, _) => ProviderFetchOutcome::NoCredentials,
 
             (Self::Unsupported, ProviderId::Codex) => ProviderFetchOutcome::Unsupported,
-            (Self::Unsupported, ProviderId::Claude) => success(provider, now),
+            // 故障隔离：只有 Codex 失败，其余 Provider 正常。
+            (Self::Unsupported, _) => success(provider, now),
 
             (Self::OfflineStale | Self::OfflineEmpty, _) => ProviderFetchOutcome::Offline,
 
             (Self::RateLimited, ProviderId::Codex) => ProviderFetchOutcome::RateLimited {
                 retry_after: Some(Duration::minutes(12)),
             },
-            (Self::RateLimited, ProviderId::Claude) => success(provider, now),
+            (Self::RateLimited, _) => success(provider, now),
 
             (Self::ErrorStale, ProviderId::Codex) => ProviderFetchOutcome::Failed {
                 kind: ErrorKind::Credentials,
             },
-            (Self::ErrorStale, ProviderId::Claude) => success(provider, now),
+            (Self::ErrorStale, _) => success(provider, now),
 
             (Self::ErrorEmpty, ProviderId::Codex) => ProviderFetchOutcome::Failed {
                 kind: ErrorKind::Protocol,
             },
-            (Self::ErrorEmpty, ProviderId::Claude) => success(provider, now),
+            (Self::ErrorEmpty, _) => success(provider, now),
         }
     }
 }
@@ -200,6 +201,120 @@ fn success(provider: ProviderId, now: DateTime<Utc>) -> ProviderFetchOutcome {
                 ),
             ],
         ),
+        ProviderId::Antigravity => (
+            ProviderIdentity {
+                account: Some("demo@example.com".to_owned()),
+                plan: Some("Google AI Pro".to_owned()),
+            },
+            vec![
+                window(
+                    "antigravity.gemini.five-hour",
+                    QuotaWindowKind::FiveHour,
+                    Some("Gemini"),
+                    21.0,
+                    Some(now + Duration::minutes(188)),
+                    Some(18_000),
+                    true,
+                ),
+                window(
+                    "antigravity.gemini.weekly",
+                    QuotaWindowKind::Weekly,
+                    Some("Gemini"),
+                    44.0,
+                    Some(now + Duration::days(5)),
+                    Some(604_800),
+                    false,
+                ),
+                window(
+                    "antigravity.claude.five-hour",
+                    QuotaWindowKind::FiveHour,
+                    Some("Claude"),
+                    8.0,
+                    Some(now + Duration::minutes(188)),
+                    Some(18_000),
+                    false,
+                ),
+                window(
+                    "antigravity.claude.weekly",
+                    QuotaWindowKind::Weekly,
+                    Some("Claude"),
+                    15.0,
+                    Some(now + Duration::days(5)),
+                    Some(604_800),
+                    false,
+                ),
+            ],
+        ),
+        ProviderId::Cursor => (
+            ProviderIdentity {
+                account: Some("demo@example.com".to_owned()),
+                plan: Some("Pro".to_owned()),
+            },
+            vec![
+                window(
+                    "cursor.total",
+                    QuotaWindowKind::Total,
+                    None,
+                    33.0,
+                    Some(now + Duration::days(12)),
+                    None,
+                    true,
+                ),
+                window(
+                    "cursor.auto",
+                    QuotaWindowKind::Auto,
+                    None,
+                    33.0,
+                    Some(now + Duration::days(12)),
+                    None,
+                    false,
+                ),
+                window(
+                    "cursor.api",
+                    QuotaWindowKind::Api,
+                    None,
+                    4.0,
+                    Some(now + Duration::days(12)),
+                    None,
+                    false,
+                ),
+            ],
+        ),
+        ProviderId::CommandCode => (
+            ProviderIdentity {
+                account: Some("demo@example.com".to_owned()),
+                plan: Some("GOAT".to_owned()),
+            },
+            vec![
+                window(
+                    "commandcode.five-hour",
+                    QuotaWindowKind::FiveHour,
+                    None,
+                    40.0,
+                    Some(now + Duration::minutes(96)),
+                    Some(18_000),
+                    true,
+                ),
+                window(
+                    "commandcode.weekly",
+                    QuotaWindowKind::Weekly,
+                    None,
+                    26.0,
+                    Some(now + Duration::days(2)),
+                    Some(604_800),
+                    false,
+                ),
+                window(
+                    "commandcode.monthly-credits",
+                    QuotaWindowKind::Monthly,
+                    Some("Credits"),
+                    55.0,
+                    Some(now + Duration::days(17)),
+                    None,
+                    false,
+                ),
+            ],
+        ),
     };
 
     ProviderFetchOutcome::Success {
@@ -232,6 +347,7 @@ fn window(
         window_seconds,
         is_active: true,
         is_primary,
+        unlimited: false,
     }
 }
 

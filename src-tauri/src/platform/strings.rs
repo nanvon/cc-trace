@@ -39,11 +39,14 @@ pub struct NativeStrings {
 }
 
 /// Provider 名。产品名不翻译，两种语言取值相同，与 `src/i18n/locales/*` 的
-/// `provider.codex` / `provider.claude` 必须一致。
+/// `provider.*` 必须一致。
 pub fn provider_name(provider: crate::contracts::ProviderId) -> &'static str {
     match provider {
         crate::contracts::ProviderId::Codex => "Codex",
         crate::contracts::ProviderId::Claude => "Claude Code",
+        crate::contracts::ProviderId::Antigravity => "Antigravity",
+        crate::contracts::ProviderId::Cursor => "Cursor",
+        crate::contracts::ProviderId::CommandCode => "Command Code",
     }
 }
 

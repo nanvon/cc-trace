@@ -15,7 +15,7 @@ import type {
   UsageSummaryQuery,
 } from "./contracts";
 import { USAGE_SOURCES } from "./contracts";
-import { buildProviderCosts } from "./presentation";
+import { EMPTY_PROVIDER_COSTS, buildProviderCosts } from "./presentation";
 import {
   usageChartRange,
   usageCostRanges,
@@ -32,9 +32,10 @@ function summaryQuery(
     filter: {
       from: range.from,
       to: range.to,
-      source,
+      sources: source === null ? null : [source],
       model: null,
       speed: null,
+      project: null,
     },
     groupBy,
   };
@@ -48,12 +49,16 @@ function emptyDashboard(): UsageDashboardData {
       claude: null,
       pi: null,
       opencode: null,
+      dsh: null,
+      cursor: null,
     },
     model: {
       codex: null,
       claude: null,
       pi: null,
       opencode: null,
+      dsh: null,
+      cursor: null,
     },
   };
 }
@@ -78,9 +83,14 @@ export const useUsageStore = defineStore("usage", () => {
 
   /** 统计服务过滤：设置页关闭的服务从用量页、图表与对话列表统一剔除。 */
   const visibleSources = computed<UsageSource[]>(() => {
-    const visibility = settings.settings?.usageServiceVisibility;
-    if (!visibility) return [...USAGE_SOURCES];
-    return USAGE_SOURCES.filter((source) => visibility[source]);
+    const services = settings.settings?.services;
+    if (!services) return [...USAGE_SOURCES];
+    const visible: UsageSource[] = [];
+    if (services.codex.stats) visible.push("codex");
+    if (services.claude.stats) visible.push("claude");
+    if (services.localAgentStats) visible.push("pi", "opencode", "dsh");
+    if (services.cursor.stats) visible.push("cursor");
+    return visible;
   });
 
   /**
@@ -117,6 +127,7 @@ export const useUsageStore = defineStore("usage", () => {
     const visible = new Set(dashboardSources.value);
     const rows = raw.rows.filter((row) => visible.has(row.key as UsageSource));
     if (rows.length === 0) return null;
+    const requestCount = rows.reduce((sum, row) => sum + row.requestCount, 0);
 
     const tokens: UsageSummary["tokens"] = {
       uncachedInputTokens: 0,
@@ -168,7 +179,7 @@ export const useUsageStore = defineStore("usage", () => {
       cost.pricingFingerprint ??= row.cost.pricingFingerprint;
     }
 
-    return { rows, entryCount, tokens, fast, cost };
+    return { rows, entryCount, requestCount, tokens, fast, cost };
   });
 
   const scanning = computed(
@@ -305,6 +316,10 @@ export const useUsageStore = defineStore("usage", () => {
   const costs = computed<Record<ProviderId, UsageProviderCosts>>(() => ({
     codex: buildProviderCosts("codex", today.value, week.value, completedInSession.value),
     claude: buildProviderCosts("claude", today.value, week.value, completedInSession.value),
+    // 这三个服务没有本地用量数据源，费用读数恒为空（服务端计量在后续批次接入）。
+    antigravity: EMPTY_PROVIDER_COSTS,
+    cursor: EMPTY_PROVIDER_COSTS,
+    commandCode: EMPTY_PROVIDER_COSTS,
   }));
 
   return {

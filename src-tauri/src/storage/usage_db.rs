@@ -18,8 +18,9 @@ use crate::contracts::{
     ProviderId, QuotaHistoryEvent, QuotaSnapshot, QuotaWindowKind, UsageConversation,
     UsageConversationBreakdown, UsageConversationPage, UsageConversationProjectOption,
     UsageConversationQuery, UsageConversationSort, UsageCostTotals, UsageFastTotals, UsageGroupBy,
-    UsageRepriceResult, UsageSource, UsageSpeed, UsageSummary, UsageSummaryQuery, UsageSummaryRow,
-    UsageTokenTotals, decimal_nanos_string,
+    UsageProjectPage, UsageProjectQuery, UsageProjectSort, UsageProjectSummary, UsageRepriceResult,
+    UsageSource, UsageSpeed, UsageSummary, UsageSummaryQuery, UsageSummaryRow, UsageTokenTotals,
+    decimal_nanos_string,
 };
 use crate::usage::model::{
     InferenceGeo, OpencodeScanState, RepriceRow, ScanBatch, ScanFileState, TokenFacts,
@@ -27,7 +28,7 @@ use crate::usage::model::{
 use crate::usage::pricing::{PricingCatalog, PricingUsageKey};
 
 const DATABASE_FILE: &str = "usage.db";
-const SCHEMA_VERSION: i64 = 6;
+const SCHEMA_VERSION: i64 = 7;
 
 #[derive(Debug)]
 pub enum UsageDbError {
@@ -248,10 +249,10 @@ impl UsageDb {
                    reasoning_output_tokens, cache_read_input_tokens,
                    cache_write_5m_input_tokens, cache_write_1h_input_tokens,
                    api_equivalent_cost_nanos, billing_equivalent_tokens_nanos,
-                   fast_multiplier_nanos, pricing_fingerprint
+                   fast_multiplier_nanos, pricing_fingerprint, request_count, granularity
                  ) VALUES (
                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
-                   ?16, ?17, ?18, ?19
+                   ?16, ?17, ?18, ?19, ?20, ?21
                  )
                  ON CONFLICT(source, dedup_key) DO UPDATE SET
                    file_key = excluded.file_key,
@@ -270,7 +271,9 @@ impl UsageDb {
                    api_equivalent_cost_nanos = excluded.api_equivalent_cost_nanos,
                    billing_equivalent_tokens_nanos = excluded.billing_equivalent_tokens_nanos,
                    fast_multiplier_nanos = excluded.fast_multiplier_nanos,
-                   pricing_fingerprint = excluded.pricing_fingerprint
+                   pricing_fingerprint = excluded.pricing_fingerprint,
+                   request_count = excluded.request_count,
+                   granularity = excluded.granularity
                  WHERE (
                    excluded.source NOT IN ('codex', 'claude')
                    OR (
@@ -309,6 +312,8 @@ impl UsageDb {
                     entry.billing_equivalent_tokens_nanos,
                     entry.fast_multiplier_nanos,
                     entry.pricing_fingerprint,
+                    entry.request_count,
+                    entry.granularity.as_db(),
                 ])?)
                 .unwrap_or(0);
             }
@@ -317,13 +322,16 @@ impl UsageDb {
         {
             let mut statement = transaction.prepare_cached(
                 "INSERT INTO conversations (
-                   conversation_key, source, title, project_hint, is_sidechain, first_at, last_at,
-                   source_id, branch
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7, ?8)
+                   conversation_key, source, title, project_hint, project_key, worktree_path,
+                   is_sidechain, unattributed, first_at, last_at, source_id, branch
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, ?10, ?11)
                  ON CONFLICT(conversation_key) DO UPDATE SET
                    title = COALESCE(excluded.title, conversations.title),
                    project_hint = COALESCE(excluded.project_hint, conversations.project_hint),
+                   project_key = COALESCE(excluded.project_key, conversations.project_key),
+                   worktree_path = COALESCE(excluded.worktree_path, conversations.worktree_path),
                    is_sidechain = MAX(conversations.is_sidechain, excluded.is_sidechain),
+                   unattributed = MAX(conversations.unattributed, excluded.unattributed),
                    first_at = MIN(conversations.first_at, excluded.first_at),
                    last_at = MAX(conversations.last_at, excluded.last_at),
                    source_id = COALESCE(excluded.source_id, conversations.source_id),
@@ -335,7 +343,10 @@ impl UsageDb {
                     conversation.source.as_db(),
                     conversation.title,
                     conversation.project_hint,
+                    conversation.project_key,
+                    conversation.worktree_path,
                     i64::from(conversation.is_sidechain),
+                    i64::from(conversation.unattributed),
                     conversation.occurred_at,
                     conversation.source_id,
                     conversation.branch,
@@ -433,56 +444,82 @@ impl UsageDb {
 
     pub fn summary(&self, query: &UsageSummaryQuery) -> Result<UsageSummary, UsageDbError> {
         let connection = self.open_read()?;
+        let filter = &query.filter;
+        // 项目维度与项目过滤都需要对话表的项目身份；其余维度不必为聚合多付一次 join。
+        let needs_conversations =
+            matches!(query.group_by, UsageGroupBy::Project) || filter.project.is_some();
         let group = match query.group_by {
-            UsageGroupBy::Day => "day_local",
-            UsageGroupBy::Source => "source",
-            UsageGroupBy::Model => "COALESCE(model, '')",
-            UsageGroupBy::Speed => "speed",
+            UsageGroupBy::Day => "e.day_local".to_owned(),
+            // SQLite 的 `%W` 以周一为周首日，与 cc-bar 的周起点口径一致。
+            UsageGroupBy::Week => "strftime('%Y-W%W', e.day_local)".to_owned(),
+            UsageGroupBy::Month => "substr(e.day_local, 1, 7)".to_owned(),
+            UsageGroupBy::Source => "e.source".to_owned(),
+            UsageGroupBy::Model => "COALESCE(e.model, '')".to_owned(),
+            UsageGroupBy::Speed => "e.speed".to_owned(),
+            UsageGroupBy::Project => "COALESCE(c.project_key, '')".to_owned(),
+            // 提供商归属是模型名的派生，不在 SQL 里重写一套前缀规则，
+            // 按模型聚合后由 `UsageService` 在 Rust 侧归并。
+            UsageGroupBy::Provider => "COALESCE(e.model, '')".to_owned(),
+        };
+        let join = if needs_conversations {
+            "LEFT JOIN conversations c
+               ON c.conversation_key = e.conversation_key"
+        } else {
+            ""
+        };
+        // 没有 join 时不能引用对话表；参数位号保持不变，用永假条件占位。
+        let project_predicate = if needs_conversations {
+            "AND (?6 IS NULL OR COALESCE(c.project_key, '') = ?6)"
+        } else {
+            "AND (?6 IS NULL)"
         };
         let sql = format!(
-            "SELECT {group}, COUNT(*),
-                    COALESCE(SUM(uncached_input_tokens), 0),
-                    COALESCE(SUM(output_tokens), 0),
-                    COALESCE(SUM(reasoning_output_tokens), 0),
-                    COALESCE(SUM(cache_read_input_tokens), 0),
-                    COALESCE(SUM(cache_write_5m_input_tokens), 0),
-                    COALESCE(SUM(cache_write_1h_input_tokens), 0),
-                    COALESCE(SUM(CASE WHEN speed = 'fast' THEN
-                        uncached_input_tokens + output_tokens + cache_read_input_tokens
-                        + cache_write_5m_input_tokens + cache_write_1h_input_tokens
+            "SELECT {group}, COUNT(*), COALESCE(SUM(e.request_count), 0),
+                    COALESCE(SUM(e.uncached_input_tokens), 0),
+                    COALESCE(SUM(e.output_tokens), 0),
+                    COALESCE(SUM(e.reasoning_output_tokens), 0),
+                    COALESCE(SUM(e.cache_read_input_tokens), 0),
+                    COALESCE(SUM(e.cache_write_5m_input_tokens), 0),
+                    COALESCE(SUM(e.cache_write_1h_input_tokens), 0),
+                    COALESCE(SUM(CASE WHEN e.speed = 'fast' THEN
+                        e.uncached_input_tokens + e.output_tokens + e.cache_read_input_tokens
+                        + e.cache_write_5m_input_tokens + e.cache_write_1h_input_tokens
                     ELSE 0 END), 0),
-                    COALESCE(SUM(CASE WHEN speed = 'fast'
-                        THEN billing_equivalent_tokens_nanos ELSE 0 END), 0),
-                    MIN(CASE WHEN speed = 'fast' THEN fast_multiplier_nanos END),
-                    MAX(CASE WHEN speed = 'fast' THEN fast_multiplier_nanos END),
-                    SUM(CASE WHEN speed = 'fast'
-                             AND billing_equivalent_tokens_nanos IS NULL THEN 1 ELSE 0 END),
-                    COALESCE(SUM(api_equivalent_cost_nanos), 0),
-                    SUM(CASE WHEN api_equivalent_cost_nanos IS NOT NULL THEN 1 ELSE 0 END),
-                    SUM(CASE WHEN api_equivalent_cost_nanos IS NULL THEN 1 ELSE 0 END),
-                    SUM(CASE WHEN source = 'claude' AND inference_geo = 'unknown'
-                             AND api_equivalent_cost_nanos IS NOT NULL THEN 1 ELSE 0 END),
-                    CASE WHEN COUNT(DISTINCT pricing_fingerprint) = 1
-                         THEN MAX(pricing_fingerprint) END
-               FROM usage_entries
-              WHERE (?1 IS NULL OR occurred_at >= ?1)
-                AND (?2 IS NULL OR occurred_at < ?2)
-                AND (?3 IS NULL OR source = ?3)
-                AND (?4 IS NULL OR model = ?4)
-                AND (?5 IS NULL OR speed = ?5)
+                    COALESCE(SUM(CASE WHEN e.speed = 'fast'
+                        THEN e.billing_equivalent_tokens_nanos ELSE 0 END), 0),
+                    MIN(CASE WHEN e.speed = 'fast' THEN e.fast_multiplier_nanos END),
+                    MAX(CASE WHEN e.speed = 'fast' THEN e.fast_multiplier_nanos END),
+                    SUM(CASE WHEN e.speed = 'fast'
+                             AND e.billing_equivalent_tokens_nanos IS NULL THEN 1 ELSE 0 END),
+                    COALESCE(SUM(e.api_equivalent_cost_nanos), 0),
+                    SUM(CASE WHEN e.api_equivalent_cost_nanos IS NOT NULL THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN e.api_equivalent_cost_nanos IS NULL THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN e.source = 'claude' AND e.inference_geo = 'unknown'
+                             AND e.api_equivalent_cost_nanos IS NOT NULL THEN 1 ELSE 0 END),
+                    CASE WHEN COUNT(DISTINCT e.pricing_fingerprint) = 1
+                         THEN MAX(e.pricing_fingerprint) END
+               FROM usage_entries e
+               {join}
+              WHERE (?1 IS NULL OR e.occurred_at >= ?1)
+                AND (?2 IS NULL OR e.occurred_at < ?2)
+                AND (?3 IS NULL OR e.model = ?3)
+                AND (?4 IS NULL OR e.speed = ?4)
+                AND (?5 IS NULL OR e.source IN (SELECT value FROM json_each(?5)))
+                {project_predicate}
               GROUP BY {group}
               ORDER BY {group}"
         );
 
         let mut statement = connection.prepare(&sql)?;
-        let source = query.filter.source.map(UsageSource::as_db);
-        let speed = query.filter.speed.map(UsageSpeed::as_db);
+        let speed = filter.speed.map(UsageSpeed::as_db);
+        let sources_json = sources_json(filter.sources.as_deref());
         let mut rows = statement.query(params![
-            query.filter.from.as_deref(),
-            query.filter.to.as_deref(),
-            source,
-            query.filter.model.as_deref(),
+            filter.from.as_deref(),
+            filter.to.as_deref(),
+            filter.model.as_deref(),
             speed,
+            sources_json,
+            filter.project.as_deref(),
         ])?;
         let mut output = Vec::new();
         while let Some(row) = rows.next()? {
@@ -493,10 +530,12 @@ impl UsageDb {
         let mut total_fast = UsageFastTotals::default();
         let mut total_cost = UsageCostTotals::default();
         let mut entry_count = 0_i64;
+        let mut request_count = 0_i64;
         let mut fingerprints = HashSet::new();
         let mut mixed_pricing_versions = false;
         for row in &output {
             entry_count += row.entry_count;
+            request_count += row.request_count;
             total_tokens.add_assign(&row.tokens);
             total_fast.add_assign(&row.fast);
             total_cost.api_equivalent_cost_nanos += row.cost.api_equivalent_cost_nanos;
@@ -518,9 +557,125 @@ impl UsageDb {
         Ok(UsageSummary {
             rows: output,
             entry_count,
+            request_count,
             tokens: total_tokens,
             fast: total_fast,
             cost: total_cost,
+        })
+    }
+
+    /// 项目聚合：按项目身份汇总 Tokens、费用、对话数与活跃天数。
+    ///
+    /// 未归属项目（Cursor 远端计量、补录与早期按天汇总）的 `project_key` 为 NULL，
+    /// 单独作为最后一行返回，不分摊到任何项目。
+    pub fn projects(
+        &self,
+        query: &UsageProjectQuery,
+        limit: u32,
+        offset: u64,
+    ) -> Result<UsageProjectPage, UsageDbError> {
+        let connection = self.open_read()?;
+        let filter = &query.filter;
+        let sources_json = sources_json(filter.sources.as_deref());
+        let escaped_search = query.search.as_deref().map(escape_like);
+        let order = match query.sort.unwrap_or(UsageProjectSort::Recent) {
+            UsageProjectSort::Recent => "MAX(e.occurred_at) DESC, project_key ASC",
+            UsageProjectSort::Tokens => {
+                "(COALESCE(SUM(e.uncached_input_tokens), 0)
+                  + COALESCE(SUM(e.output_tokens), 0)
+                  + COALESCE(SUM(e.cache_read_input_tokens), 0)
+                  + COALESCE(SUM(e.cache_write_5m_input_tokens), 0)
+                  + COALESCE(SUM(e.cache_write_1h_input_tokens), 0)) DESC, project_key ASC"
+            }
+            UsageProjectSort::Cost => {
+                "COALESCE(SUM(e.api_equivalent_cost_nanos), 0) DESC, project_key ASC"
+            }
+        };
+
+        let count = connection.query_row(
+            "SELECT COUNT(*) FROM (
+               SELECT COALESCE(c.project_key, '') AS project_key
+                 FROM usage_entries e
+                 LEFT JOIN conversations c ON c.conversation_key = e.conversation_key
+                WHERE (?1 IS NULL OR e.occurred_at >= ?1)
+                  AND (?2 IS NULL OR e.occurred_at < ?2)
+                  AND (?3 IS NULL OR e.source IN (SELECT value FROM json_each(?3)))
+                  AND (?4 IS NULL
+                       OR COALESCE(c.project_key, '') LIKE '%' || ?4 || '%' ESCAPE '\\'
+                       OR COALESCE(c.project_hint, '') LIKE '%' || ?4 || '%' ESCAPE '\\')
+                GROUP BY COALESCE(c.project_key, '')
+             )",
+            params![
+                filter.from.as_deref(),
+                filter.to.as_deref(),
+                sources_json,
+                escaped_search.as_deref(),
+            ],
+            |row| row.get::<_, i64>(0),
+        )?;
+
+        let mut statement = connection.prepare(&format!(
+            "SELECT COALESCE(c.project_key, '') AS project_key,
+                    COALESCE(MAX(c.project_hint), '') AS project_hint,
+                    COUNT(DISTINCT c.conversation_key),
+                    COUNT(DISTINCT e.day_local),
+                    MIN(e.occurred_at), MAX(e.occurred_at),
+                    COUNT(*), COALESCE(SUM(e.request_count), 0),
+                    COALESCE(SUM(e.uncached_input_tokens), 0),
+                    COALESCE(SUM(e.output_tokens), 0),
+                    COALESCE(SUM(e.reasoning_output_tokens), 0),
+                    COALESCE(SUM(e.cache_read_input_tokens), 0),
+                    COALESCE(SUM(e.cache_write_5m_input_tokens), 0),
+                    COALESCE(SUM(e.cache_write_1h_input_tokens), 0),
+                    COALESCE(SUM(CASE WHEN e.speed = 'fast' THEN
+                        e.uncached_input_tokens + e.output_tokens + e.cache_read_input_tokens
+                        + e.cache_write_5m_input_tokens + e.cache_write_1h_input_tokens
+                    ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN e.speed = 'fast'
+                        THEN e.billing_equivalent_tokens_nanos ELSE 0 END), 0),
+                    MIN(CASE WHEN e.speed = 'fast' THEN e.fast_multiplier_nanos END),
+                    MAX(CASE WHEN e.speed = 'fast' THEN e.fast_multiplier_nanos END),
+                    SUM(CASE WHEN e.speed = 'fast'
+                             AND e.billing_equivalent_tokens_nanos IS NULL THEN 1 ELSE 0 END),
+                    COALESCE(SUM(e.api_equivalent_cost_nanos), 0),
+                    SUM(CASE WHEN e.api_equivalent_cost_nanos IS NOT NULL THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN e.api_equivalent_cost_nanos IS NULL THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN e.source = 'claude' AND e.inference_geo = 'unknown'
+                             AND e.api_equivalent_cost_nanos IS NOT NULL THEN 1 ELSE 0 END),
+                    CASE WHEN COUNT(DISTINCT e.pricing_fingerprint) = 1
+                         THEN MAX(e.pricing_fingerprint) END,
+                    MAX(COALESCE(c.unattributed, 0)),
+                    MIN(COALESCE(c.worktree_path, ''))
+               FROM usage_entries e
+               LEFT JOIN conversations c ON c.conversation_key = e.conversation_key
+              WHERE (?1 IS NULL OR e.occurred_at >= ?1)
+                AND (?2 IS NULL OR e.occurred_at < ?2)
+                AND (?3 IS NULL OR e.source IN (SELECT value FROM json_each(?3)))
+                AND (?4 IS NULL
+                     OR COALESCE(c.project_key, '') LIKE '%' || ?4 || '%' ESCAPE '\\'
+                     OR COALESCE(c.project_hint, '') LIKE '%' || ?4 || '%' ESCAPE '\\')
+              GROUP BY COALESCE(c.project_key, '')
+              ORDER BY {order}
+              LIMIT ?5 OFFSET ?6"
+        ))?;
+        let mapped = statement.query_map(
+            params![
+                filter.from.as_deref(),
+                filter.to.as_deref(),
+                sources_json,
+                escaped_search.as_deref(),
+                i64::from(limit),
+                i64::try_from(offset).map_err(|_| UsageDbError::Sql)?,
+            ],
+            project_row,
+        )?;
+        let items = mapped.collect::<Result<Vec<_>, _>>()?;
+
+        Ok(UsageProjectPage {
+            items,
+            total: count,
+            limit,
+            offset,
         })
     }
 
@@ -534,18 +689,9 @@ impl UsageDb {
     ) -> Result<UsageConversationPage, UsageDbError> {
         let connection = self.open_read()?;
         let filter = &query.filter;
-        let source = filter.source.map(UsageSource::as_db);
         let speed = filter.speed.map(UsageSpeed::as_db);
         let escaped_search = search.map(escape_like);
-        let sources_json = query.sources.as_ref().map(|sources| {
-            serde_json::to_string(
-                &sources
-                    .iter()
-                    .map(|source| source.as_db())
-                    .collect::<Vec<_>>(),
-            )
-            .unwrap_or_else(|_| "[]".to_owned())
-        });
+        let sources_json = sources_json(filter.sources.as_deref());
         let order = match query.sort.unwrap_or(UsageConversationSort::Recent) {
             UsageConversationSort::Recent => {
                 "ORDER BY c.last_at DESC, c.conversation_key ASC".to_owned()
@@ -564,36 +710,39 @@ impl UsageDb {
             }
         };
 
+        // 未归属条目（Cursor 远端计量与补录历史）没有对话身份，不进入对话列表；
+        // 它们计入概览与项目页的「未归属」分组。
         let count = connection.query_row(
             "SELECT COUNT(DISTINCT c.conversation_key)
                FROM conversations c
                JOIN usage_entries e ON e.conversation_key = c.conversation_key
-              WHERE (?1 IS NULL OR e.occurred_at >= ?1)
+              WHERE c.unattributed = 0
+                AND (?1 IS NULL OR e.occurred_at >= ?1)
                 AND (?2 IS NULL OR e.occurred_at < ?2)
-                AND (?3 IS NULL OR e.source = ?3)
-                AND (?4 IS NULL OR e.model = ?4)
-                AND (?5 IS NULL OR e.speed = ?5)
-                AND (?7 IS NULL OR c.project_hint = ?7)
-                AND (?8 IS NULL OR e.source IN (SELECT value FROM json_each(?8)))
-                AND (?6 IS NULL
-                     OR COALESCE(c.title, '') LIKE '%' || ?6 || '%' ESCAPE '\'
-                     OR COALESCE(c.project_hint, '') LIKE '%' || ?6 || '%' ESCAPE '\')",
+                AND (?3 IS NULL OR e.model = ?3)
+                AND (?4 IS NULL OR e.speed = ?4)
+                AND (?6 IS NULL OR c.project_key = ?6)
+                AND (?5 IS NULL OR e.source IN (SELECT value FROM json_each(?5)))
+                AND (?7 IS NULL
+                     OR COALESCE(c.title, '') LIKE '%' || ?7 || '%' ESCAPE '\\'
+                     OR COALESCE(c.project_hint, '') LIKE '%' || ?7 || '%' ESCAPE '\\')",
             params![
                 filter.from.as_deref(),
                 filter.to.as_deref(),
-                source,
                 filter.model.as_deref(),
                 speed,
-                escaped_search.as_deref(),
-                project,
                 sources_json,
+                project,
+                escaped_search.as_deref(),
             ],
             |row| row.get(0),
         )?;
 
         let mut statement = connection.prepare(&format!(
-            "SELECT c.conversation_key, c.source, c.title, c.project_hint,
+            "SELECT c.conversation_key, c.source, c.title, c.project_hint, c.project_key,
+                    c.worktree_path, c.unattributed,
                     c.is_sidechain, c.first_at, c.last_at, COUNT(*),
+                    COALESCE(SUM(e.request_count), 0),
                     COALESCE(SUM(e.uncached_input_tokens), 0),
                     COALESCE(SUM(e.output_tokens), 0),
                     COALESCE(SUM(e.reasoning_output_tokens), 0),
@@ -626,30 +775,29 @@ impl UsageDb {
                     ))
                FROM conversations c
                JOIN usage_entries e ON e.conversation_key = c.conversation_key
-              WHERE (?1 IS NULL OR e.occurred_at >= ?1)
+              WHERE c.unattributed = 0
+                AND (?1 IS NULL OR e.occurred_at >= ?1)
                 AND (?2 IS NULL OR e.occurred_at < ?2)
-                AND (?3 IS NULL OR e.source = ?3)
-                AND (?4 IS NULL OR e.model = ?4)
-                AND (?5 IS NULL OR e.speed = ?5)
-                AND (?7 IS NULL OR c.project_hint = ?7)
-                AND (?8 IS NULL OR e.source IN (SELECT value FROM json_each(?8)))
-                AND (?6 IS NULL
-                     OR COALESCE(c.title, '') LIKE '%' || ?6 || '%' ESCAPE '\'
-                     OR COALESCE(c.project_hint, '') LIKE '%' || ?6 || '%' ESCAPE '\')
+                AND (?3 IS NULL OR e.model = ?3)
+                AND (?4 IS NULL OR e.speed = ?4)
+                AND (?6 IS NULL OR c.project_key = ?6)
+                AND (?5 IS NULL OR e.source IN (SELECT value FROM json_each(?5)))
+                AND (?7 IS NULL
+                     OR COALESCE(c.title, '') LIKE '%' || ?7 || '%' ESCAPE '\\'
+                     OR COALESCE(c.project_hint, '') LIKE '%' || ?7 || '%' ESCAPE '\\')
               GROUP BY c.conversation_key
               {order}
-              LIMIT ?9 OFFSET ?10"
+              LIMIT ?8 OFFSET ?9"
         ))?;
         let mapped = statement.query_map(
             params![
                 filter.from.as_deref(),
                 filter.to.as_deref(),
-                source,
                 filter.model.as_deref(),
                 speed,
-                escaped_search.as_deref(),
-                project,
                 sources_json,
+                project,
+                escaped_search.as_deref(),
                 i64::from(limit),
                 i64::try_from(offset).map_err(|_| UsageDbError::Sql)?,
             ],
@@ -665,60 +813,13 @@ impl UsageDb {
         })
     }
 
-    /// 脱敏项目筛选选项：按当前过滤范围聚合项目名、对话数与最近活动时间。
-    pub fn conversation_projects(
-        &self,
-        query: &UsageConversationQuery,
-    ) -> Result<Vec<UsageConversationProjectOption>, UsageDbError> {
-        let connection = self.open_read()?;
-        let filter = &query.filter;
-        let source = filter.source.map(UsageSource::as_db);
-        let sources_json = query.sources.as_ref().map(|sources| {
-            serde_json::to_string(
-                &sources
-                    .iter()
-                    .map(|source| source.as_db())
-                    .collect::<Vec<_>>(),
-            )
-            .unwrap_or_else(|_| "[]".to_owned())
-        });
-        let mut statement = connection.prepare(
-            "SELECT c.project_hint, COUNT(DISTINCT c.conversation_key), MAX(c.last_at)
-               FROM conversations c
-               JOIN usage_entries e ON e.conversation_key = c.conversation_key
-              WHERE c.project_hint IS NOT NULL
-                AND (?1 IS NULL OR e.occurred_at >= ?1)
-                AND (?2 IS NULL OR e.occurred_at < ?2)
-                AND (?3 IS NULL OR e.source = ?3)
-                AND (?4 IS NULL OR e.source IN (SELECT value FROM json_each(?4)))
-              GROUP BY c.project_hint
-              ORDER BY MAX(c.last_at) DESC, c.project_hint ASC",
-        )?;
-        let mapped = statement.query_map(
-            params![
-                filter.from.as_deref(),
-                filter.to.as_deref(),
-                source,
-                sources_json,
-            ],
-            |row| {
-                Ok(UsageConversationProjectOption {
-                    name: row.get(0)?,
-                    conversation_count: row.get(1)?,
-                    last_at: row.get(2)?,
-                })
-            },
-        )?;
-        mapped.collect::<Result<Vec<_>, _>>().map_err(Into::into)
-    }
-
-    /// 单个对话的模型／速度拆分行，列布局与 `summary_row` 完全一致。
     pub fn conversation_breakdown(
         &self,
         conversation_key: &str,
     ) -> Result<UsageConversationBreakdown, UsageDbError> {
         let connection = self.open_read()?;
         let select = "SELECT COALESCE({group}, ''), COUNT(*),
+                    COALESCE(SUM(request_count), 0),
                     COALESCE(SUM(uncached_input_tokens), 0),
                     COALESCE(SUM(output_tokens), 0),
                     COALESCE(SUM(reasoning_output_tokens), 0),
@@ -769,8 +870,10 @@ impl UsageDb {
         let connection = self.open_read()?;
         connection
             .query_row(
-                "SELECT c.conversation_key, c.source, c.title, c.project_hint,
+                "SELECT c.conversation_key, c.source, c.title, c.project_hint, c.project_key,
+                        c.worktree_path, c.unattributed,
                         c.is_sidechain, c.first_at, c.last_at, COUNT(e.id),
+                        COALESCE(SUM(e.request_count), 0),
                         COALESCE(SUM(e.uncached_input_tokens), 0),
                         COALESCE(SUM(e.output_tokens), 0),
                         COALESCE(SUM(e.reasoning_output_tokens), 0),
@@ -953,6 +1056,48 @@ impl UsageDb {
     /// 额度历史查询：返回去重后的事件点，最近优先截取 `limit` 条，再按时间升序返回。
     /// `identity_key` 用于前端按账号归组；主账号镜像去重由「只显示每个 Provider 当前
     /// 身份的活动序列」在前端完成，这里不做跨指纹的账号合并。
+    /// 项目筛选选项：按当前过滤范围聚合项目身份、展示名、对话数与最近活动时间。
+    /// 未归属条目没有项目身份，不进入筛选菜单。
+    pub fn conversation_projects(
+        &self,
+        query: &UsageConversationQuery,
+    ) -> Result<Vec<UsageConversationProjectOption>, UsageDbError> {
+        let connection = self.open_read()?;
+        let filter = &query.filter;
+        let sources_json = sources_json(filter.sources.as_deref());
+        let mut statement = connection.prepare(
+            "SELECT c.project_key, COALESCE(MAX(c.project_hint), ''),
+                    COUNT(DISTINCT c.conversation_key), MAX(c.last_at)
+               FROM conversations c
+               JOIN usage_entries e ON e.conversation_key = c.conversation_key
+              WHERE c.project_key IS NOT NULL
+                AND c.unattributed = 0
+                AND (?1 IS NULL OR e.occurred_at >= ?1)
+                AND (?2 IS NULL OR e.occurred_at < ?2)
+                AND (?3 IS NULL OR e.source IN (SELECT value FROM json_each(?3)))
+              GROUP BY c.project_key
+              ORDER BY MAX(c.last_at) DESC, c.project_key ASC",
+        )?;
+        let mapped = statement.query_map(
+            params![filter.from.as_deref(), filter.to.as_deref(), sources_json,],
+            |row| {
+                let key: String = row.get(0)?;
+                let hint: String = row.get(1)?;
+                Ok(UsageConversationProjectOption {
+                    name: if hint.is_empty() {
+                        tail_segment(&key)
+                    } else {
+                        hint
+                    },
+                    key: Some(key),
+                    conversation_count: row.get(2)?,
+                    last_at: row.get(3)?,
+                })
+            },
+        )?;
+        mapped.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
     pub fn quota_history(
         &self,
         provider: Option<ProviderId>,
@@ -1199,7 +1344,7 @@ impl UsageDb {
 }
 
 fn migrate(connection: &mut Connection, from: i64) -> Result<(), UsageDbError> {
-    if !matches!(from, 0..=5) {
+    if !matches!(from, 0..=6) {
         return Err(UsageDbError::UnsupportedSchema);
     }
     let transaction = connection.transaction()?;
@@ -1320,7 +1465,176 @@ fn migrate(connection: &mut Connection, from: i64) -> Result<(), UsageDbError> {
             )?;
         }
     }
+    // v7：数据源扩到六个（含 DSH 与 Cursor 远端计量）、对话补项目归属、新增周期表。
+    // 与 `from` 无关地统一从这里升，新建库也走同一条路径，避免两套 schema 文本分叉。
+    if from < 7 {
+        upgrade_to_v7(&transaction)?;
+    }
     transaction.commit()?;
+    Ok(())
+}
+
+/// v6 → v7。
+///
+/// - `usage_entries`：`source` CHECK 扩到六个，新增 `request_count`（远端计量日桶的
+///   请求数为 0，不能再拿行数当请求数）与 `granularity`（`request` / `day`）。
+/// - `conversations`：新增 `project_key`（项目身份）、`worktree_path`（对话自身工作目录，
+///   用于 worktree 明细）与 `unattributed`（Cursor 远端计量与补录历史的未归属标记）。
+/// - 新增 `quota_cycles` / `quota_allowance_segments` / `quota_account_segments`。
+///
+/// SQLite 无法直接改 CHECK，`usage_entries`、`conversations`、`scan_files` 均整表重建；
+/// 重建保持既有行不变。
+fn upgrade_to_v7(transaction: &rusqlite::Transaction) -> Result<(), UsageDbError> {
+    transaction.execute_batch(
+        "ALTER TABLE usage_entries RENAME TO usage_entries_v6;
+         CREATE TABLE usage_entries (
+           id INTEGER PRIMARY KEY,
+           file_key TEXT NOT NULL,
+           source TEXT NOT NULL
+             CHECK(source IN ('codex', 'claude', 'pi', 'opencode', 'dsh', 'cursor')),
+           dedup_key TEXT NOT NULL,
+           conversation_key TEXT NOT NULL,
+           model TEXT,
+           speed TEXT NOT NULL CHECK(speed IN ('standard', 'fast', 'unknown')),
+           inference_geo TEXT NOT NULL CHECK(inference_geo IN ('global', 'us', 'unknown')),
+           occurred_at TEXT NOT NULL,
+           day_local TEXT NOT NULL,
+           uncached_input_tokens INTEGER NOT NULL CHECK(uncached_input_tokens >= 0),
+           output_tokens INTEGER NOT NULL CHECK(output_tokens >= 0),
+           reasoning_output_tokens INTEGER NOT NULL CHECK(reasoning_output_tokens >= 0),
+           cache_read_input_tokens INTEGER NOT NULL CHECK(cache_read_input_tokens >= 0),
+           cache_write_5m_input_tokens INTEGER NOT NULL CHECK(cache_write_5m_input_tokens >= 0),
+           cache_write_1h_input_tokens INTEGER NOT NULL CHECK(cache_write_1h_input_tokens >= 0),
+           api_equivalent_cost_nanos INTEGER,
+           billing_equivalent_tokens_nanos INTEGER,
+           fast_multiplier_nanos INTEGER,
+           pricing_fingerprint TEXT,
+           request_count INTEGER NOT NULL DEFAULT 1 CHECK(request_count >= 0),
+           granularity TEXT NOT NULL DEFAULT 'request'
+             CHECK(granularity IN ('request', 'day')),
+           CHECK(reasoning_output_tokens <= output_tokens)
+         );
+         INSERT INTO usage_entries (
+           id, file_key, source, dedup_key, conversation_key, model, speed, inference_geo,
+           occurred_at, day_local, uncached_input_tokens, output_tokens, reasoning_output_tokens,
+           cache_read_input_tokens, cache_write_5m_input_tokens, cache_write_1h_input_tokens,
+           api_equivalent_cost_nanos, billing_equivalent_tokens_nanos, fast_multiplier_nanos,
+           pricing_fingerprint, request_count, granularity
+         )
+         SELECT id, file_key, source, dedup_key, conversation_key, model, speed, inference_geo,
+                occurred_at, day_local, uncached_input_tokens, output_tokens,
+                reasoning_output_tokens, cache_read_input_tokens, cache_write_5m_input_tokens,
+                cache_write_1h_input_tokens, api_equivalent_cost_nanos,
+                billing_equivalent_tokens_nanos, fast_multiplier_nanos, pricing_fingerprint,
+                1, 'request'
+           FROM usage_entries_v6;
+         DROP TABLE usage_entries_v6;
+         CREATE UNIQUE INDEX ux_entries_dedup
+           ON usage_entries(source, dedup_key);
+         CREATE INDEX ix_entries_file
+           ON usage_entries(file_key);
+         CREATE INDEX ix_entries_time
+           ON usage_entries(occurred_at, source);
+         CREATE INDEX ix_entries_day
+           ON usage_entries(day_local, source, model, speed);
+         CREATE INDEX ix_entries_conversation
+           ON usage_entries(conversation_key, occurred_at);
+         CREATE INDEX ix_entries_repricing
+           ON usage_entries(pricing_fingerprint);
+         ALTER TABLE conversations RENAME TO conversations_v6;
+         CREATE TABLE conversations (
+           conversation_key TEXT PRIMARY KEY,
+           source TEXT NOT NULL
+             CHECK(source IN ('codex', 'claude', 'pi', 'opencode', 'dsh', 'cursor')),
+           title TEXT,
+           project_hint TEXT,
+           project_key TEXT,
+           worktree_path TEXT,
+           is_sidechain INTEGER NOT NULL DEFAULT 0 CHECK(is_sidechain IN (0, 1)),
+           unattributed INTEGER NOT NULL DEFAULT 0 CHECK(unattributed IN (0, 1)),
+           first_at TEXT NOT NULL,
+           last_at TEXT NOT NULL,
+           source_id TEXT,
+           branch TEXT
+         );
+         INSERT INTO conversations (
+           conversation_key, source, title, project_hint, project_key, worktree_path,
+           is_sidechain, unattributed, first_at, last_at, source_id, branch
+         )
+         SELECT conversation_key, source, title, project_hint, NULL, NULL,
+                is_sidechain, 0, first_at, last_at, source_id, branch
+           FROM conversations_v6;
+         DROP TABLE conversations_v6;
+         CREATE INDEX ix_conversations_recent
+           ON conversations(last_at DESC);
+         CREATE INDEX ix_conversations_source_recent
+           ON conversations(source, last_at DESC);
+         CREATE INDEX ix_conversations_project
+           ON conversations(project_key, last_at DESC);
+         ALTER TABLE scan_files RENAME TO scan_files_v6;
+         CREATE TABLE scan_files (
+           file_key TEXT PRIMARY KEY,
+           source TEXT NOT NULL
+             CHECK(source IN ('codex', 'claude', 'pi', 'opencode', 'dsh', 'cursor')),
+           mtime_ms INTEGER NOT NULL,
+           size_bytes INTEGER NOT NULL,
+           offset_bytes INTEGER NOT NULL,
+           prefix_fingerprint TEXT NOT NULL,
+           cursor_json TEXT,
+           updated_at TEXT NOT NULL
+         );
+         INSERT INTO scan_files (
+           file_key, source, mtime_ms, size_bytes, offset_bytes, prefix_fingerprint,
+           cursor_json, updated_at
+         )
+         SELECT file_key, source, mtime_ms, size_bytes, offset_bytes, prefix_fingerprint,
+                cursor_json, updated_at
+           FROM scan_files_v6;
+         DROP TABLE scan_files_v6;
+         CREATE TABLE quota_cycles (
+           id TEXT PRIMARY KEY,
+           provider TEXT NOT NULL,
+           identity_key TEXT NOT NULL,
+           window_kind TEXT NOT NULL,
+           window_id TEXT NOT NULL,
+           start_at TEXT NOT NULL,
+           end_at TEXT NOT NULL,
+           scheduled_end_at TEXT NOT NULL,
+           first_sample_at TEXT,
+           last_sample_at TEXT,
+           latest_used_percent REAL NOT NULL,
+           boundary_quality TEXT NOT NULL
+             CHECK(boundary_quality IN ('observed', 'inferred')),
+           source TEXT NOT NULL CHECK(source IN ('live', 'cache')),
+           updated_at TEXT NOT NULL
+         );
+         CREATE INDEX ix_cycles_lookup
+           ON quota_cycles(provider, identity_key, window_id, end_at DESC);
+         CREATE TABLE quota_allowance_segments (
+           id TEXT PRIMARY KEY,
+           cycle_id TEXT NOT NULL REFERENCES quota_cycles(id) ON DELETE CASCADE,
+           start_at TEXT NOT NULL,
+           end_at TEXT,
+           baseline_used_percent REAL NOT NULL,
+           latest_used_percent REAL NOT NULL,
+           maximum_used_percent REAL NOT NULL,
+           first_sample_at TEXT NOT NULL,
+           last_sample_at TEXT NOT NULL,
+           start_reason TEXT NOT NULL CHECK(start_reason IN ('initial', 'extraReset'))
+         );
+         CREATE INDEX ix_segments_cycle
+           ON quota_allowance_segments(cycle_id, start_at);
+         CREATE TABLE quota_account_segments (
+           id TEXT PRIMARY KEY,
+           provider TEXT NOT NULL,
+           identity_key TEXT NOT NULL,
+           start_at TEXT NOT NULL,
+           end_at TEXT
+         );
+         CREATE INDEX ix_account_segments_lookup
+           ON quota_account_segments(provider, identity_key, start_at DESC);
+         PRAGMA user_version = 7;",
+    )?;
     Ok(())
 }
 
@@ -1429,18 +1743,19 @@ fn rebuild_source_constraints(transaction: &rusqlite::Transaction) -> Result<(),
 }
 
 fn summary_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<UsageSummaryRow> {
-    let tokens = token_totals(row, 2)?;
+    let tokens = token_totals(row, 3)?;
     Ok(UsageSummaryRow {
         key: row.get(0)?,
         entry_count: row.get(1)?,
+        request_count: row.get(2)?,
         tokens,
-        fast: fast_totals(row, 8)?,
+        fast: fast_totals(row, 9)?,
         cost: UsageCostTotals {
-            api_equivalent_cost_nanos: row.get(13)?,
-            priced_entries: row.get(14)?,
-            unpriced_entries: row.get(15)?,
-            assumed_geo_entries: row.get(16)?,
-            pricing_fingerprint: row.get(17)?,
+            api_equivalent_cost_nanos: row.get(14)?,
+            priced_entries: row.get(15)?,
+            unpriced_entries: row.get(16)?,
+            assumed_geo_entries: row.get(17)?,
+            pricing_fingerprint: row.get(18)?,
         },
     })
 }
@@ -1478,22 +1793,28 @@ fn fast_totals(row: &rusqlite::Row<'_>, start: usize) -> rusqlite::Result<UsageF
     })
 }
 
-fn conversation_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<UsageConversation> {
-    let source_value: String = row.get(1)?;
-    let source = source_from_db(&source_value)?;
-    let models_json: Option<String> = row.get(26)?;
-    let models = models_json
-        .and_then(|value| serde_json::from_str::<Vec<String>>(&value).ok())
-        .unwrap_or_default();
-    Ok(UsageConversation {
-        conversation_key: row.get(0)?,
-        source,
-        title: row.get(2)?,
-        project_hint: row.get(3)?,
-        is_sidechain: row.get::<_, i64>(4)? != 0,
-        first_at: row.get(5)?,
-        last_at: row.get(6)?,
-        entry_count: row.get(7)?,
+fn project_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<UsageProjectSummary> {
+    let key: String = row.get(0)?;
+    let hint: String = row.get(1)?;
+    let unattributed = row.get::<_, i64>(24)? != 0 || key.is_empty();
+    let name = if key.is_empty() {
+        String::new()
+    } else if hint.is_empty() {
+        tail_segment(&key)
+    } else {
+        hint
+    };
+    Ok(UsageProjectSummary {
+        path: (!key.is_empty()).then(|| key.clone()),
+        key,
+        name,
+        unattributed,
+        conversation_count: row.get(2)?,
+        active_days: row.get(3)?,
+        first_at: row.get(4)?,
+        last_at: row.get::<_, Option<String>>(5)?.unwrap_or_default(),
+        entry_count: row.get(6)?,
+        request_count: row.get(7)?,
         tokens: token_totals(row, 8)?,
         fast: fast_totals(row, 14)?,
         cost: UsageCostTotals {
@@ -1503,8 +1824,57 @@ fn conversation_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<UsageConversati
             assumed_geo_entries: row.get(22)?,
             pricing_fingerprint: row.get(23)?,
         },
-        source_id: row.get(24)?,
-        branch: row.get(25)?,
+    })
+}
+
+/// 路径尾段，用作项目展示名；分隔符同时兼容 Windows 反斜杠与 POSIX 斜杠。
+fn tail_segment(path: &str) -> String {
+    path.rsplit(['/', '\\'])
+        .find(|segment| !segment.is_empty())
+        .unwrap_or(path)
+        .to_owned()
+}
+
+/// 可见服务集合的 SQLite JSON 参数。`None` 保持 `None`（不过滤），
+/// 空数组保持空数组（一个服务都不可见，结果为空）。
+fn sources_json(sources: Option<&[UsageSource]>) -> Option<String> {
+    sources.map(|sources| {
+        serde_json::to_string(&sources.iter().map(|s| s.as_db()).collect::<Vec<_>>())
+            .unwrap_or_else(|_| "[]".to_owned())
+    })
+}
+
+fn conversation_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<UsageConversation> {
+    let source_value: String = row.get(1)?;
+    let source = source_from_db(&source_value)?;
+    let models_json: Option<String> = row.get(30)?;
+    let models = models_json
+        .and_then(|value| serde_json::from_str::<Vec<String>>(&value).ok())
+        .unwrap_or_default();
+    Ok(UsageConversation {
+        conversation_key: row.get(0)?,
+        source,
+        title: row.get(2)?,
+        project_hint: row.get(3)?,
+        project_key: row.get(4)?,
+        worktree_path: row.get(5)?,
+        unattributed: row.get::<_, i64>(6)? != 0,
+        is_sidechain: row.get::<_, i64>(7)? != 0,
+        first_at: row.get(8)?,
+        last_at: row.get(9)?,
+        entry_count: row.get(10)?,
+        request_count: row.get(11)?,
+        tokens: token_totals(row, 12)?,
+        fast: fast_totals(row, 18)?,
+        cost: UsageCostTotals {
+            api_equivalent_cost_nanos: row.get(23)?,
+            priced_entries: row.get(24)?,
+            unpriced_entries: row.get(25)?,
+            assumed_geo_entries: row.get(26)?,
+            pricing_fingerprint: row.get(27)?,
+        },
+        source_id: row.get(28)?,
+        branch: row.get(29)?,
         models,
     })
 }
@@ -1537,6 +1907,8 @@ fn source_from_db(value: &str) -> rusqlite::Result<UsageSource> {
         "claude" => Ok(UsageSource::Claude),
         "pi" => Ok(UsageSource::Pi),
         "opencode" => Ok(UsageSource::Opencode),
+        "dsh" => Ok(UsageSource::Dsh),
+        "cursor" => Ok(UsageSource::Cursor),
         _ => Err(rusqlite::Error::InvalidQuery),
     }
 }
@@ -1551,10 +1923,7 @@ fn speed_from_db(value: &str) -> rusqlite::Result<UsageSpeed> {
 }
 
 fn provider_db(provider: ProviderId) -> &'static str {
-    match provider {
-        ProviderId::Codex => "codex",
-        ProviderId::Claude => "claude",
-    }
+    provider.key()
 }
 
 fn quota_kind(kind: QuotaWindowKind) -> &'static str {
@@ -1562,6 +1931,10 @@ fn quota_kind(kind: QuotaWindowKind) -> &'static str {
         QuotaWindowKind::FiveHour => "five_hour",
         QuotaWindowKind::Weekly => "weekly",
         QuotaWindowKind::ModelWeekly => "model_weekly",
+        QuotaWindowKind::Monthly => "monthly",
+        QuotaWindowKind::Total => "total",
+        QuotaWindowKind::Auto => "auto",
+        QuotaWindowKind::Api => "api",
         QuotaWindowKind::Unknown => "unknown",
     }
 }
@@ -1570,6 +1943,9 @@ fn provider_from_db(value: &str) -> rusqlite::Result<ProviderId> {
     match value {
         "codex" => Ok(ProviderId::Codex),
         "claude" => Ok(ProviderId::Claude),
+        "antigravity" => Ok(ProviderId::Antigravity),
+        "cursor" => Ok(ProviderId::Cursor),
+        "commandCode" => Ok(ProviderId::CommandCode),
         _ => Err(rusqlite::Error::FromSqlConversionFailure(
             0,
             rusqlite::types::Type::Text,
@@ -1583,6 +1959,10 @@ fn window_kind_from_db(value: &str) -> rusqlite::Result<QuotaWindowKind> {
         "five_hour" => Ok(QuotaWindowKind::FiveHour),
         "weekly" => Ok(QuotaWindowKind::Weekly),
         "model_weekly" => Ok(QuotaWindowKind::ModelWeekly),
+        "monthly" => Ok(QuotaWindowKind::Monthly),
+        "total" => Ok(QuotaWindowKind::Total),
+        "auto" => Ok(QuotaWindowKind::Auto),
+        "api" => Ok(QuotaWindowKind::Api),
         "unknown" => Ok(QuotaWindowKind::Unknown),
         _ => Err(rusqlite::Error::FromSqlConversionFailure(
             0,
@@ -1670,7 +2050,9 @@ impl DateTimeValidator {
 mod tests {
     use super::*;
     use crate::contracts::{QuotaWindow, UsageFilter};
-    use crate::usage::model::{ConversationFact, InferenceGeo, ScanBatch, TokenFacts, UsageEntry};
+    use crate::usage::model::{
+        ConversationFact, Granularity, InferenceGeo, ScanBatch, TokenFacts, UsageEntry,
+    };
     use crate::usage::pricing::PricingCatalog;
 
     fn database() -> (tempfile::TempDir, UsageDb) {
@@ -1699,6 +2081,8 @@ mod tests {
             billing_equivalent_tokens_nanos: None,
             fast_multiplier_nanos: None,
             pricing_fingerprint: Some("price".to_owned()),
+            request_count: 1,
+            granularity: Granularity::Request,
         };
         ScanBatch {
             entries: vec![entry],
@@ -1707,6 +2091,9 @@ mod tests {
                 source: UsageSource::Codex,
                 title: None,
                 project_hint: None,
+                project_key: None,
+                worktree_path: None,
+                unattributed: false,
                 is_sidechain: false,
                 occurred_at: "2026-07-30T00:00:00Z".to_owned(),
                 source_id: None,
@@ -2040,6 +2427,8 @@ mod tests {
                     "billing_equivalent_tokens_nanos",
                     "fast_multiplier_nanos",
                     "pricing_fingerprint",
+                    "request_count",
+                    "granularity",
                 ][..],
             ),
             ("pricing_state", &["id", "fingerprint"][..]),
@@ -2050,12 +2439,53 @@ mod tests {
                     "source",
                     "title",
                     "project_hint",
+                    "project_key",
+                    "worktree_path",
                     "is_sidechain",
+                    "unattributed",
                     "first_at",
                     "last_at",
                     "source_id",
                     "branch",
                 ][..],
+            ),
+            (
+                "quota_cycles",
+                &[
+                    "id",
+                    "provider",
+                    "identity_key",
+                    "window_kind",
+                    "window_id",
+                    "start_at",
+                    "end_at",
+                    "scheduled_end_at",
+                    "first_sample_at",
+                    "last_sample_at",
+                    "latest_used_percent",
+                    "boundary_quality",
+                    "source",
+                    "updated_at",
+                ][..],
+            ),
+            (
+                "quota_allowance_segments",
+                &[
+                    "id",
+                    "cycle_id",
+                    "start_at",
+                    "end_at",
+                    "baseline_used_percent",
+                    "latest_used_percent",
+                    "maximum_used_percent",
+                    "first_sample_at",
+                    "last_sample_at",
+                    "start_reason",
+                ][..],
+            ),
+            (
+                "quota_account_segments",
+                &["id", "provider", "identity_key", "start_at", "end_at"][..],
             ),
             (
                 "quota_events",
@@ -2289,6 +2719,7 @@ mod tests {
                 window_seconds: Some(18_000),
                 is_active: true,
                 is_primary: true,
+                unlimited: false,
             }],
             captured_at: "2026-07-30T00:00:00Z".to_owned(),
         };
@@ -2326,7 +2757,58 @@ mod tests {
         let connection = Connection::open(&path).expect("open legacy");
         connection
             .execute_batch(
-                "CREATE TABLE quota_events (
+                "CREATE TABLE usage_entries (
+                   id INTEGER PRIMARY KEY,
+                   file_key TEXT NOT NULL,
+                   source TEXT NOT NULL
+                     CHECK(source IN ('codex', 'claude', 'pi', 'opencode')),
+                   dedup_key TEXT NOT NULL,
+                   conversation_key TEXT NOT NULL,
+                   model TEXT,
+                   speed TEXT NOT NULL CHECK(speed IN ('standard', 'fast', 'unknown')),
+                   inference_geo TEXT NOT NULL
+                     CHECK(inference_geo IN ('global', 'us', 'unknown')),
+                   occurred_at TEXT NOT NULL,
+                   day_local TEXT NOT NULL,
+                   uncached_input_tokens INTEGER NOT NULL CHECK(uncached_input_tokens >= 0),
+                   output_tokens INTEGER NOT NULL CHECK(output_tokens >= 0),
+                   reasoning_output_tokens INTEGER NOT NULL CHECK(reasoning_output_tokens >= 0),
+                   cache_read_input_tokens INTEGER NOT NULL CHECK(cache_read_input_tokens >= 0),
+                   cache_write_5m_input_tokens INTEGER NOT NULL
+                     CHECK(cache_write_5m_input_tokens >= 0),
+                   cache_write_1h_input_tokens INTEGER NOT NULL
+                     CHECK(cache_write_1h_input_tokens >= 0),
+                   api_equivalent_cost_nanos INTEGER,
+                   billing_equivalent_tokens_nanos INTEGER,
+                   fast_multiplier_nanos INTEGER,
+                   pricing_fingerprint TEXT,
+                   CHECK(reasoning_output_tokens <= output_tokens)
+                 );
+                 CREATE UNIQUE INDEX ux_entries_dedup ON usage_entries(source, dedup_key);
+                 CREATE TABLE conversations (
+                   conversation_key TEXT PRIMARY KEY,
+                   source TEXT NOT NULL
+                     CHECK(source IN ('codex', 'claude', 'pi', 'opencode')),
+                   title TEXT,
+                   project_hint TEXT,
+                   is_sidechain INTEGER NOT NULL DEFAULT 0 CHECK(is_sidechain IN (0, 1)),
+                   first_at TEXT NOT NULL,
+                   last_at TEXT NOT NULL,
+                   source_id TEXT,
+                   branch TEXT
+                 );
+                 CREATE TABLE scan_files (
+                   file_key TEXT PRIMARY KEY,
+                   source TEXT NOT NULL
+                     CHECK(source IN ('codex', 'claude', 'pi', 'opencode')),
+                   mtime_ms INTEGER NOT NULL,
+                   size_bytes INTEGER NOT NULL,
+                   offset_bytes INTEGER NOT NULL,
+                   prefix_fingerprint TEXT NOT NULL,
+                   cursor_json TEXT,
+                   updated_at TEXT NOT NULL
+                 );
+                 CREATE TABLE quota_events (
                    id INTEGER PRIMARY KEY,
                    provider TEXT NOT NULL CHECK(provider IN ('codex', 'claude')),
                    identity_key TEXT NOT NULL,
@@ -2401,12 +2883,17 @@ mod tests {
                     billing_equivalent_tokens_nanos: None,
                     fast_multiplier_nanos: None,
                     pricing_fingerprint: Some("price".to_owned()),
+                    request_count: 1,
+                    granularity: Granularity::Request,
                 }],
                 conversations: vec![ConversationFact {
                     conversation_key: key.to_owned(),
                     source: UsageSource::Codex,
                     title: title.map(str::to_owned),
                     project_hint: project.map(str::to_owned),
+                    project_key: project.map(|value| format!("/work/{value}")),
+                    worktree_path: project.map(|value| format!("/work/{value}")),
+                    unattributed: false,
                     is_sidechain: false,
                     occurred_at: occurred_at.to_owned(),
                     source_id: None,
@@ -2496,7 +2983,7 @@ mod tests {
         assert_eq!(by_recent.items[0].conversation_key, "small");
 
         let filtered = list(&UsageConversationQuery {
-            project: Some("proj-a".to_owned()),
+            project: Some("/work/proj-a".to_owned()),
             ..UsageConversationQuery::default()
         });
         assert_eq!(filtered.total, 1);
@@ -2533,6 +3020,8 @@ mod tests {
                     billing_equivalent_tokens_nanos: None,
                     fast_multiplier_nanos: None,
                     pricing_fingerprint: Some("price".to_owned()),
+                    request_count: 1,
+                    granularity: Granularity::Request,
                 },
                 UsageEntry {
                     source: UsageSource::Codex,
@@ -2548,6 +3037,8 @@ mod tests {
                     billing_equivalent_tokens_nanos: Some(2_000_000_000),
                     fast_multiplier_nanos: Some(1_500_000_000),
                     pricing_fingerprint: Some("price".to_owned()),
+                    request_count: 1,
+                    granularity: Granularity::Request,
                 },
             ],
             conversations: vec![ConversationFact {
@@ -2555,6 +3046,9 @@ mod tests {
                 source: UsageSource::Codex,
                 title: None,
                 project_hint: None,
+                project_key: None,
+                worktree_path: None,
+                unattributed: false,
                 is_sidechain: false,
                 occurred_at: "2026-07-30T00:00:00Z".to_owned(),
                 source_id: None,
@@ -2619,6 +3113,7 @@ mod tests {
                     window_seconds: Some(18_000),
                     is_active: true,
                     is_primary: true,
+                    unlimited: false,
                 }],
                 captured_at: captured_at.to_owned(),
             }
@@ -2712,6 +3207,7 @@ mod tests {
                 window_seconds: Some(604_800),
                 is_active: true,
                 is_primary: true,
+                unlimited: false,
             }],
             captured_at: "2026-07-30T00:00:00Z".to_owned(),
         };
