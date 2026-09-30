@@ -19,9 +19,10 @@ pub use quota::{
 };
 pub use service_status::{ServiceStatus, ServiceStatusIndicator, ServiceStatusState};
 pub use settings::{
-    AppearancePreference, HudPosition, HudSettings, LanguagePreference, MenuBarWindowMode,
-    OnboardingState, RankingBasis, RefreshInterval, ResetTimeDisplay, SETTINGS_SCHEMA_VERSION,
-    ServiceSettings, ServicesSettings, Settings, SettingsUpdate,
+    AppearancePreference, CommandCodeCredentialPreference, HudPosition, HudSettings,
+    LanguagePreference, MenuBarWindowMode, OnboardingState, RankingBasis, RefreshInterval,
+    ResetTimeDisplay, SETTINGS_SCHEMA_VERSION, ServiceSettings, ServicesSettings, Settings,
+    SettingsUpdate,
 };
 pub(crate) use usage::decimal_nanos_string;
 pub use usage::{

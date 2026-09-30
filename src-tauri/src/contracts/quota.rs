@@ -166,12 +166,16 @@ pub struct QuotaSnapshot {
 /// 展示身份。账号字段按 [ADR-0025] 携带完整邮箱或 account id（隐私模式下由前端隐藏显示，
 /// 不在此层过滤）；计划名用于套餐展示。不含 token、凭据或响应原文。
 /// [ADR-0025]: ../../../../docs/决策/ADR-0025-非隐私模式显示完整邮箱.md
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderIdentity {
     /// 完整账号，例如 `nanvon@example.com` 或 account id。仅在隐私模式开启时前端不显示。
     pub account: Option<String>,
     pub plan: Option<String>,
+    /// 额度凭据从哪来（`commandcode`、`pi`、`opencode`、`env`、`keychain`）。
+    /// 只有凭据来源不止一处的服务会填；其余为 `None`，界面不显示这一行。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_source: Option<String>,
 }
 
 /// 一个额度主体的完整展示状态：数据 + 三个独立维度。

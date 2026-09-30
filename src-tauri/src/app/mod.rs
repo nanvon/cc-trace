@@ -22,6 +22,7 @@ use crate::contracts::{
 use crate::providers::QuotaProvider;
 use crate::providers::claude::ClaudeProvider;
 use crate::providers::codex::CodexProvider;
+use crate::providers::command_code::CommandCodeProvider;
 #[cfg(debug_assertions)]
 use crate::providers::synthetic::{Scenario, ScenarioHandle, SyntheticProvider};
 use crate::scheduler::params::jittered_seconds;
@@ -72,7 +73,7 @@ pub struct AppCore {
     /// 导入的 Codex 副账号：元数据在 JSON，凭据在系统秘密存储。
     imported_codex: Arc<ImportedCodexStore>,
     usage: Arc<UsageService>,
-    settings: Mutex<Settings>,
+    settings: Arc<Mutex<Settings>>,
     runtimes: Mutex<BTreeMap<String, ProviderRuntime>>,
     /// 真实额度来源。release 构建里这是唯一的来源。键是额度主体标识。
     providers: Mutex<BTreeMap<String, ProviderSlot>>,
@@ -96,7 +97,8 @@ impl AppCore {
         let imported_codex = Arc::new(ImportedCodexStore::new(config_dir.clone()));
         let usage = UsageService::new(config_dir);
 
-        let providers = build_slots(&imported_codex);
+        let settings = Arc::new(Mutex::new(settings));
+        let providers = build_slots(&imported_codex, &settings);
 
         let mut runtimes = BTreeMap::new();
         for subject in providers.values().map(|slot| slot.subject.clone()) {
@@ -122,7 +124,7 @@ impl AppCore {
             cache_store,
             imported_codex,
             usage,
-            settings: Mutex::new(settings),
+            settings,
             runtimes: Mutex::new(runtimes),
             providers: Mutex::new(providers),
             #[cfg(debug_assertions)]
@@ -159,6 +161,22 @@ impl AppCore {
             .map(|slot| Arc::clone(&slot.source))
     }
 
+    /// 改 Command Code 的凭据偏好并落盘。命令层在手动 Key 写入／清除后调用，
+    /// 保证「凭据变了」与「偏好指向它」是同一个动作。
+    pub fn set_command_code_credential_preference(
+        &self,
+        preference: crate::contracts::CommandCodeCredentialPreference,
+    ) -> Result<(), SettingsWriteError> {
+        let mut settings = self.settings.lock().expect("settings lock").clone();
+        if settings.command_code_credential == preference {
+            return Ok(());
+        }
+        settings.command_code_credential = preference;
+        self.persist(&settings)?;
+        *self.settings.lock().expect("settings lock") = settings;
+        Ok(())
+    }
+
     /// 导入账号的元数据与凭据存储句柄。命令层用它读写凭据槽位。
     pub fn imported_codex_store(&self) -> &Arc<ImportedCodexStore> {
         &self.imported_codex
@@ -184,7 +202,7 @@ impl AppCore {
 
     /// 按当前 `codex-accounts.json` 重建额度来源表。
     pub fn reload_providers(&self) {
-        let rebuilt = build_slots(&self.imported_codex);
+        let rebuilt = build_slots(&self.imported_codex, &self.settings);
         let mut next_runtimes: BTreeMap<String, ProviderRuntime> = BTreeMap::new();
         {
             let runtimes = self.runtimes.lock().expect("runtimes lock");
@@ -731,7 +749,10 @@ fn provider_rank(provider: ProviderId) -> usize {
 ///
 /// 这是唯一一处构造额度来源的地方；新增 Provider 在这里加一行，顺序由
 /// [`ProviderId::ORDER`] 与 [`QuotaSubject::order_index`] 决定，界面与调度不再各自排序。
-fn build_slots(imported_codex: &Arc<ImportedCodexStore>) -> BTreeMap<String, ProviderSlot> {
+fn build_slots(
+    imported_codex: &Arc<ImportedCodexStore>,
+    settings: &Arc<Mutex<Settings>>,
+) -> BTreeMap<String, ProviderSlot> {
     let mut slots = BTreeMap::new();
     let mut insert = |subject: QuotaSubject, source: Arc<dyn QuotaProvider>| {
         slots.insert(subject.subject_id.clone(), ProviderSlot { subject, source });
@@ -744,6 +765,10 @@ fn build_slots(imported_codex: &Arc<ImportedCodexStore>) -> BTreeMap<String, Pro
     insert(
         QuotaSubject::primary(ProviderId::Claude),
         ClaudeProvider::new(),
+    );
+    insert(
+        QuotaSubject::primary(ProviderId::CommandCode),
+        CommandCodeProvider::new(Arc::clone(settings)),
     );
 
     for (index, account) in imported_codex.load().iter().enumerate() {

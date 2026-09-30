@@ -44,6 +44,18 @@ export type ResetTimeDisplay = "duration" | "dateTime";
 /** 系统区域承载哪个额度窗口。 */
 export type MenuBarWindowMode = "primary" | "weekly" | "both";
 
+/** Command Code 凭据读取偏好：自动按顺序尝试，或只看手动填写的 API Key。 */
+export type CommandCodeCredentialPreference = "automatic" | "manual";
+
+/** Command Code 的凭据来源，用于说明「当前用的是哪一个」。 */
+export type CommandCodeCredentialSource = "commandcode" | "pi" | "opencode" | "env" | "keychain";
+
+/** 凭据管理命令的返回值；不回传 Key 本身。 */
+export interface CommandCodeCredentialState {
+  preference: CommandCodeCredentialPreference;
+  hasManualKey: boolean;
+}
+
 export interface HudPosition {
   x: number;
   y: number;
@@ -67,6 +79,7 @@ export interface Settings {
   /** 服务状态圆点：只控制紧凑面板绘制，后台拉取不受影响（ADR-0026）。 */
   showServiceStatus: boolean;
   menuBarWindowMode: MenuBarWindowMode;
+  commandCodeCredential: CommandCodeCredentialPreference;
   services: ServicesSettings;
   hud: HudSettings;
   rankingBasis: RankingBasis;
@@ -86,6 +99,7 @@ export interface SettingsUpdate {
   privacyMode?: boolean;
   showServiceStatus?: boolean;
   menuBarWindowMode?: MenuBarWindowMode;
+  commandCodeCredential?: CommandCodeCredentialPreference;
   services?: ServicesSettings;
   hud?: HudSettings;
   rankingBasis?: RankingBasis;

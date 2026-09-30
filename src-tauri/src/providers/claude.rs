@@ -532,6 +532,7 @@ impl ClaudeProvider {
                     .map(Secret::expose)
                     .map(str::to_owned),
                 plan: credentials.subscription.clone(),
+                credential_source: None,
             }),
             identity_key: credentials::identity_fingerprint(
                 "claude",

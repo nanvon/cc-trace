@@ -144,6 +144,7 @@ fn success(provider: ProviderId, now: DateTime<Utc>) -> ProviderFetchOutcome {
             ProviderIdentity {
                 account: Some("demo@example.com".to_owned()),
                 plan: Some("Plus".to_owned()),
+                credential_source: None,
             },
             vec![
                 window(
@@ -170,6 +171,7 @@ fn success(provider: ProviderId, now: DateTime<Utc>) -> ProviderFetchOutcome {
             ProviderIdentity {
                 account: Some("demo@example.com".to_owned()),
                 plan: Some("Max".to_owned()),
+                credential_source: None,
             },
             vec![
                 window(
@@ -205,6 +207,7 @@ fn success(provider: ProviderId, now: DateTime<Utc>) -> ProviderFetchOutcome {
             ProviderIdentity {
                 account: Some("demo@example.com".to_owned()),
                 plan: Some("Google AI Pro".to_owned()),
+                credential_source: None,
             },
             vec![
                 window(
@@ -249,6 +252,7 @@ fn success(provider: ProviderId, now: DateTime<Utc>) -> ProviderFetchOutcome {
             ProviderIdentity {
                 account: Some("demo@example.com".to_owned()),
                 plan: Some("Pro".to_owned()),
+                credential_source: None,
             },
             vec![
                 window(
@@ -284,6 +288,7 @@ fn success(provider: ProviderId, now: DateTime<Utc>) -> ProviderFetchOutcome {
             ProviderIdentity {
                 account: Some("demo@example.com".to_owned()),
                 plan: Some("GOAT".to_owned()),
+                credential_source: None,
             },
             vec![
                 window(

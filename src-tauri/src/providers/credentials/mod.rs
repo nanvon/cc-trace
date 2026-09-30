@@ -12,6 +12,7 @@
 
 pub mod claude;
 pub mod codex;
+pub mod command_code;
 mod jwt;
 
 use std::fmt;

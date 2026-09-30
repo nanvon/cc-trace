@@ -36,6 +36,7 @@ function render() {
     privacyMode: false,
     showServiceStatus: true,
     menuBarWindowMode: "primary",
+    commandCodeCredential: "automatic",
     services: {
       codex: { quota: true, menuBar: true, hud: true, stats: true },
       claude: { quota: true, menuBar: true, hud: true, stats: true },

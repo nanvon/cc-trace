@@ -5,6 +5,7 @@
 //! 文件路径、系统错误原文或凭据内容。
 
 pub mod codex_accounts;
+pub mod command_code;
 pub mod quota;
 pub mod service_status;
 pub mod settings;
@@ -88,6 +89,11 @@ impl CommandError {
     /// 凭据写入系统秘密存储失败。
     pub const CODEX_ACCOUNT_STORE_FAILED: Self = Self {
         code: "codexAccountStoreFailed",
+    };
+
+    /// 凭据写入系统秘密存储失败（手动 API Key）。
+    pub const CREDENTIAL_STORE_FAILED: Self = Self {
+        code: "credentialStoreFailed",
     };
 
     /// 把一次取数结果映射成导入流程可展示的错误码。

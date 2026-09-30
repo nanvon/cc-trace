@@ -50,6 +50,7 @@ function render(serviceStatus?: ServiceStatus | null, showServiceStatus = true) 
     privacyMode: false,
     showServiceStatus,
     menuBarWindowMode: "primary",
+    commandCodeCredential: "automatic",
     services: {
       codex: { quota: true, menuBar: true, hud: true, stats: true },
       claude: { quota: true, menuBar: true, hud: true, stats: true },

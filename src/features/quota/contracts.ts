@@ -57,6 +57,9 @@ export interface ProviderIdentity {
   /** 完整账号（邮箱或 account id），见 ADR-0025；隐私模式开启时由前端隐藏显示。 */
   account: string | null;
   plan: string | null;
+  /** 额度凭据从哪来（`commandcode`／`pi`／`opencode`／`env`／`keychain`）；
+   * 只有凭据来源不止一处的服务会填，其余为 undefined。 */
+  credentialSource?: string;
 }
 
 /** 额度主体描述，用于导入账号的增删与排序。 */

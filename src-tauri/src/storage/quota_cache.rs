@@ -131,6 +131,7 @@ mod tests {
             identity: Some(ProviderIdentity {
                 account: Some("user@example.test".to_owned()),
                 plan: Some("plus".to_owned()),
+                credential_source: None,
             }),
             identity_key: Some("0123456789abcdef".to_owned()),
             snapshot: QuotaSnapshot {

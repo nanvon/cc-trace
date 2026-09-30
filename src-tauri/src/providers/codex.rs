@@ -118,6 +118,7 @@ pub fn parse_usage_response(
     let identity = plan.map(|plan| ProviderIdentity {
         account: None,
         plan: Some(plan),
+        credential_source: None,
     });
 
     Ok(ParsedCodexUsage {
@@ -527,6 +528,7 @@ fn identity_of(
             .plan
             .clone()
             .or_else(|| from_response.and_then(|identity| identity.plan)),
+        credential_source: None,
     }
 }
 
@@ -681,6 +683,7 @@ mod tests {
             Some(ProviderIdentity {
                 account: None,
                 plan: Some("plus".to_owned()),
+                credential_source: None,
             })
         );
         assert_eq!(parsed.snapshot.captured_at, captured_at().to_rfc3339());
@@ -906,6 +909,7 @@ mod tests {
             Some(ProviderIdentity {
                 account: None,
                 plan: Some("pro".to_owned()),
+                credential_source: None,
             }),
         );
         assert_eq!(identity.plan.as_deref(), Some("pro"));

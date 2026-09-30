@@ -9,6 +9,7 @@
 
 pub mod claude;
 pub mod codex;
+pub mod command_code;
 pub mod credentials;
 pub mod http;
 pub mod service_status;

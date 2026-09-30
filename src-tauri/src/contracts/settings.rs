@@ -265,6 +265,16 @@ impl ServicesSettings {
     }
 }
 
+/// Command Code 凭据读取偏好。自动模式按「CLI → Pi → OpenCode → 环境变量 → 手动」
+/// 依次尝试；手动模式只看用户填写的 API Key。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CommandCodeCredentialPreference {
+    #[default]
+    Automatic,
+    Manual,
+}
+
 /// 桌面悬浮窗位置（逻辑像素，左上角原点）。屏幕外或未设置时回落到默认右上角。
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -321,6 +331,8 @@ pub struct Settings {
     pub show_service_status: bool,
     /// 系统区域承载哪个额度窗口。
     pub menu_bar_window_mode: MenuBarWindowMode,
+    /// Command Code 的凭据读取偏好。
+    pub command_code_credential: CommandCodeCredentialPreference,
     pub services: ServicesSettings,
     pub hud: HudSettings,
     pub ranking_basis: RankingBasis,
@@ -347,6 +359,7 @@ impl Default for Settings {
             privacy_mode: false,
             show_service_status: true,
             menu_bar_window_mode: MenuBarWindowMode::Primary,
+            command_code_credential: CommandCodeCredentialPreference::default(),
             services: ServicesSettings::default(),
             hud: HudSettings::default(),
             ranking_basis: RankingBasis::default(),
@@ -399,6 +412,7 @@ pub struct SettingsUpdate {
     pub privacy_mode: Option<bool>,
     pub show_service_status: Option<bool>,
     pub menu_bar_window_mode: Option<MenuBarWindowMode>,
+    pub command_code_credential: Option<CommandCodeCredentialPreference>,
     pub services: Option<ServicesSettings>,
     pub hud: Option<HudSettings>,
     pub ranking_basis: Option<RankingBasis>,
@@ -433,6 +447,9 @@ impl SettingsUpdate {
         }
         if let Some(mode) = self.menu_bar_window_mode {
             settings.menu_bar_window_mode = mode;
+        }
+        if let Some(credential) = self.command_code_credential {
+            settings.command_code_credential = credential;
         }
         if let Some(services) = self.services {
             settings.services = services;
@@ -474,6 +491,10 @@ mod tests {
         assert_eq!(settings.menu_bar_window_mode, MenuBarWindowMode::Primary);
         assert_eq!(settings.ranking_basis, RankingBasis::Tokens);
         assert_eq!(settings.reset_time_display, ResetTimeDisplay::Duration);
+        assert_eq!(
+            settings.command_code_credential,
+            CommandCodeCredentialPreference::Automatic
+        );
         assert!(settings.check_updates_on_start);
         assert!(!settings.verbose_logging);
         assert!(!settings.hud.enabled);
