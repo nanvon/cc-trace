@@ -7,6 +7,7 @@
 //! [`QuotaProvider`] trait、[`ProviderFetchOutcome`] 与 `crate::contracts` 保持不变，
 //! 调度、命令与前端都不需要改动。
 
+pub mod antigravity;
 pub mod claude;
 pub mod codex;
 pub mod codex_reset_credits;

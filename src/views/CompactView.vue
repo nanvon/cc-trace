@@ -43,7 +43,7 @@ const origin = computed(() => (settings.status?.platform === "macos" ? "top" : "
 
 /** 播报总体状态，不逐个 Provider 重复播报无变化的刷新结果。 */
 const liveMessage = computed(() => {
-  const leader = presentOverall(quota.ordered);
+  const leader = presentOverall(quota.visible);
   return leader ? t(leader.presentation.titleKey) : "";
 });
 
@@ -52,7 +52,7 @@ const liveMessage = computed(() => {
  * 避免「点了没反应」被误判为按钮损坏。不做常驻倒计时，只在悬停时可见。
  */
 const refreshHint = computed(() => {
-  for (const provider of quota.ordered) {
+  for (const provider of quota.visible) {
     const remaining = countdown(provider.retryAfter);
     if (remaining !== null) {
       return `${t("status.rateLimited")}，${t("quota.retryIn", { time: remaining })}`;
@@ -207,7 +207,7 @@ onBeforeUnmount(() => {
 
     <header ref="headerRef" class="panel__header">
       <OverallSignal
-        :providers="quota.ordered"
+        :providers="quota.visible"
         variant="compact"
         :title-id="COMPACT_TITLE_ID"
         :title-tabindex="-1"
@@ -300,7 +300,7 @@ onBeforeUnmount(() => {
       <!-- 内层容器承担 lane 之间的排布，它的自然高度就是窗口该有的内容高度 -->
       <div ref="lanesInnerRef" class="panel__lanes-inner">
         <ProviderLane
-          v-for="provider in quota.ordered"
+          v-for="provider in quota.visible"
           :key="provider.subjectId"
           :provider="provider"
           variant="compact"

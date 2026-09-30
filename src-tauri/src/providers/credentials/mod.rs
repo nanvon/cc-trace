@@ -10,6 +10,7 @@
 //! 本模块的所有秘密都包在 [`Secret`] 里，它的 `Debug` 永远输出占位符，因此把凭据
 //! 结构整体写进日志或 panic 信息也不会泄露内容，见 `docs/日志与诊断.md` 第 5 节。
 
+pub mod antigravity;
 pub mod claude;
 pub mod claude_desktop;
 pub mod codex;

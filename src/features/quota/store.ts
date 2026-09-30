@@ -2,6 +2,7 @@ import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 
 import { presentOverall } from "../../lib/status";
+import { useSettingsStore } from "../settings/store";
 import { getQuotaSnapshot, refreshQuota } from "./api";
 import {
   PROVIDER_ORDER,
@@ -12,6 +13,7 @@ import {
 } from "./contracts";
 
 export const useQuotaStore = defineStore("quota", () => {
+  const settings = useSettingsStore();
   const providers = ref<ProviderSnapshot[]>([]);
   const loaded = ref(false);
 
@@ -29,7 +31,19 @@ export const useQuotaStore = defineStore("quota", () => {
     });
   });
 
-  const overall = computed(() => presentOverall(ordered.value));
+  /**
+   * 界面可见的额度主体。
+   *
+   * 设置里关闭「额度」的服务不显示——它的轮询也停了，留着只会显示一份过时快照。
+   * 设置还没加载时按「全部可见」处理，避免启动瞬间整片空白闪一下。
+   */
+  const visible = computed(() => {
+    const services = settings.settings?.services;
+    if (!services) return ordered.value;
+    return ordered.value.filter((provider) => services[provider.provider].quota);
+  });
+
+  const overall = computed(() => presentOverall(visible.value));
 
   const busy = computed(() => providers.value.some((provider) => provider.refresh !== "idle"));
 
@@ -65,6 +79,7 @@ export const useQuotaStore = defineStore("quota", () => {
     providers,
     loaded,
     ordered,
+    visible,
     overall,
     busy,
     load,

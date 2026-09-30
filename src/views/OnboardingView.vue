@@ -19,7 +19,7 @@ const { quota, settings, closeSurface } = useAppShell("onboarding");
 const initialCheckStarted = ref(false);
 
 const checks = computed(() =>
-  quota.ordered.map((provider) => {
+  quota.visible.map((provider) => {
     const presentation = presentProvider(provider);
     const waitingForCheck =
       !initialCheckStarted.value &&
@@ -39,7 +39,7 @@ const checks = computed(() =>
 
 /** 任一 Provider 没有凭据时，明确告诉用户仍然可以继续。 */
 const showsNoCredentialsHint = computed(() =>
-  quota.ordered.some((provider) => provider.availability === "no_credentials"),
+  quota.visible.some((provider) => provider.availability === "no_credentials"),
 );
 
 const showsKeychainNotice = computed(() => settings.status?.platform === "macos");

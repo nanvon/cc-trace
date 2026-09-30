@@ -20,6 +20,7 @@ use crate::contracts::{
     Settings, SettingsUpdate,
 };
 use crate::providers::QuotaProvider;
+use crate::providers::antigravity::AntigravityProvider;
 use crate::providers::claude::ClaudeProvider;
 use crate::providers::codex::CodexProvider;
 use crate::providers::command_code::CommandCodeProvider;
@@ -766,6 +767,10 @@ fn build_slots(
     insert(
         QuotaSubject::primary(ProviderId::Claude),
         ClaudeProvider::new(),
+    );
+    insert(
+        QuotaSubject::primary(ProviderId::Antigravity),
+        AntigravityProvider::new(),
     );
     insert(
         QuotaSubject::primary(ProviderId::Cursor),
