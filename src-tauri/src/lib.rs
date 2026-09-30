@@ -5,6 +5,7 @@
 pub mod app;
 pub mod commands;
 pub mod contracts;
+pub mod diagnostics;
 pub mod platform;
 // Provider 的取数结果就是 `ProviderFetchOutcome`（成功与失败同型，调度层按它分支），
 // 它带一份快照与身份，超过 clippy 的 128 字节阈值。这是有意的形态：每次刷新构造一次、
@@ -25,6 +26,7 @@ use platform::desktop::{
     self, COMPACT_WINDOW, MAIN_WINDOW, MainNavigationTarget, ONBOARDING_WINDOW,
     request_hide_compact,
 };
+use platform::floating::FLOATING_WINDOW;
 use platform::strings::Lang;
 use scheduler::RefreshTrigger;
 
@@ -45,10 +47,13 @@ pub fn run() {
                 let _ = desktop::show_window(app, ONBOARDING_WINDOW);
             }
         }))
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
+        // 悬浮窗右键菜单是应用级菜单；托盘菜单的事件也会到这里，靠 id 区分。
+        .on_menu_event(|app, event| platform::floating::on_menu_event(app, event.id().as_ref()))
         .setup(|app| {
             // 与 Swift 版 cc-bar 一致：平时是纯托盘的 accessory 应用，不出现在 Dock；
             // 只有主窗口打开期间才临时变成 regular，见 `platform::desktop::show_main` /
@@ -57,8 +62,17 @@ pub fn run() {
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
             let config_dir = app.path().app_config_dir()?;
-            let (core, _load_issue) = AppCore::new(config_dir);
+            let (core, _load_issue) = AppCore::new(config_dir.clone());
             let settings = core.settings();
+            diagnostics::log::init(config_dir.join("logs"), settings.verbose_logging);
+            diagnostics::log::info(
+                "app",
+                "startup",
+                &[
+                    ("version", env!("CARGO_PKG_VERSION")),
+                    ("os", std::env::consts::OS),
+                ],
+            );
 
             let status = commands::status::app_get_status();
             let lang = Lang::resolve(settings.language, &status.system_locale);
@@ -77,6 +91,9 @@ pub fn run() {
             // 缓存里已有快照时，菜单栏在第一次刷新完成前就显示上一份数值。
             core.emit_quota_state(&handle);
 
+            // 悬浮窗按设置显示；位置与屏幕外回落由平台层处理。
+            platform::floating::sync(&handle, &settings);
+
             // 已完成引导时启动后立即刷新。首次启动要先让用户看到权限说明，再由
             // 「检查本机」明确触发同一个刷新用例。
             if settings.onboarding.completed {
@@ -88,6 +105,19 @@ pub fn run() {
             // 官方服务状态不涉及凭据与权限，引导完成与否都立即拉取一次并进入
             // 5 分钟周期；失败保留旧值，不影响任何额度功能（ADR-0026）。
             app::start_auto_service_status(&core, &handle);
+
+            // 启动时按设置检查一次更新；失败只写日志与内存状态，不打扰用户。
+            if settings.check_updates_on_start {
+                let update_handle = handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    let status = diagnostics::update::check(env!("CARGO_PKG_VERSION")).await;
+                    let _ = tauri::Emitter::emit(
+                        &update_handle,
+                        commands::diagnostics::EVENT_UPDATE_STATUS,
+                        &status,
+                    );
+                });
+            }
 
             // 首次启动未完成时优先进入引导，不直接弹出紧凑面板。
             if !settings.onboarding.completed {
@@ -118,7 +148,7 @@ pub fn run() {
             WindowEvent::CloseRequested { api, .. }
                 if matches!(
                     window.label(),
-                    COMPACT_WINDOW | MAIN_WINDOW | ONBOARDING_WINDOW
+                    COMPACT_WINDOW | MAIN_WINDOW | ONBOARDING_WINDOW | FLOATING_WINDOW
                 ) =>
             {
                 api.prevent_close();
@@ -133,12 +163,22 @@ pub fn run() {
                     }
                 }
             }
+            // 悬浮窗被拖动：去抖后持久化位置并吸附屏幕边缘。
+            WindowEvent::Moved(_) if window.label() == FLOATING_WINDOW => {
+                platform::floating::on_moved(window.app_handle());
+            }
             _ => {}
         });
 
     #[cfg(debug_assertions)]
     let builder = builder.invoke_handler(tauri::generate_handler![
         commands::status::app_get_status,
+        commands::diagnostics::diagnostics_export,
+        commands::diagnostics::credential_sources_get,
+        commands::diagnostics::diagnostics_reveal_logs,
+        commands::diagnostics::update_check,
+        commands::diagnostics::update_status,
+        commands::diagnostics::update_open_release,
         commands::quota::quota_get_snapshot,
         commands::quota::quota_refresh,
         commands::codex_accounts::codex_reset_credits,
@@ -160,6 +200,9 @@ pub fn run() {
         commands::usage::usage_get_summary,
         commands::usage::usage_list_conversations,
         commands::usage::usage_list_conversation_projects,
+        commands::usage::usage_list_projects,
+        commands::usage::usage_get_project_breakdown,
+        commands::usage::usage_reveal_project,
         commands::usage::usage_get_conversation,
         commands::usage::usage_get_conversation_breakdown,
         commands::usage::usage_get_quota_history,
@@ -172,6 +215,8 @@ pub fn run() {
         commands::window::window_open_compact,
         commands::window::window_hide_compact,
         commands::window::window_set_compact_height,
+        commands::window::window_set_floating_size,
+        commands::window::window_floating_context_menu,
         commands::window::app_quit,
         commands::dev::dev_set_scenario,
     ]);
@@ -179,13 +224,23 @@ pub fn run() {
     #[cfg(not(debug_assertions))]
     let builder = builder.invoke_handler(tauri::generate_handler![
         commands::status::app_get_status,
+        commands::diagnostics::diagnostics_export,
+        commands::diagnostics::credential_sources_get,
+        commands::diagnostics::diagnostics_reveal_logs,
+        commands::diagnostics::update_check,
+        commands::diagnostics::update_status,
+        commands::diagnostics::update_open_release,
         commands::quota::quota_get_snapshot,
         commands::quota::quota_refresh,
+        commands::codex_accounts::codex_reset_credits,
         commands::codex_accounts::codex_accounts_get,
         commands::codex_accounts::codex_accounts_import,
         commands::codex_accounts::codex_accounts_update,
         commands::codex_accounts::codex_accounts_remove,
         commands::codex_accounts::codex_accounts_reorder,
+        commands::command_code::command_code_credential_state,
+        commands::command_code::command_code_set_api_key,
+        commands::command_code::command_code_clear_api_key,
         commands::service_status::service_status_get,
         commands::settings::settings_read,
         commands::settings::settings_update,
@@ -196,6 +251,9 @@ pub fn run() {
         commands::usage::usage_get_summary,
         commands::usage::usage_list_conversations,
         commands::usage::usage_list_conversation_projects,
+        commands::usage::usage_list_projects,
+        commands::usage::usage_get_project_breakdown,
+        commands::usage::usage_reveal_project,
         commands::usage::usage_get_conversation,
         commands::usage::usage_get_conversation_breakdown,
         commands::usage::usage_get_quota_history,
@@ -208,6 +266,8 @@ pub fn run() {
         commands::window::window_open_compact,
         commands::window::window_hide_compact,
         commands::window::window_set_compact_height,
+        commands::window::window_set_floating_size,
+        commands::window::window_floating_context_menu,
         commands::window::app_quit,
     ]);
 

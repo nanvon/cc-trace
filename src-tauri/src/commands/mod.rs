@@ -6,6 +6,7 @@
 
 pub mod codex_accounts;
 pub mod command_code;
+pub mod diagnostics;
 pub mod quota;
 pub mod service_status;
 pub mod settings;

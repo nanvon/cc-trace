@@ -3,10 +3,12 @@ import { computed, ref } from "vue";
 
 import type { ProviderId } from "../quota/contracts";
 import { useSettingsStore } from "../settings/store";
-import { getUsageScanStatus, getUsageSummary, startUsageScan } from "./api";
+import { getUsageScanStatus, getUsageSummary, listConversations, startUsageScan } from "./api";
 import type {
+  UsageConversation,
   UsageDashboardData,
   UsageDashboardRange,
+  UsageGranularity,
   UsageGroupBy,
   UsageProviderCosts,
   UsageScanStatus,
@@ -16,10 +18,12 @@ import type {
 } from "./contracts";
 import { USAGE_SOURCES } from "./contracts";
 import { EMPTY_PROVIDER_COSTS, buildProviderCosts } from "./presentation";
+import { conversationSortFor } from "./overview";
 import {
   usageChartRange,
   usageCostRanges,
   usageDashboardRanges,
+  usageGranularityPresets,
   usagePreviousRange,
 } from "./ranges";
 
@@ -74,6 +78,17 @@ export const useUsageStore = defineStore("usage", () => {
   const completedInSession = ref(false);
   const dashboard = ref<UsageDashboardData>(emptyDashboard());
   const dashboardRange = ref<UsageDashboardRange>(usageDashboardRanges().thisMonth);
+  /**
+   * 统计粒度（日／周／月）：与 `dashboardRange` 一起构成概览、对话、项目三页共享的
+   * 「粒度＋范围」状态，切换视图不丢失。全局内存态，不持久化。
+   */
+  const granularity = ref<UsageGranularity>("day");
+  /** 概览「用量构成」的项目维度：按项目分组的汇总（键空串＝未归属）。 */
+  const overviewProjects = ref<UsageSummary | null>(null);
+  /** 概览「高消耗对话」：范围内按排行口径取前 5。 */
+  const overviewTopConversations = ref<UsageConversation[]>([]);
+  const overviewLoading = ref(false);
+  let overviewRequest = 0;
   const dashboardLoaded = ref(false);
   const dashboardLoading = ref(false);
   const dashboardUnavailable = ref(false);
@@ -243,7 +258,7 @@ export const useUsageStore = defineStore("usage", () => {
     dashboardLoading.value = true;
     dashboardUnavailable.value = false;
     dashboard.value = emptyDashboard();
-    const chartRange = usageChartRange(range);
+    const chartRange = usageChartRange(range, granularity.value);
     const previousRange = usagePreviousRange(range);
 
     await readStatus();
@@ -286,6 +301,60 @@ export const useUsageStore = defineStore("usage", () => {
     dashboardUnavailable.value = results.some((result) => result.status === "rejected");
     dashboardLoaded.value = true;
     dashboardLoading.value = false;
+  }
+
+  /**
+   * 切换粒度：当前范围不在新粒度的可选组里（`all`／`custom` 三个粒度共用）时，
+   * 回到新粒度的第一档（当前周期），然后重载 Dashboard。
+   */
+  async function setGranularity(next: UsageGranularity): Promise<void> {
+    if (granularity.value === next) return;
+    granularity.value = next;
+    const current = dashboardRange.value;
+    const presets = usageGranularityPresets(next);
+    const keep = current.preset === "custom" || presets.some((preset) => preset === current.preset);
+    const range = keep ? current : usageDashboardRanges()[presets[0] ?? "today"];
+    await loadDashboard(range);
+  }
+
+  /**
+   * 概览独有的两组数据：项目维度构成与高消耗对话。与 `loadDashboard` 分开，
+   * 对话页、项目页切换范围时不必多做这两次查询。
+   */
+  async function loadOverview(range: UsageDashboardRange, basis: "tokens" | "cost"): Promise<void> {
+    const request = ++overviewRequest;
+    overviewLoading.value = true;
+    const sources = dashboardSources.value;
+    if (sources.length === 0) {
+      overviewProjects.value = null;
+      overviewTopConversations.value = [];
+      overviewLoading.value = false;
+      return;
+    }
+    const filter = {
+      from: range.from,
+      to: range.to,
+      sources,
+      model: null,
+      speed: null,
+      project: null,
+    } as const;
+    const [projects, conversations] = await Promise.allSettled([
+      getUsageSummary({ filter: { ...filter, sources: [...sources] }, groupBy: "project" }),
+      listConversations({
+        filter: { ...filter, sources: [...sources] },
+        search: null,
+        project: null,
+        sort: conversationSortFor(basis),
+        limit: 5,
+        offset: 0,
+      }),
+    ]);
+    if (request !== overviewRequest) return;
+    overviewProjects.value = projects.status === "fulfilled" ? projects.value : null;
+    overviewTopConversations.value =
+      conversations.status === "fulfilled" ? conversations.value.items : [];
+    overviewLoading.value = false;
   }
 
   /** 手动触发一次增量扫描；返回是否已启动（扫描中或启动成功）。 */
@@ -338,6 +407,12 @@ export const useUsageStore = defineStore("usage", () => {
     dashboardSources,
     selectSource,
     dashboardRange,
+    granularity,
+    setGranularity,
+    overviewProjects,
+    overviewTopConversations,
+    overviewLoading,
+    loadOverview,
     dashboardLoaded,
     dashboardLoading,
     dashboardUnavailable,

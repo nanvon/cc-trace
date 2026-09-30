@@ -3,9 +3,12 @@ import { describe, expect, it } from "vitest";
 import {
   customUsageRange,
   usageCostRanges,
+  usageBucketStart,
   usageChartRange,
   usageDashboardRanges,
   usageDatePickerRange,
+  usageDayKey,
+  usageGranularityPresets,
   usagePreviousRange,
   usageRangePresets,
 } from "./ranges";
@@ -82,12 +85,37 @@ describe("usageDashboardRanges", () => {
 });
 
 describe("usageChartRange", () => {
-  it("adds a 14-day local calendar context to a single-day range", () => {
+  it("adds a 30-day local calendar context to a single-day range", () => {
     const today = usageDashboardRanges(new Date(2026, 6, 29, 15)).today;
     const chart = usageChartRange(today);
 
-    expect(new Date(chart.from ?? "").toDateString()).toBe(new Date(2026, 6, 16).toDateString());
+    expect(new Date(chart.from ?? "").toDateString()).toBe(new Date(2026, 5, 30).toDateString());
     expect(chart.to).toBe(today.to);
+  });
+
+  it("adds a 14-period context to a single week or month at that granularity", () => {
+    const now = new Date(2026, 6, 29, 15);
+    const lastWeek = usageDashboardRanges(now).lastWeek;
+    const weekChart = usageChartRange(lastWeek, "week");
+    // 上周一 7-20 往前 13 周 = 4-20
+    expect(new Date(weekChart.from ?? "").toDateString()).toBe(
+      new Date(2026, 3, 20).toDateString(),
+    );
+
+    const thisMonth = usageDashboardRanges(now).thisMonth;
+    const monthChart = usageChartRange(thisMonth, "month");
+    expect(new Date(monthChart.from ?? "").toDateString()).toBe(
+      new Date(2025, 5, 1).toDateString(),
+    );
+  });
+
+  it("does not add context when the range spans several periods", () => {
+    const now = new Date(2026, 6, 29);
+    const last4Weeks = usageDashboardRanges(now).last4Weeks;
+    expect(usageChartRange(last4Weeks, "week")).toEqual(last4Weeks);
+    expect(usageChartRange(usageDashboardRanges(now).all, "day")).toEqual(
+      usageDashboardRanges(now).all,
+    );
   });
 
   it("keeps multi-day ranges unchanged", () => {
@@ -96,10 +124,58 @@ describe("usageChartRange", () => {
   });
 });
 
+describe("granularity helpers", () => {
+  it("buckets days into Monday weeks and calendar months", () => {
+    const wednesday = new Date(2026, 6, 29);
+    expect(usageBucketStart(wednesday, "day").getDate()).toBe(29);
+    expect(usageBucketStart(wednesday, "week").getDate()).toBe(27);
+    const sunday = new Date(2026, 6, 26);
+    expect(usageBucketStart(sunday, "week").getDate()).toBe(20);
+    expect(usageDayKey(usageBucketStart(wednesday, "month"))).toBe("2026-07-01");
+  });
+
+  it("offers a per-granularity preset list that always includes all", () => {
+    expect(usageGranularityPresets("week")).toEqual([
+      "thisWeek",
+      "lastWeek",
+      "last4Weeks",
+      "last12Weeks",
+      "all",
+    ]);
+    expect(usageGranularityPresets("month")).toContain("last6Months");
+    expect(usageGranularityPresets("day")).toContain("last30Days");
+  });
+
+  it("builds the extra week and month presets from local calendar boundaries", () => {
+    const ranges = usageDashboardRanges(new Date(2026, 6, 29));
+    expect(usageDayKey(new Date(ranges.lastWeek.from ?? ""))).toBe("2026-07-20");
+    expect(usageDayKey(new Date(ranges.lastWeek.to ?? ""))).toBe("2026-07-27");
+    expect(usageDayKey(new Date(ranges.last12Weeks.from ?? ""))).toBe("2026-05-11");
+    expect(usageDayKey(new Date(ranges.lastMonth.from ?? ""))).toBe("2026-06-01");
+    expect(usageDayKey(new Date(ranges.lastMonth.to ?? ""))).toBe("2026-07-01");
+    expect(usageDayKey(new Date(ranges.last6Months.from ?? ""))).toBe("2026-02-01");
+  });
+});
+
 describe("usagePreviousRange", () => {
+  it("compares an in-progress week, month or year with the same elapsed days of the previous one", () => {
+    const now = new Date(2026, 6, 29); // 周三
+    const ranges = usageDashboardRanges(now);
+    const week = usagePreviousRange(ranges.thisWeek);
+    expect([
+      usageDayKey(new Date(week?.from ?? "")),
+      usageDayKey(new Date(week?.to ?? "")),
+    ]).toEqual(["2026-07-20", "2026-07-23"]);
+    const month = usagePreviousRange(ranges.thisMonth);
+    expect([
+      usageDayKey(new Date(month?.from ?? "")),
+      usageDayKey(new Date(month?.to ?? "")),
+    ]).toEqual(["2026-06-01", "2026-06-30"]);
+  });
+
   it("returns an equal-length range immediately before the current one", () => {
     const now = new Date(2026, 6, 29);
-    const week = usageDashboardRanges(now).thisWeek;
+    const week = usageDashboardRanges(now).last7Days;
     const previous = usagePreviousRange(week);
 
     expect(previous).not.toBeNull();

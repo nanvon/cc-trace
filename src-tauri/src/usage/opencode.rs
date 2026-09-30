@@ -149,7 +149,7 @@ pub fn scan_opencode(db: &UsageDb, db_path: &Path) -> Result<OpencodeScanOutcome
                     title,
                     project_hint: identity.hint,
                     project_key: identity.path.clone(),
-                    worktree_path: identity.path,
+                    worktree_path: identity.worktree,
                     is_sidechain: false,
                     unattributed: false,
                     occurred_at,

@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "floating",
+  "description": "Capability for the desktop floating HUD window. core:default enables invoke and event listening only. core:window:allow-start-dragging backs one user-facing behaviour: dragging the HUD by its body to reposition it. The window gets no hide, close or resize permission; showing, hiding, sizing and position persistence are handled by Rust commands and the platform layer.",
+  "windows": ["floating"],
+  "permissions": ["core:default", "core:window:allow-start-dragging"]
+}

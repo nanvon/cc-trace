@@ -12,6 +12,7 @@ mod opencode;
 mod parser;
 pub mod pricing;
 mod pricing_remote;
+pub(crate) mod projects;
 mod title_index;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -32,6 +33,7 @@ use crate::contracts::{
     QuotaCycleSegmentView, QuotaCycleUsage, QuotaCycleView, QuotaHistory, QuotaHistoryQuery,
     QuotaSnapshot, QuotaWindowKind, UsageConversation, UsageConversationBreakdown,
     UsageConversationPage, UsageConversationProjectOption, UsageConversationQuery, UsageFilter,
+    UsageProjectBreakdown, UsageProjectBreakdownQuery, UsageProjectPage, UsageProjectQuery,
     UsageRepriceResult, UsageScanState, UsageScanStatus, UsageSource, UsageSummary,
     UsageSummaryQuery,
 };
@@ -480,6 +482,65 @@ impl UsageService {
     pub fn summary(&self, mut query: UsageSummaryQuery) -> Result<UsageSummary, UsageError> {
         normalize_filter(&mut query.filter)?;
         self.db.summary(&query).map_err(Into::into)
+    }
+
+    pub fn projects(&self, mut query: UsageProjectQuery) -> Result<UsageProjectPage, UsageError> {
+        normalize_filter(&mut query.filter)?;
+        query.search = normalize_optional(&query.search)?;
+        let limit = query.limit.unwrap_or(DEFAULT_LIMIT);
+        if !(1..=MAX_LIMIT).contains(&limit) {
+            return Err(UsageError::InvalidQuery);
+        }
+        let offset = query.offset.unwrap_or(0);
+        if i64::try_from(offset).is_err() {
+            return Err(UsageError::InvalidQuery);
+        }
+        if let Some(sources) = &query.filter.sources
+            && sources.len() > 8
+        {
+            return Err(UsageError::InvalidQuery);
+        }
+        let mut page = self.db.projects(&query, limit, offset)?;
+        let home = crate::providers::credentials::home_dir();
+        for item in &mut page.items {
+            projects::annotate_summary(item, home.as_deref());
+        }
+        Ok(page)
+    }
+
+    /// 「在文件管理器中显示」的目标校验：只接受库里出现过的项目根或 worktree 目录，
+    /// 且目录当前存在。返回可以交给平台层打开的路径。
+    pub fn revealable_project_path(&self, path: &str) -> Result<Option<PathBuf>, UsageError> {
+        let path = path.trim();
+        if path.is_empty()
+            || path.chars().count() > MAX_FILTER_LENGTH
+            || projects::is_reserved_key(path)
+        {
+            return Err(UsageError::InvalidQuery);
+        }
+        if !self.db.is_known_project_path(path)? {
+            return Ok(None);
+        }
+        let path = PathBuf::from(path);
+        Ok(path.is_dir().then_some(path))
+    }
+
+    /// 项目明细。`key` 空串为未归属分组；保留键（`@none`、`@system`）与普通项目键同样处理。
+    pub fn project_breakdown(
+        &self,
+        mut query: UsageProjectBreakdownQuery,
+    ) -> Result<UsageProjectBreakdown, UsageError> {
+        normalize_filter(&mut query.filter)?;
+        query.key = query.key.trim().to_owned();
+        if query.key.chars().count() > MAX_FILTER_LENGTH {
+            return Err(UsageError::InvalidQuery);
+        }
+        if let Some(sources) = &query.filter.sources
+            && sources.len() > 8
+        {
+            return Err(UsageError::InvalidQuery);
+        }
+        self.db.project_breakdown(&query).map_err(Into::into)
     }
 
     pub fn conversations(

@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::path::Path;
 
 use chrono::{DateTime, Local, Utc};
 use serde_json::Value;
@@ -43,6 +42,7 @@ pub fn parse_codex_line(
                 let identity = project_identity(cwd);
                 cursor.project_hint = identity.hint;
                 cursor.project_path = identity.path;
+                cursor.project_worktree = identity.worktree;
             }
             ParsedLine::Ignored
         }
@@ -167,8 +167,11 @@ pub fn parse_codex_line(
                         .cloned()
                         .or_else(|| cursor.pending_title.clone()),
                     project_hint: cursor.project_hint.clone(),
-                    project_key: cursor.project_path.clone(),
-                    worktree_path: cursor.project_path.clone(),
+                    project_key: cursor
+                        .project_path
+                        .clone()
+                        .or_else(|| project_identity("").path),
+                    worktree_path: cursor.project_worktree.clone(),
                     is_sidechain: false,
                     unattributed: false,
                     occurred_at,
@@ -273,7 +276,7 @@ pub fn parse_claude_line(
         .get("cwd")
         .and_then(Value::as_str)
         .map(project_identity)
-        .unwrap_or_default();
+        .unwrap_or_else(|| project_identity(""));
 
     ParsedLine::Fact {
         entry: Box::new(entry),
@@ -286,7 +289,7 @@ pub fn parse_claude_line(
                 .or_else(|| cursor.pending_title.clone()),
             project_hint: identity.hint,
             project_key: identity.path.clone(),
-            worktree_path: identity.path,
+            worktree_path: identity.worktree,
             is_sidechain: value
                 .get("isSidechain")
                 .and_then(Value::as_bool)
@@ -330,6 +333,7 @@ pub fn parse_pi_line(line: &[u8], cursor: &mut PiCursor, filename_key: &str) -> 
                 let identity = project_identity(cwd);
                 cursor.project_hint = identity.hint;
                 cursor.project_path = identity.path;
+                cursor.project_worktree = identity.worktree;
             }
             ParsedLine::Ignored
         }
@@ -450,8 +454,11 @@ fn pi_usage_fact(
             source: UsageSource::Pi,
             title,
             project_hint: cursor.project_hint.clone(),
-            project_key: cursor.project_path.clone(),
-            worktree_path: cursor.project_path.clone(),
+            project_key: cursor
+                .project_path
+                .clone()
+                .or_else(|| project_identity("").path),
+            worktree_path: cursor.project_worktree.clone(),
             is_sidechain: false,
             unattributed: false,
             occurred_at,
@@ -728,45 +735,41 @@ fn normalize_speed(value: Option<&str>) -> UsageSpeed {
 
 /// 一个对话的项目归属：展示名、项目身份键与对话工作目录。
 ///
-/// 规范化只做纯文本处理，**不访问文件系统**：受保护目录（桌面、文稿、下载等）
-/// 与家目录以外的路径都不允许为归组触发系统授权弹窗。Git 根与 worktree 归组
-/// 由扫描层在允许访问的目录上补全，见 `docs/决策/ADR-0034-项目身份与未归属口径.md`。
+/// 解析交给 `projects::resolve_cached`：家目录以外与受保护目录（桌面、文稿、下载等）
+/// 只做纯文本归组、不访问文件系统，避免为归组触发系统授权弹窗；其余路径解析 Git 根，
+/// worktree 归入主仓库。见 `docs/决策/ADR-0034-项目身份与未归属口径.md`。
+///
+/// 「无明确项目」与「系统任务」用保留键 `@none`、`@system`，不与未归属（key 空串）合并。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct ProjectIdentity {
     pub hint: Option<String>,
-    /// 项目身份键；当前等于规范化后的对话工作目录路径。
+    /// 项目身份键：Git 根、规范化工作目录，或保留键。
     pub path: Option<String>,
+    /// 对话自身的工作目录；保留键项目没有。
+    pub worktree: Option<String>,
 }
 
 pub(crate) fn project_identity(value: &str) -> ProjectIdentity {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return ProjectIdentity::default();
-    }
-    let normalized = normalize_project_path(trimmed);
-    ProjectIdentity {
-        hint: project_hint(trimmed),
-        path: (!normalized.is_empty()).then_some(normalized),
-    }
-}
+    use super::projects::{self, ProjectStatus};
 
-/// 路径尾段作为展示名。不调用文件系统。
-pub(crate) fn project_hint(value: &str) -> Option<String> {
-    Path::new(value)
-        .file_name()
-        .and_then(|value| value.to_str())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| value.chars().take(120).collect())
-}
-
-/// 去掉尾部分隔符并限长。保留原分隔符，Windows 路径仍以反斜杠展示。
-fn normalize_project_path(value: &str) -> String {
-    let mut path = value.to_owned();
-    while path.len() > 1 && (path.ends_with('/') || path.ends_with('\\')) {
-        path.pop();
+    let resolution = projects::resolve_cached(value);
+    match resolution.status {
+        ProjectStatus::Unassigned => ProjectIdentity {
+            hint: None,
+            path: Some(projects::KEY_NONE.to_owned()),
+            worktree: None,
+        },
+        ProjectStatus::System => ProjectIdentity {
+            hint: None,
+            path: Some(projects::KEY_SYSTEM.to_owned()),
+            worktree: resolution.worktree_path,
+        },
+        _ => ProjectIdentity {
+            hint: resolution.hint,
+            path: resolution.project_key,
+            worktree: resolution.worktree_path,
+        },
     }
-    path.chars().take(1024).collect()
 }
 
 fn opaque_key(namespace: &str, value: &str) -> String {
@@ -815,6 +818,7 @@ mod tests {
             pending_title: None,
             filename_key: None,
             project_path: None,
+            project_worktree: None,
         };
         let parsed = parse_pi_line(
             &line(
@@ -883,6 +887,7 @@ mod tests {
             pending_title: None,
             filename_key: None,
             project_path: None,
+            project_worktree: None,
         };
         let parsed = parse_pi_line(
             &line(
@@ -1355,5 +1360,28 @@ mod tests {
             clean_title(&long).map(|value| value.chars().count()),
             Some(80)
         );
+    }
+    #[test]
+    fn project_identity_maps_empty_and_system_cwd_to_reserved_keys() {
+        let none = project_identity("");
+        assert_eq!(none.path.as_deref(), Some("@none"));
+        assert_eq!(none.worktree, None);
+        assert_eq!(project_identity("   ").path.as_deref(), Some("@none"));
+
+        let system = project_identity("/tmp/ccbar-codex-wakeup");
+        assert_eq!(system.path.as_deref(), Some("@system"));
+        assert_eq!(system.worktree.as_deref(), Some("/tmp/ccbar-codex-wakeup"));
+    }
+
+    #[test]
+    fn project_identity_keeps_unchecked_path_as_project_and_worktree() {
+        // 家目录以外：不查文件系统，键与 worktree 都是规范化后的原路径。
+        let identity = project_identity("/definitely/not/home/demo/");
+        assert_eq!(identity.path.as_deref(), Some("/definitely/not/home/demo"));
+        assert_eq!(
+            identity.worktree.as_deref(),
+            Some("/definitely/not/home/demo")
+        );
+        assert_eq!(identity.hint.as_deref(), Some("demo"));
     }
 }

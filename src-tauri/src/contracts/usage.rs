@@ -423,6 +423,13 @@ pub struct UsageProjectSummary {
     /// 完整项目路径；未归属项目为 `None`。
     pub path: Option<String>,
     pub unattributed: bool,
+    /// 除项目根以外的 worktree 工作目录数。
+    pub worktree_count: i64,
+    /// 目录状态：`available`、`unavailable`、`unverified`（不允许检查，不声称存在）、
+    /// `reserved`（保留键项目）或 `unattributed`。由服务层在查询后补全。
+    pub status: String,
+    /// 是否为 Git 仓库；只有 `available` 且做过检查时才有值。
+    pub is_git: Option<bool>,
     pub conversation_count: i64,
     pub active_days: i64,
     pub first_at: Option<String>,
@@ -443,6 +450,74 @@ pub struct UsageProjectPage {
     pub total: i64,
     pub limit: u32,
     pub offset: u64,
+}
+
+/// 项目明细查询：项目身份键（空串为未归属）与统一过滤（时间范围、可见服务）。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageProjectBreakdownQuery {
+    pub key: String,
+    #[serde(default)]
+    pub filter: UsageFilter,
+}
+
+/// 分支行；`branch` 为空串表示该数据源没有记录分支。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageProjectBranchRow {
+    pub branch: String,
+    pub conversation_count: i64,
+    pub last_at: String,
+    pub tokens: UsageTokenTotals,
+    pub cost: UsageCostTotals,
+}
+
+/// worktree 行：`path` 是对话自身的工作目录（与项目键相同时即主仓库）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageProjectWorktreeRow {
+    pub path: String,
+    pub branch: Option<String>,
+    pub conversation_count: i64,
+    pub last_at: String,
+    pub tokens: UsageTokenTotals,
+    pub cost: UsageCostTotals,
+}
+
+/// 全部时间汇总（不受时间范围限制，仍受可见服务限制）。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageProjectAllTime {
+    pub first_at: Option<String>,
+    pub conversation_count: i64,
+    pub entry_count: i64,
+    pub tokens: UsageTokenTotals,
+    pub cost: UsageCostTotals,
+}
+
+/// 未归属分组按来源拆分的一行。`granularity` 为 `day`（Cursor 远端计量）或 `request`（补录）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageProjectUnattributedRow {
+    pub source: UsageSource,
+    pub granularity: String,
+    pub first_day: String,
+    pub last_day: String,
+    pub entry_count: i64,
+    pub tokens: UsageTokenTotals,
+    pub cost: UsageCostTotals,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageProjectBreakdown {
+    /// 范围内按分支聚合，费用降序。
+    pub branches: Vec<UsageProjectBranchRow>,
+    /// 范围内按工作目录聚合；项目只有一个工作目录（即项目根）时为空。
+    pub worktrees: Vec<UsageProjectWorktreeRow>,
+    pub all_time: UsageProjectAllTime,
+    /// 仅未归属分组（`key` 为空串）有值。
+    pub unattributed_sources: Vec<UsageProjectUnattributedRow>,
 }
 
 /// 把十进制定点纳秒值序列化成不丢精度的字符串。

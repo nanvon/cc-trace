@@ -18,6 +18,7 @@ import { use } from "echarts/core";
 import { CanvasRenderer } from "echarts/renderers";
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
+import { usePrivacy } from "../lib/privacy";
 import VChart from "vue-echarts";
 
 use([LineChart, GridComponent, TooltipComponent, CanvasRenderer]);
@@ -70,6 +71,8 @@ const seriesByProvider = computed(() => {
 
 const cycleAccounts = computed(() => groupCycles({ cycles: cycles.value, generatedAt: "" }));
 
+const privacy = usePrivacy();
+
 function accountKey(account: QuotaCycleAccount): string {
   return `${account.provider}|${account.identityKey}`;
 }
@@ -88,7 +91,12 @@ function selectWindow(account: QuotaCycleAccount, window: QuotaCycleWindow): voi
 
 /** 主体展示名：导入账号用别名/邮箱，主账号用服务名。 */
 function accountLabel(account: QuotaCycleAccount): string {
-  return account.label ?? t(`provider.${account.provider}`);
+  // 导入账号的名称可能是邮箱；隐私模式下遮挡，只影响展示。
+  return account.label
+    ? account.label.includes("@")
+      ? privacy.account(account.label)
+      : account.label
+    : t(`provider.${account.provider}`);
 }
 
 /** 剩余时长：`3h 12m`／`2d 4h`／`即将重置`。 */

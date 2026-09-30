@@ -10,21 +10,28 @@ import { DatePicker as VDatePicker } from "v-calendar";
 import "v-calendar/style.css";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
 
+import UsageCompositionPanel from "../components/UsageCompositionPanel.vue";
 import UsageDailyChart from "../components/UsageDailyChart.vue";
-import UsageModelTable from "../components/UsageModelTable.vue";
-import UsageProviderCard from "../components/UsageProviderCard.vue";
+import UsageTopConversations from "../components/UsageTopConversations.vue";
 import { navigateMain, onMainNavigation } from "../features/app/navigation";
-import type { UsageDashboardRange, UsageSource } from "../features/usage/contracts";
+import { useSettingsStore } from "../features/settings/store";
+import type {
+  UsageDashboardRange,
+  UsageGranularity,
+  UsageSource,
+} from "../features/usage/contracts";
+import { addTotals, emptyTotals, type UsageTotals } from "../features/usage/overview";
 import {
   customUsageRange,
   usageChartRange,
+  usageChartUsesContext,
   usageDashboardRanges,
   usageDatePickerRange,
-  usageRangePresets,
+  usageGranularityPresets,
   type UsageRangePreset,
 } from "../features/usage/ranges";
 import { useUsageStore } from "../features/usage/store";
@@ -33,12 +40,23 @@ import { formatUsageCost, presentUsageTokens } from "../features/usage/presentat
 const { t, locale } = useI18n();
 const router = useRouter();
 const usage = useUsageStore();
+const settings = useSettingsStore();
 
-const presets = usageRangePresets();
-const providerSources = computed(() => usage.dashboardSources);
-const currentPreset = ref<UsageDashboardRange["preset"]>("today");
-const initialRange = usageDashboardRanges().today;
-const selectedRange = ref<UsageDashboardRange>(initialRange);
+const GRANULARITIES: readonly UsageGranularity[] = ["day", "week", "month"] as const;
+const EXTRA_RANGE_LABELS = new Set<string>([
+  "lastWeek",
+  "last4Weeks",
+  "last12Weeks",
+  "lastMonth",
+  "last6Months",
+]);
+
+/** 粒度与范围是概览、对话、项目三页共享的状态，放在 usage store，切换视图不丢失。 */
+const granularity = computed(() => usage.granularity);
+const selectedRange = computed<UsageDashboardRange>(() => usage.dashboardRange);
+const currentPreset = computed(() => selectedRange.value.preset);
+const presets = computed<UsageRangePreset[]>(() => usageGranularityPresets(granularity.value));
+const rankingBasis = computed(() => settings.settings?.rankingBasis ?? "tokens");
 type DateRangeInput = { start: Date; end: Date } | null;
 
 function dateRangeInputValue(range: UsageDashboardRange): DateRangeInput {
@@ -46,7 +64,10 @@ function dateRangeInputValue(range: UsageDashboardRange): DateRangeInput {
   return dates ? { start: dates[0], end: dates[1] } : null;
 }
 
-const customDates = ref<DateRangeInput>(dateRangeInputValue(initialRange));
+const customDates = ref<DateRangeInput>(dateRangeInputValue(usage.dashboardRange));
+watch(selectedRange, (range) => {
+  customDates.value = dateRangeInputValue(range);
+});
 const calendarLocale = computed(() =>
   locale.value.toLowerCase().startsWith("zh") ? "zh-CN" : "en-US",
 );
@@ -54,19 +75,39 @@ const todayDate = computed(() => {
   const today = new Date();
   return new Date(today.getFullYear(), today.getMonth(), today.getDate());
 });
-const chartRange = computed(() => usageChartRange(selectedRange.value));
-const chartUsesContextWindow = computed(
-  () =>
-    chartRange.value.from !== selectedRange.value.from ||
-    chartRange.value.to !== selectedRange.value.to,
+const chartRange = computed(() => usageChartRange(selectedRange.value, granularity.value));
+const chartUsesContextWindow = computed(() =>
+  usageChartUsesContext(selectedRange.value, granularity.value),
 );
 
 const sourceSummary = computed(() => usage.visibleSourceSummary);
 const allServicesOff = computed(() => usage.visibleSources.length === 0);
 const dashboardReady = computed(() => usage.dashboardLoaded && !usage.dashboardLoading);
-const providerTotalTokens = computed(() => {
-  if (!dashboardReady.value || usage.dashboardUnavailable || !sourceSummary.value) return 0;
-  return sourceSummary.value.tokens.totalTokens;
+const providerSources = computed(() => usage.dashboardSources);
+
+/** 上一区间合计：只计当前可见服务（前区间 source 汇总包含被过滤的服务，不能直接用总计）。 */
+const previousTotals = computed<UsageTotals | null>(() => {
+  const previous = usage.dashboardPrevious;
+  if (!previous) return null;
+  const visible = new Set<string>(providerSources.value);
+  const totals = emptyTotals();
+  for (const row of previous.rows) {
+    if (visible.has(row.key)) addTotals(totals, row);
+  }
+  return totals;
+});
+
+/** 高消耗对话占比的分母：概览合计。 */
+const totalsForShare = computed<UsageTotals | null>(() => {
+  const summary = sourceSummary.value;
+  if (!summary) return null;
+  return {
+    entryCount: summary.entryCount,
+    requestCount: summary.requestCount,
+    tokens: summary.tokens,
+    fast: summary.fast,
+    cost: summary.cost,
+  };
 });
 
 /** 前区间等长对比；无 previous（all/custom）或上一期无数据时返回 null。 */
@@ -91,6 +132,7 @@ const kpiCards = computed<UsageKpiCard[]>(() => {
   const tokens = totalTokens.value;
   const cost = totalCost.value;
   const previousSummary = usage.dashboardPrevious;
+  const previous = previousTotals.value;
   const providerCost = (source: UsageSource): string => {
     const row = sourceSummary.value?.rows.find((candidate) => candidate.key === source);
     if (!ready || !row || row.entryCount === 0) return noValue;
@@ -106,21 +148,21 @@ const kpiCards = computed<UsageKpiCard[]>(() => {
   return [
     {
       key: "total-tokens",
-      label: t("main.totalTokens"),
+      label: t("overview.kpi.totalTokens"),
       text: tokens?.value ?? noValue,
       ...(tokens?.unit ? { unit: tokens.unit } : {}),
       delta: deltaPercent(
         sourceSummary.value?.tokens.totalTokens ?? 0,
-        previousSummary?.tokens.totalTokens,
+        previous?.tokens.totalTokens,
       ),
     },
     {
       key: "total-cost",
-      label: t("main.totalCost"),
+      label: t("overview.kpi.apiEquivalent"),
       text: cost ?? noValue,
       delta: deltaPercent(
         sourceSummary.value?.cost.apiEquivalentCostNanos ?? 0,
-        previousSummary?.cost.apiEquivalentCostNanos,
+        previous?.cost.apiEquivalentCostNanos,
       ),
     },
     ...providerSources.value.map((source) => ({
@@ -252,47 +294,81 @@ function formatDateRangeInput(start?: string, end?: string): string {
   return [start, end].filter(Boolean).join(" – ");
 }
 
-function selectPreset(preset: UsageRangePreset): void {
-  const range = usageDashboardRanges()[preset];
-  currentPreset.value = preset;
-  customDates.value = dateRangeInputValue(range);
-  selectedRange.value = range;
-  void usage.loadDashboard(selectedRange.value);
+function rangeLabel(preset: UsageRangePreset): string {
+  return EXTRA_RANGE_LABELS.has(preset) ? t(`overview.range.${preset}`) : t(`main.range.${preset}`);
 }
 
-function sameDate(left: Date, right: Date): boolean {
-  return (
-    left.getFullYear() === right.getFullYear() &&
-    left.getMonth() === right.getMonth() &&
-    left.getDate() === right.getDate()
-  );
+function selectPreset(preset: UsageRangePreset): void {
+  void usage.loadDashboard(usageDashboardRanges()[preset]);
+}
+
+function selectGranularity(next: UsageGranularity): void {
+  void usage.setGranularity(next);
+}
+
+/** 「自定义」：以当前范围的日期（无则近 7 天）作为起点，之后由日期选择器调整。 */
+function selectCustom(): void {
+  if (currentPreset.value === "custom") return;
+  const dates = usageDatePickerRange(selectedRange.value);
+  const today = todayDate.value;
+  const from = dates?.[0] ?? new Date(today.getFullYear(), today.getMonth(), today.getDate() - 6);
+  const to = dates?.[1] ?? today;
+  void usage.loadDashboard(customUsageRange(from, to));
 }
 
 function handleCustomRange(value: DateRangeInput): void {
   if (!value?.start || !value.end) return;
   const from = new Date(value.start.getFullYear(), value.start.getMonth(), value.start.getDate());
   const to = new Date(value.end.getFullYear(), value.end.getMonth(), value.end.getDate());
+  void usage.loadDashboard(customUsageRange(from, to));
+}
 
-  const normalizedDates: [Date, Date] = [from, to];
-  const ranges = usageDashboardRanges();
-  const matchingPreset = presets.find((preset) => {
-    const presetDates = usageDatePickerRange(ranges[preset]);
-    return (
-      presetDates &&
-      sameDate(presetDates[0], normalizedDates[0]) &&
-      sameDate(presetDates[1], normalizedDates[1])
-    );
-  });
+/** 跳转到对话页并选中对话；`sort` 由对话页从 query 读取（`/conversations?conversation=…&sort=cost`）。 */
+function openConversation(conversationKey: string): void {
+  void router.push({ name: "conversations", query: { conversation: conversationKey } });
+}
 
-  currentPreset.value = matchingPreset ?? "custom";
-  customDates.value = { start: from, end: to };
-  selectedRange.value = matchingPreset ? ranges[matchingPreset] : customUsageRange(from, to);
-  void usage.loadDashboard(selectedRange.value);
+function openAllConversations(): void {
+  void router.push({ name: "conversations", query: { sort: rankingBasis.value } });
+}
+
+function openProject(key: string): void {
+  void router.push({ path: "/projects", query: { project: key } });
+}
+
+function openUnattributed(): void {
+  void router.push({ path: "/projects", query: { unattributed: "1" } });
+}
+
+function openProjects(): void {
+  void router.push({ path: "/projects" });
+}
+
+/** 构成里点击服务：把侧栏服务筛选切到该服务，并按新的服务集合重载。 */
+function selectService(source: UsageSource): void {
+  usage.selectSource(source);
+  void usage.loadDashboard(usage.dashboardRange);
 }
 
 function openSettings(): void {
   void navigateMain(router, "settings", "settings-title");
 }
+
+/**
+ * 概览独有的项目构成与高消耗对话：每次 Dashboard 加载完成（范围、服务筛选、粒度、
+ * 扫描完成都会触发）后按同一范围重载；排行口径变化也重载（对话前 5 的排序随之变）。
+ */
+watch(
+  () => usage.dashboardLoading,
+  (loading) => {
+    if (!loading && usage.dashboardLoaded) {
+      void usage.loadOverview(usage.dashboardRange, rankingBasis.value);
+    }
+  },
+);
+watch(rankingBasis, (basis) => {
+  if (usage.dashboardLoaded) void usage.loadOverview(usage.dashboardRange, basis);
+});
 
 let unlistenShown: UnlistenFn | undefined;
 let dashboardLoadedOnce = false;
@@ -316,13 +392,13 @@ function handleWindowShown(): void {
     const finishedAt = usage.status?.finishedAt ?? null;
     if (finishedAt !== lastLoadedScanAt) {
       lastLoadedScanAt = finishedAt;
-      void usage.loadDashboard(selectedRange.value);
+      void usage.loadDashboard(usage.dashboardRange);
     }
     return;
   }
   dashboardLoadedOnce = true;
   lastLoadedScanAt = usage.status?.finishedAt ?? null;
-  void usage.loadDashboard(selectedRange.value);
+  void usage.loadDashboard(usage.dashboardRange);
 }
 
 onMounted(async () => {
@@ -355,6 +431,22 @@ onBeforeUnmount(() => {
           <h1 id="main-usage-title" tabindex="-1">{{ t("main.title") }}</h1>
         </div>
         <div class="usage-page__tools">
+          <div
+            class="usage-page__segmented"
+            role="group"
+            :aria-label="t('overview.granularity.label')"
+          >
+            <button
+              v-for="item in GRANULARITIES"
+              :key="item"
+              type="button"
+              :aria-pressed="granularity === item"
+              :data-selected="granularity === item ? 'true' : undefined"
+              @click="selectGranularity(item)"
+            >
+              {{ t(`overview.granularity.${item}`) }}
+            </button>
+          </div>
           <div class="usage-page__segmented" role="group" :aria-label="t('main.filter')">
             <button
               v-for="preset in presets"
@@ -364,7 +456,15 @@ onBeforeUnmount(() => {
               :data-selected="currentPreset === preset ? 'true' : undefined"
               @click="selectPreset(preset)"
             >
-              {{ t(`main.range.${preset}`) }}
+              {{ rangeLabel(preset) }}
+            </button>
+            <button
+              type="button"
+              :aria-pressed="currentPreset === 'custom'"
+              :data-selected="currentPreset === 'custom' ? 'true' : undefined"
+              @click="selectCustom"
+            >
+              {{ t("overview.range.custom") }}
             </button>
           </div>
           <span class="usage-page__scan">{{ scanText }}</span>
@@ -407,11 +507,14 @@ onBeforeUnmount(() => {
 
       <section v-if="!allServicesOff" class="usage-page__kpi" role="group">
         <div v-for="card in kpiCards" :key="card.key" class="kpi-card">
-          <span class="kpi-card__label">
+          <span
+            class="kpi-card__label"
+            :title="card.key === 'total-cost' ? t('overview.kpi.apiEquivalentHint') : undefined"
+          >
             <i
               v-if="card.provider"
               class="kpi-card__mark"
-              :data-provider="card.provider"
+              :style="{ '--mark': `var(--cat-${card.provider})` }"
               aria-hidden="true"
             ></i>
             {{ card.label }}
@@ -442,137 +545,128 @@ onBeforeUnmount(() => {
         </button>
       </section>
 
-      <section
-        v-if="!allServicesOff"
-        class="usage-page__block"
-        aria-labelledby="usage-breakdown-heading"
-      >
-        <div class="usage-page__block-head">
-          <h2 id="usage-breakdown-heading">{{ t("main.tokenBreakdownPanel") }}</h2>
-        </div>
-        <div class="usage-page__breakdown">
-          <div class="breakdown-hero">
-            <span class="breakdown-hero__label">{{ t("main.totalTokens") }}</span>
-            <span class="breakdown-hero__value numeric">{{
-              breakdown.ready ? breakdown.totalText : t("main.noValue")
-            }}</span>
-          </div>
-          <div class="breakdown-bar" role="img" :aria-label="t('main.tokenBreakdownPanel')">
-            <i
-              v-for="segment in breakdown.segments"
-              :key="segment.opacity"
-              :style="{
-                inlineSize:
-                  breakdown.total > 0 ? `${(segment.tokens / breakdown.total) * 100}%` : '0%',
-                opacity: segment.opacity,
-              }"
-            ></i>
-          </div>
-          <dl class="breakdown-stats">
-            <div>
-              <dt>{{ t("main.input") }}</dt>
-              <dd class="numeric">{{ breakdown.input }}</dd>
+      <template v-if="!allServicesOff">
+        <div class="usage-page__row usage-page__row--chart">
+          <section class="usage-page__block" aria-labelledby="usage-daily-heading">
+            <div class="usage-page__block-head usage-page__block-head--with-legend">
+              <h2 id="usage-daily-heading">{{ t(`overview.daily.${granularity}`) }}</h2>
+              <div class="usage-page__chart-meta">
+                <span v-if="chartUsesContextWindow" class="usage-page__chart-note">
+                  {{ t(`overview.chartContext.${granularity}`) }}
+                </span>
+                <div class="usage-page__legend" role="list" :aria-label="t('main.byProvider')">
+                  <span
+                    v-for="source in providerSources"
+                    :key="source"
+                    class="usage-page__legend-item"
+                    :style="{ '--provider-color': `var(--cat-${source})` }"
+                    role="listitem"
+                  >
+                    <span class="usage-page__legend-dot" aria-hidden="true"></span>
+                    {{ t(`provider.${source}`) }}
+                  </span>
+                </div>
+              </div>
             </div>
-            <div>
-              <dt>{{ t("main.output") }}</dt>
-              <dd class="numeric">{{ breakdown.output }}</dd>
-            </div>
-            <div>
-              <dt>{{ t("main.cacheHit") }}</dt>
-              <dd class="numeric">{{ breakdown.cacheRead }}</dd>
-            </div>
-            <div>
-              <dt>{{ t("main.cacheHitRate") }}</dt>
-              <dd class="numeric">{{ breakdown.hitRate ?? t("main.noValue") }}</dd>
-            </div>
-          </dl>
-          <dl v-if="breakdown.hasFast" class="breakdown-fast">
-            <div>
-              <dt>{{ t("main.fastTokens") }}</dt>
-              <dd class="numeric">{{ breakdown.fastTotal }}</dd>
-            </div>
-            <div>
-              <dt>{{ t("main.billingEquivalentTokens") }}</dt>
-              <dd class="numeric">{{ breakdown.billingEquivalent }}</dd>
-            </div>
-            <div v-if="breakdown.multiplier">
-              <dt>{{ t("main.fastMultiplier") }}</dt>
-              <dd class="numeric">{{ breakdown.multiplier }}</dd>
-            </div>
-            <div v-if="breakdown.fastShare !== null">
-              <dt>{{ t("main.fastShare") }}</dt>
-              <dd class="numeric">{{ breakdown.fastShare }}%</dd>
-            </div>
-          </dl>
-        </div>
-      </section>
+            <UsageDailyChart
+              :day="usage.dashboard.day"
+              :sources="providerSources"
+              :range="selectedRange"
+              :chart-range="chartRange"
+              :granularity="granularity"
+              :loaded="dashboardReady"
+              :unavailable="usage.dashboardUnavailable"
+            />
+          </section>
 
-      <section class="usage-page__block" aria-labelledby="usage-provider-heading">
-        <div class="usage-page__block-head">
-          <h2 id="usage-provider-heading">{{ t("main.byProvider") }}</h2>
+          <section class="usage-page__block" aria-labelledby="usage-breakdown-heading">
+            <div class="usage-page__block-head">
+              <h2 id="usage-breakdown-heading">{{ t("main.tokenBreakdownPanel") }}</h2>
+            </div>
+            <div class="usage-page__breakdown">
+              <div class="breakdown-hero">
+                <span class="breakdown-hero__label">{{ t("main.totalTokens") }}</span>
+                <span class="breakdown-hero__value numeric">{{
+                  breakdown.ready ? breakdown.totalText : t("main.noValue")
+                }}</span>
+              </div>
+              <div class="breakdown-bar" role="img" :aria-label="t('main.tokenBreakdownPanel')">
+                <i
+                  v-for="segment in breakdown.segments"
+                  :key="segment.opacity"
+                  :style="{
+                    inlineSize:
+                      breakdown.total > 0 ? `${(segment.tokens / breakdown.total) * 100}%` : '0%',
+                    opacity: segment.opacity,
+                  }"
+                ></i>
+              </div>
+              <dl class="breakdown-stats">
+                <div>
+                  <dt>{{ t("main.input") }}</dt>
+                  <dd class="numeric">{{ breakdown.input }}</dd>
+                </div>
+                <div>
+                  <dt>{{ t("main.output") }}</dt>
+                  <dd class="numeric">{{ breakdown.output }}</dd>
+                </div>
+                <div>
+                  <dt>{{ t("main.cacheHit") }}</dt>
+                  <dd class="numeric">{{ breakdown.cacheRead }}</dd>
+                </div>
+                <div>
+                  <dt>{{ t("main.cacheHitRate") }}</dt>
+                  <dd class="numeric">{{ breakdown.hitRate ?? t("main.noValue") }}</dd>
+                </div>
+              </dl>
+              <dl v-if="breakdown.hasFast" class="breakdown-fast">
+                <div>
+                  <dt>{{ t("main.fastTokens") }}</dt>
+                  <dd class="numeric">{{ breakdown.fastTotal }}</dd>
+                </div>
+                <div>
+                  <dt>{{ t("main.billingEquivalentTokens") }}</dt>
+                  <dd class="numeric">{{ breakdown.billingEquivalent }}</dd>
+                </div>
+                <div v-if="breakdown.multiplier">
+                  <dt>{{ t("main.fastMultiplier") }}</dt>
+                  <dd class="numeric">{{ breakdown.multiplier }}</dd>
+                </div>
+                <div v-if="breakdown.fastShare !== null">
+                  <dt>{{ t("main.fastShare") }}</dt>
+                  <dd class="numeric">{{ breakdown.fastShare }}%</dd>
+                </div>
+              </dl>
+            </div>
+          </section>
         </div>
-        <div
-          class="usage-page__providers"
-          :class="{ 'usage-page__providers--single': providerSources.length === 1 }"
-        >
-          <UsageProviderCard
-            v-for="source in providerSources"
-            :key="source"
-            :source="source"
-            :summary="sourceSummary"
-            :total-tokens="providerTotalTokens"
+
+        <div class="usage-page__row usage-page__row--composition">
+          <UsageCompositionPanel
+            :source-summary="sourceSummary"
+            :model="usage.dashboard.model"
+            :projects="usage.overviewProjects"
+            :sources="providerSources"
+            :basis="rankingBasis"
             :loaded="dashboardReady"
             :unavailable="usage.dashboardUnavailable"
+            :scope-key="`${selectedRange.from}|${selectedRange.to}|${providerSources.join(',')}`"
+            @select-service="selectService"
+            @open-project="openProject"
+            @open-unattributed="openUnattributed"
+            @open-projects="openProjects"
+          />
+          <UsageTopConversations
+            :conversations="usage.overviewTopConversations"
+            :total="totalsForShare"
+            :basis="rankingBasis"
+            :loaded="dashboardReady"
+            :unavailable="usage.dashboardUnavailable"
+            @open="openConversation"
+            @open-all="openAllConversations"
           />
         </div>
-      </section>
-
-      <section class="usage-page__block" aria-labelledby="usage-daily-heading">
-        <div class="usage-page__block-head usage-page__block-head--with-legend">
-          <h2 id="usage-daily-heading">{{ t("main.dailyUsage") }}</h2>
-          <div class="usage-page__chart-meta">
-            <span v-if="chartUsesContextWindow" class="usage-page__chart-note">
-              {{ t("main.chartContext") }}
-            </span>
-            <div class="usage-page__legend" role="list" :aria-label="t('main.byProvider')">
-              <span
-                v-for="source in providerSources"
-                :key="source"
-                class="usage-page__legend-item"
-                :data-provider="source"
-                role="listitem"
-              >
-                <span class="usage-page__legend-dot" aria-hidden="true"></span>
-                {{ t(`provider.${source}`) }}
-              </span>
-            </div>
-          </div>
-        </div>
-        <UsageDailyChart
-          :day="usage.dashboard.day"
-          :sources="providerSources"
-          :range="selectedRange"
-          :chart-range="chartRange"
-          :loaded="dashboardReady"
-          :unavailable="usage.dashboardUnavailable"
-        />
-      </section>
-
-      <section
-        class="usage-page__block usage-page__block--last"
-        aria-labelledby="usage-model-heading"
-      >
-        <div class="usage-page__block-head">
-          <h2 id="usage-model-heading">{{ t("main.byModel") }}</h2>
-        </div>
-        <UsageModelTable
-          :model="usage.dashboard.model"
-          :sources="providerSources"
-          :source-summary="sourceSummary"
-          :loaded="dashboardReady"
-          :unavailable="usage.dashboardUnavailable"
-        />
-      </section>
+      </template>
     </div>
   </main>
 </template>
@@ -737,24 +831,13 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
+/* 服务识别色只留在标签前的小色块，主数字保持中性色（cc-bar §6.2） */
 .kpi-card__mark {
-  inline-size: 0.4375rem;
-  block-size: 0.4375rem;
+  inline-size: 0.5625rem;
+  block-size: 0.5625rem;
   flex: 0 0 auto;
-  border-radius: 0.125rem;
-  background: var(--cat-codex);
-}
-
-.kpi-card__mark[data-provider="claude"] {
-  background: var(--cat-claude);
-}
-
-.kpi-card__mark[data-provider="pi"] {
-  background: var(--cat-pi);
-}
-
-.kpi-card__mark[data-provider="opencode"] {
-  background: var(--cat-opencode);
+  border-radius: 0.1875rem;
+  background: var(--mark, var(--cat-codex));
 }
 
 .kpi-card__value {
@@ -918,23 +1001,33 @@ onBeforeUnmount(() => {
   outline-offset: 2px;
 }
 
-.usage-page__providers {
+/* 每日用量约占 2/3，Token 拆分占 1/3；用量构成约占 5/9，高消耗对话占 4/9（cc-bar §3） */
+.usage-page__row {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 1rem;
+  margin-block-end: 1.25rem;
   align-items: stretch;
 }
 
-.usage-page__providers--single {
-  grid-template-columns: 1fr;
+.usage-page__row > * {
+  min-inline-size: 0;
+}
+
+.usage-page__row .usage-page__block {
+  margin-block-end: 0;
+}
+
+.usage-page__row--chart {
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+}
+
+.usage-page__row--composition {
+  grid-template-columns: minmax(0, 5fr) minmax(0, 4fr);
+  margin-block-end: 0;
 }
 
 .usage-page__block {
   margin-block-end: 1.25rem;
-}
-
-.usage-page__block--last {
-  margin-block-end: 0;
 }
 
 .usage-page__block-head {
@@ -980,18 +1073,6 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
-.usage-page__legend-item[data-provider="claude"] {
-  --provider-color: var(--cat-claude);
-}
-
-.usage-page__legend-item[data-provider="pi"] {
-  --provider-color: var(--cat-pi);
-}
-
-.usage-page__legend-item[data-provider="opencode"] {
-  --provider-color: var(--cat-opencode);
-}
-
 .usage-page__legend-dot {
   inline-size: 0.4375rem;
   block-size: 0.4375rem;
@@ -1015,8 +1096,12 @@ onBeforeUnmount(() => {
     flex-direction: column;
     gap: 0.25rem;
   }
+}
 
-  .usage-page__providers {
+/* 窄于断点时并排的两块改为上下排列 */
+@container (max-width: 900px) {
+  .usage-page__row--chart,
+  .usage-page__row--composition {
     grid-template-columns: 1fr;
   }
 }

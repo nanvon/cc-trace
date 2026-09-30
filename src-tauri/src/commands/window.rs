@@ -4,6 +4,7 @@ use super::CommandError;
 use crate::platform::desktop::{
     self, MainNavigationTarget, ONBOARDING_WINDOW, request_hide_compact, show_main, show_window,
 };
+use crate::platform::floating;
 
 /// 打开并聚焦主窗口，同时收起紧凑面板，避免两个入口争夺焦点。
 #[tauri::command]
@@ -43,6 +44,18 @@ pub fn window_open_compact(app: AppHandle) -> Result<(), CommandError> {
 #[tauri::command]
 pub fn window_set_compact_height(app: AppHandle, content_height: f64) -> Result<(), CommandError> {
     desktop::resize_compact(&app, content_height).map_err(|_| CommandError::WINDOW_UNAVAILABLE)
+}
+
+/// 悬浮窗内容尺寸变化，单位是逻辑像素。前端只报内容多大，区间与定位在平台层决定。
+#[tauri::command]
+pub fn window_set_floating_size(app: AppHandle, width: f64, height: f64) {
+    floating::resize(&app, width, height);
+}
+
+/// 悬浮窗右键菜单：隐藏悬浮窗、打开设置。原生菜单，文案与托盘菜单同源。
+#[tauri::command]
+pub fn window_floating_context_menu(app: AppHandle) {
+    floating::show_context_menu(&app);
 }
 
 /// 结束常驻进程。只有明确的「退出 CC Trace」走这里。

@@ -16,7 +16,7 @@ import { useQuotaStore } from "../features/quota/store";
 import { onSettingsUpdated } from "../features/settings/api";
 import { useSettingsStore } from "../features/settings/store";
 
-export type Surface = "compact" | "main" | "onboarding";
+export type Surface = "compact" | "main" | "onboarding" | "floating";
 
 export function useAppShell(surface: Surface) {
   const quota = useQuotaStore();

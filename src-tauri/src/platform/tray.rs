@@ -18,7 +18,10 @@ use tauri::{App, AppHandle, Manager, Wry};
 use super::desktop::{MainNavigationTarget, request_hide_compact, show_main, toggle_compact};
 use super::strings::{Lang, native, provider_name};
 use crate::app::AppCore;
-use crate::contracts::{ProviderAvailability, ProviderId, QuotaState};
+use crate::contracts::{
+    MenuBarWindowMode, ProviderAvailability, ProviderId, QuotaSnapshot, QuotaState, QuotaWindow,
+    QuotaWindowKind,
+};
 use crate::scheduler::RefreshTrigger;
 
 pub const TRAY_ID: &str = "cc-trace";
@@ -28,6 +31,7 @@ pub const TRAY_ID: &str = "cc-trace";
 const NO_VALUE: &str = "--";
 
 /// 徽标的一段：一个 Provider 的标识与它的百分比文字。
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub struct BadgeSegment {
     pub provider: ProviderId,
     /// 已格式化的展示文本，例如 `62%`。没有数值时是 [`NO_VALUE`]。
@@ -145,13 +149,23 @@ pub fn relocalize(app: &AppHandle, lang: Lang) -> tauri::Result<()> {
 /// 按最新额度重画系统区域。
 ///
 /// 失败一律静默：系统区域展示不到位不该影响刷新本身，图标也不会因此消失。
-pub fn present_quota(app: &AppHandle, state: &QuotaState, menu_bar: &[ProviderId]) {
+///
+/// tooltip 按设置里的服务矩阵与「菜单栏窗口」模式生成；macOS 徽标位图保持
+/// 每个服务一段主要额度，不随模式变化（悬浮窗与 tooltip 之外的取舍见 ADR-0031）。
+pub fn present_quota(
+    app: &AppHandle,
+    state: &QuotaState,
+    menu_bar: &[ProviderId],
+    mode: MenuBarWindowMode,
+) {
     let Some(tray) = app.tray_by_id(TRAY_ID) else {
         return;
     };
 
+    let _ = tray.set_tooltip(Some(tooltip_for(state, menu_bar, mode)));
+
+    #[cfg(target_os = "macos")]
     let segments = badge_segments(state, menu_bar);
-    let _ = tray.set_tooltip(Some(tooltip_text(&segments)));
 
     #[cfg(target_os = "macos")]
     if let Some(image) = super::menubar_badge::render(&segments) {
@@ -163,6 +177,8 @@ pub fn present_quota(app: &AppHandle, state: &QuotaState, menu_bar: &[ProviderId
 
 /// 系统区域里启用的服务一段，顺序固定 Codex → Claude → Antigravity → Cursor →
 /// Command Code，与界面一致。启用集合来自设置的服务矩阵，不由系统区域自己判断。
+/// 只有 macOS 的徽标位图消费它；Windows 上仅测试引用，不算死代码。
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn badge_segments(state: &QuotaState, menu_bar: &[ProviderId]) -> Vec<BadgeSegment> {
     ProviderId::ORDER
         .iter()
@@ -174,8 +190,8 @@ fn badge_segments(state: &QuotaState, menu_bar: &[ProviderId]) -> Vec<BadgeSegme
         .collect()
 }
 
-/// Provider 返回的第一项额度，与卡片第一行使用同一主次规则。
-fn primary_window_text(state: &QuotaState, provider: ProviderId) -> String {
+/// 能拿来展示数值的快照。离线与错误连旧快照一起隐藏（见状态模型），限流保留最后一次数值。
+fn usable_snapshot(state: &QuotaState, provider: ProviderId) -> Option<&QuotaSnapshot> {
     state
         .providers
         .iter()
@@ -190,6 +206,11 @@ fn primary_window_text(state: &QuotaState, provider: ProviderId) -> String {
             )
         })
         .and_then(|snapshot| snapshot.snapshot.as_ref())
+}
+
+/// Provider 返回的第一项额度，与卡片第一行使用同一主次规则。
+fn primary_window_text(state: &QuotaState, provider: ProviderId) -> String {
+    usable_snapshot(state, provider)
         .and_then(|snapshot| snapshot.windows.first())
         .map(|window| percent_text(window.remaining_percent))
         .unwrap_or_else(|| NO_VALUE.to_string())
@@ -204,13 +225,125 @@ fn percent_text(remaining: f64) -> String {
     format!("{}%", remaining.round() as i64)
 }
 
-/// tooltip 是 Windows 上唯一的额度载体，在 macOS 上则是位图的文字等价物。
-fn tooltip_text(segments: &[BadgeSegment]) -> String {
-    segments
+/// Windows 通知区域 tooltip 的容量：`NOTIFYICONDATAW.szTip` 是 `WCHAR[128]`，含结尾
+/// 空字符，可用 127 个 UTF-16 码元（Microsoft Learn 的 NOTIFYICONDATAW 页）。
+/// tray-icon 0.24 的 `set_tooltip` 会把超长文本按 128 截断且不补结尾空字符，
+/// 所以必须在这里先收进 127，不依赖它兜底。
+const TOOLTIP_MAX_UTF16: usize = 127;
+
+fn utf16_len(text: &str) -> usize {
+    text.encode_utf16().count()
+}
+
+/// 某个服务在当前模式下要展示的额度窗口。
+///
+/// Cursor 的 Total／Auto／API 是同一计费周期的不同维度，不是主／周窗口，
+/// 无论哪种模式都只取第一项；没有周窗口的服务在周模式下退回主要额度，
+/// 不让整个服务从 tooltip 里消失。
+fn tooltip_windows(
+    snapshot: &QuotaSnapshot,
+    provider: ProviderId,
+    mode: MenuBarWindowMode,
+) -> Vec<&QuotaWindow> {
+    let primary = snapshot.windows.first();
+    let weekly = snapshot
+        .windows
         .iter()
-        .map(|segment| format!("{} {}", provider_name(segment.provider), segment.text))
-        .collect::<Vec<_>>()
-        .join(" · ")
+        .find(|window| window.kind == QuotaWindowKind::Weekly);
+
+    let picked: Vec<&QuotaWindow> = if provider == ProviderId::Cursor {
+        primary.into_iter().collect()
+    } else {
+        match mode {
+            MenuBarWindowMode::Primary => primary.into_iter().collect(),
+            MenuBarWindowMode::Weekly => weekly.or(primary).into_iter().collect(),
+            MenuBarWindowMode::Both => primary.into_iter().chain(weekly).collect(),
+        }
+    };
+
+    // 主要额度本身就是周窗口时，Both 不重复写一遍。
+    let mut unique: Vec<&QuotaWindow> = Vec::with_capacity(picked.len());
+    for window in picked {
+        if !unique.iter().any(|seen| seen.id == window.id) {
+            unique.push(window);
+        }
+    }
+    unique
+}
+
+fn window_value(window: &QuotaWindow) -> String {
+    if window.unlimited {
+        "∞".to_string()
+    } else {
+        percent_text(window.remaining_percent)
+    }
+}
+
+/// 一个服务在 tooltip 里的一段，例如 `Codex 62%` 或 `Codex 62% / 41%`。
+fn tooltip_segment(state: &QuotaState, provider: ProviderId, mode: MenuBarWindowMode) -> String {
+    let values = usable_snapshot(state, provider)
+        .map(|snapshot| tooltip_windows(snapshot, provider, mode))
+        .unwrap_or_default();
+    let value = if values.is_empty() {
+        NO_VALUE.to_string()
+    } else {
+        values
+            .into_iter()
+            .map(window_value)
+            .collect::<Vec<_>>()
+            .join(" / ")
+    };
+    format!("{} {}", provider_name(provider), value)
+}
+
+/// 把若干段收进 [`TOOLTIP_MAX_UTF16`]。
+///
+/// 先用 ` · ` 分隔；放不下改用单空格；仍放不下就整段丢弃末尾的服务并以 `…` 结尾。
+/// 服务顺序固定，被丢的永远是排在最后的，且不会把一个数字切成半截。
+fn fit_tooltip(segments: &[String]) -> String {
+    if segments.is_empty() {
+        return String::new();
+    }
+
+    for separator in [" · ", " "] {
+        let joined = segments.join(separator);
+        if utf16_len(&joined) <= TOOLTIP_MAX_UTF16 {
+            return joined;
+        }
+    }
+
+    for keep in (1..segments.len()).rev() {
+        let joined = format!("{}…", segments[..keep].join(" "));
+        if utf16_len(&joined) <= TOOLTIP_MAX_UTF16 {
+            return joined;
+        }
+    }
+
+    // 只剩一段还放不下（服务名加数值远小于 127，正常不可达）：按字符硬截断。
+    let mut out = String::new();
+    for ch in segments[0].chars() {
+        if utf16_len(&out) + ch.len_utf16() + 1 > TOOLTIP_MAX_UTF16 {
+            break;
+        }
+        out.push(ch);
+    }
+    out.push('…');
+    out
+}
+
+/// tooltip 是 Windows 上唯一的额度载体，在 macOS 上则是位图的文字等价物。
+/// 没有勾选任何服务时保持产品名，不留空 tooltip。
+fn tooltip_for(state: &QuotaState, menu_bar: &[ProviderId], mode: MenuBarWindowMode) -> String {
+    let segments: Vec<String> = ProviderId::ORDER
+        .iter()
+        .filter(|provider| menu_bar.contains(provider))
+        .map(|provider| tooltip_segment(state, *provider, mode))
+        .collect();
+
+    if segments.is_empty() {
+        return native(Lang::En).tooltip.to_string();
+    }
+    fit_tooltip(&segments)
 }
 
 fn build_menu<M: Manager<Wry>>(manager: &M, lang: Lang) -> tauri::Result<Menu<Wry>> {
@@ -381,33 +514,166 @@ mod tests {
         assert_eq!(segments[0].provider, ProviderId::Codex);
     }
 
+    fn tooltip(state: &QuotaState, enabled: &[ProviderId], mode: MenuBarWindowMode) -> String {
+        tooltip_for(state, enabled, mode)
+    }
+
+    fn dual(provider: ProviderId, five: f64, week: f64) -> ProviderSnapshot {
+        with_windows(
+            provider,
+            vec![
+                window(QuotaWindowKind::FiveHour, five),
+                window(QuotaWindowKind::Weekly, week),
+            ],
+        )
+    }
+
     #[test]
     fn the_tooltip_names_the_enabled_providers() {
-        let enabled = [ProviderId::Codex, ProviderId::Claude];
-        let segments = badge_segments(
-            &state(vec![
-                with_windows(
-                    ProviderId::Codex,
-                    vec![window(QuotaWindowKind::FiveHour, 62.0)],
-                ),
-                with_windows(
-                    ProviderId::Claude,
-                    vec![window(QuotaWindowKind::FiveHour, 78.0)],
-                ),
-            ]),
-            &enabled,
-        );
+        let state = state(vec![
+            with_windows(
+                ProviderId::Codex,
+                vec![window(QuotaWindowKind::FiveHour, 62.0)],
+            ),
+            with_windows(
+                ProviderId::Claude,
+                vec![window(QuotaWindowKind::FiveHour, 78.0)],
+            ),
+        ]);
 
-        assert_eq!(tooltip_text(&segments), "Codex 62% · Claude Code 78%");
+        assert_eq!(
+            tooltip(
+                &state,
+                &[ProviderId::Codex, ProviderId::Claude],
+                MenuBarWindowMode::Primary
+            ),
+            "Codex 62% · Claude Code 78%"
+        );
     }
 
     #[test]
     fn the_tooltip_lists_the_five_services_in_product_order() {
-        let segments = badge_segments(&state(Vec::new()), &ProviderId::ORDER);
-
         assert_eq!(
-            tooltip_text(&segments),
+            tooltip(
+                &state(Vec::new()),
+                &ProviderId::ORDER,
+                MenuBarWindowMode::Primary
+            ),
             "Codex -- · Claude Code -- · Antigravity -- · Cursor -- · Command Code --"
         );
+    }
+
+    #[test]
+    fn the_window_mode_picks_primary_weekly_or_both() {
+        let state = state(vec![dual(ProviderId::Codex, 62.0, 41.0)]);
+        let enabled = [ProviderId::Codex];
+
+        assert_eq!(
+            tooltip(&state, &enabled, MenuBarWindowMode::Primary),
+            "Codex 62%"
+        );
+        assert_eq!(
+            tooltip(&state, &enabled, MenuBarWindowMode::Weekly),
+            "Codex 41%"
+        );
+        assert_eq!(
+            tooltip(&state, &enabled, MenuBarWindowMode::Both),
+            "Codex 62% / 41%"
+        );
+    }
+
+    #[test]
+    fn a_service_without_a_weekly_window_falls_back_to_its_primary_window() {
+        let state = state(vec![with_windows(
+            ProviderId::Antigravity,
+            vec![window(QuotaWindowKind::Unknown, 55.0)],
+        )]);
+        let enabled = [ProviderId::Antigravity];
+
+        assert_eq!(
+            tooltip(&state, &enabled, MenuBarWindowMode::Weekly),
+            "Antigravity 55%"
+        );
+        assert_eq!(
+            tooltip(&state, &enabled, MenuBarWindowMode::Both),
+            "Antigravity 55%"
+        );
+    }
+
+    #[test]
+    fn cursor_always_shows_its_first_window_only() {
+        let state = state(vec![dual(ProviderId::Cursor, 30.0, 20.0)]);
+        let enabled = [ProviderId::Cursor];
+
+        for mode in [
+            MenuBarWindowMode::Primary,
+            MenuBarWindowMode::Weekly,
+            MenuBarWindowMode::Both,
+        ] {
+            assert_eq!(tooltip(&state, &enabled, mode), "Cursor 30%");
+        }
+    }
+
+    #[test]
+    fn an_unlimited_window_reads_as_infinity_not_a_percentage() {
+        let mut unlimited = window(QuotaWindowKind::Total, 100.0);
+        unlimited.unlimited = true;
+        let state = state(vec![with_windows(ProviderId::Cursor, vec![unlimited])]);
+
+        assert_eq!(
+            tooltip(&state, &[ProviderId::Cursor], MenuBarWindowMode::Primary),
+            "Cursor ∞"
+        );
+    }
+
+    #[test]
+    fn no_enabled_service_keeps_the_product_name() {
+        assert_eq!(
+            tooltip(&state(Vec::new()), &[], MenuBarWindowMode::Both),
+            "CC Trace"
+        );
+    }
+
+    #[test]
+    fn a_full_matrix_in_both_mode_still_fits_the_windows_tooltip_limit() {
+        let providers: Vec<ProviderSnapshot> = ProviderId::ORDER
+            .iter()
+            .map(|provider| dual(*provider, 100.0, 100.0))
+            .collect();
+        let text = tooltip(
+            &state(providers),
+            &ProviderId::ORDER,
+            MenuBarWindowMode::Both,
+        );
+
+        assert!(utf16_len(&text) <= TOOLTIP_MAX_UTF16, "{text}");
+        // 空格分隔仍放不下时丢弃末尾服务，并以省略号标明。
+        assert!(text.starts_with("Codex 100% / 100%"), "{text}");
+    }
+
+    #[test]
+    fn dropping_trailing_services_never_cuts_a_segment_in_half() {
+        let segments: Vec<String> = (0..12)
+            .map(|index| format!("Service{index} 100%"))
+            .collect();
+        let text = fit_tooltip(&segments);
+
+        assert!(utf16_len(&text) <= TOOLTIP_MAX_UTF16);
+        assert!(text.ends_with('…'));
+        let body = text.trim_end_matches('…');
+        assert!(
+            body.split(' ')
+                .collect::<Vec<_>>()
+                .chunks(2)
+                .all(|pair| pair.len() == 2)
+        );
+    }
+
+    #[test]
+    fn the_limit_counts_utf16_code_units_not_chars() {
+        // 每个 U+1F600 占两个码元；60 个共 120 码元，再加名称就超过 127。
+        let wide = format!("{} 1%", "😀".repeat(60));
+        let text = fit_tooltip(&[wide, "B 2%".to_string()]);
+        assert!(utf16_len(&text) <= TOOLTIP_MAX_UTF16);
     }
 }

@@ -58,6 +58,16 @@
   --cat-antigravity-dim: rgb(66 133 244 / 12%);
   --cat-cursor-dim: rgb(44 44 46 / 12%);
   --cat-commandcode-dim: rgb(24 24 27 / 12%);
+  /* 用量构成的非服务维度：紫色顺序色阶（按排名，第 1 名最深）。色阶只表示排名不表示身份，
+     必须同时显示名称或图例。不用蓝／灰，避免与 Pi／DSH／Antigravity、Codex／Cursor 识别色混淆。 */
+  --rank-1: #3f3a8f;
+  --rank-2: #5e56c2;
+  --rank-3: #8c85d9;
+  --rank-4: #bdb8ec;
+  --rank-5: #dad7f5;
+  --rank-rest: #c7c7cc;
+  --rank-unattributed: #c7c7cc;
+  --amount-bar: #aeaeb2;
 
   /* 紧凑面板是悬浮层，阴影比主窗口里的卡片更明显（原型评审稿 🚩 加档） */
   --shadow-panel: 0 24px 56px -18px rgb(16 16 20 / 26%), 0 4px 12px rgb(16 16 20 / 7%);
@@ -129,6 +139,14 @@
     --cat-antigravity-dim: rgb(102 157 246 / 14%);
     --cat-cursor-dim: rgb(220 220 224 / 14%);
     --cat-commandcode-dim: rgb(228 228 231 / 14%);
+    --rank-1: #b3adf2;
+    --rank-2: #8f87e6;
+    --rank-3: #6c63cc;
+    --rank-4: #4d469e;
+    --rank-5: #3a3578;
+    --rank-rest: #48484a;
+    --rank-unattributed: #636366;
+    --amount-bar: #aeaeb2;
 
     --shadow-panel: 0 24px 56px -18px rgb(0 0 0 / 65%), 0 4px 12px rgb(0 0 0 / 40%);
     --ring-panel: rgb(255 255 255 / 9%);
@@ -170,6 +188,14 @@
   --cat-antigravity-dim: rgb(102 157 246 / 14%);
   --cat-cursor-dim: rgb(220 220 224 / 14%);
   --cat-commandcode-dim: rgb(228 228 231 / 14%);
+  --rank-1: #b3adf2;
+  --rank-2: #8f87e6;
+  --rank-3: #6c63cc;
+  --rank-4: #4d469e;
+  --rank-5: #3a3578;
+  --rank-rest: #48484a;
+  --rank-unattributed: #636366;
+  --amount-bar: #aeaeb2;
   --cat-codex-dim: rgb(152 152 157 / 14%);
   --cat-claude-dim: rgb(240 160 128 / 14%);
   --cat-pi-dim: rgb(80 130 180 / 14%);

@@ -11,6 +11,10 @@ import type {
   UsageConversationPage,
   UsageConversationProjectOption,
   UsageConversationQuery,
+  UsageProjectBreakdown,
+  UsageProjectBreakdownQuery,
+  UsageProjectPage,
+  UsageProjectQuery,
   UsageScanStatus,
   UsageSource,
   UsageSummary,
@@ -62,6 +66,21 @@ export function getConversationBreakdown(
   return invoke<UsageConversationBreakdown | null>("usage_get_conversation_breakdown", {
     conversationKey,
   });
+}
+
+export function listProjects(query: UsageProjectQuery): Promise<UsageProjectPage> {
+  return invoke<UsageProjectPage>("usage_list_projects", { query });
+}
+
+export function getProjectBreakdown(
+  query: UsageProjectBreakdownQuery,
+): Promise<UsageProjectBreakdown> {
+  return invoke<UsageProjectBreakdown>("usage_get_project_breakdown", { query });
+}
+
+/** 在系统文件管理器中显示项目目录；目录已不存在或不是已知项目路径时返回 false。 */
+export function revealProject(path: string): Promise<boolean> {
+  return invoke<boolean>("usage_reveal_project", { path });
 }
 
 export function refreshPricingCatalog(): Promise<PricingCatalogRefreshStatus> {

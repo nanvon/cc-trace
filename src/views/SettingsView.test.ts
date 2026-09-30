@@ -9,6 +9,34 @@ import en from "../i18n/locales/en";
 import zhCN from "../i18n/locales/zh-CN";
 import SettingsView from "./SettingsView.vue";
 
+vi.mock("../features/settings/accounts", () => ({
+  commandErrorCode: () => "unknown",
+  getCodexAccounts: vi.fn().mockResolvedValue([]),
+  getCommandCodeCredentialState: vi
+    .fn()
+    .mockResolvedValue({ preference: "automatic", hasManualKey: false }),
+  importCodexAccount: vi.fn(),
+  removeCodexAccount: vi.fn(),
+  reorderCodexAccounts: vi.fn(),
+  setCommandCodeApiKey: vi.fn(),
+  clearCommandCodeApiKey: vi.fn(),
+  updateCodexAccount: vi.fn(),
+}));
+
+vi.mock("../features/settings/maintenance", () => ({
+  checkForUpdates: vi.fn(),
+  exportDiagnostics: vi.fn(),
+  getCredentialSources: vi.fn().mockResolvedValue({
+    claudeCode: "none",
+    claudeDesktop: false,
+    commandCode: "none",
+  }),
+  getUpdateStatus: vi.fn().mockResolvedValue({ state: "idle" }),
+  onUpdateStatus: vi.fn().mockResolvedValue(() => undefined),
+  openReleasePage: vi.fn(),
+  revealLogFolder: vi.fn(),
+}));
+
 vi.mock("../features/usage/api", () => ({
   refreshPricingCatalog: vi.fn(),
   rebuildUsageData: vi.fn(),
@@ -55,6 +83,12 @@ function render() {
   return wrapper;
 }
 
+/** 价格目录与数据重建在「数据与刷新」分类里。 */
+async function openDataTab(wrapper: ReturnType<typeof render>): Promise<void> {
+  await wrapper.vm.$nextTick();
+  await wrapper.get('[data-category="data"]').trigger("click");
+}
+
 describe("SettingsView pricing catalog", () => {
   beforeEach(() => {
     vi.mocked(refreshPricingCatalog).mockReset();
@@ -68,7 +102,7 @@ describe("SettingsView pricing catalog", () => {
       }),
     );
     const wrapper = render();
-    await wrapper.vm.$nextTick();
+    await openDataTab(wrapper);
     const button = wrapper.get("button.flat-btn");
 
     await button.trigger("click");
@@ -84,7 +118,7 @@ describe("SettingsView pricing catalog", () => {
   it("keeps the recovery message when both online sources fail", async () => {
     vi.mocked(refreshPricingCatalog).mockResolvedValue("failed");
     const wrapper = render();
-    await wrapper.vm.$nextTick();
+    await openDataTab(wrapper);
 
     await wrapper.get("button.flat-btn").trigger("click");
     await flushPromises();
@@ -98,7 +132,7 @@ describe("SettingsView pricing catalog", () => {
   it("reports a partial update without pretending the whole catalog is current", async () => {
     vi.mocked(refreshPricingCatalog).mockResolvedValue("partial");
     const wrapper = render();
-    await wrapper.vm.$nextTick();
+    await openDataTab(wrapper);
 
     await wrapper.get("button.flat-btn").trigger("click");
     await flushPromises();
@@ -121,7 +155,7 @@ describe("SettingsView data rebuild", () => {
   it("asks for confirmation on the first click and resets after ten seconds", async () => {
     vi.useFakeTimers();
     const wrapper = render();
-    await wrapper.vm.$nextTick();
+    await openDataTab(wrapper);
 
     const button = rebuildButton(wrapper);
     expect(button.text()).toBe("重新计算用量");
@@ -170,7 +204,7 @@ describe("SettingsView data rebuild", () => {
       finishedAt: "2026-08-09T00:00:02Z",
     });
     const wrapper = render();
-    await wrapper.vm.$nextTick();
+    await openDataTab(wrapper);
 
     await rebuildButton(wrapper).trigger("click");
     expect(rebuildUsageData).not.toHaveBeenCalled();
@@ -189,7 +223,7 @@ describe("SettingsView data rebuild", () => {
   it("reports failure when the rebuild request is rejected as busy", async () => {
     vi.mocked(rebuildUsageData).mockRejectedValue(new Error("busy"));
     const wrapper = render();
-    await wrapper.vm.$nextTick();
+    await openDataTab(wrapper);
 
     await rebuildButton(wrapper).trigger("click");
     await rebuildButton(wrapper).trigger("click");

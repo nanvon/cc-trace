@@ -22,15 +22,17 @@ const usage = useUsageStore();
 
 const isSettings = computed(() => route.name === "settings");
 
-const VIEW_FOCUS: Record<"main" | "conversations" | "timeline", MainFocusTarget> = {
+const VIEW_FOCUS: Record<"main" | "conversations" | "projects" | "timeline", MainFocusTarget> = {
   main: "usage-title",
   conversations: "conversations-title",
+  projects: "projects-title",
   timeline: "timeline-title",
 };
 
 const views = computed(() => [
-  { name: "main" as const, label: t("main.title"), key: "usage" },
+  { name: "main" as const, label: t("overview.title"), key: "usage" },
   { name: "conversations" as const, label: t("conversations.title"), key: "conversations" },
+  { name: "projects" as const, label: t("projects.title"), key: "projects" },
   { name: "timeline" as const, label: t("timeline.title"), key: "timeline" },
 ]);
 
@@ -39,7 +41,7 @@ const currentView = computed(() => {
   return views.value.find((view) => view.name === route.name)?.key ?? "usage";
 });
 
-function goView(name: "main" | "conversations" | "timeline"): void {
+function goView(name: "main" | "conversations" | "projects" | "timeline"): void {
   const target = name === "main" ? "quota" : name;
   void navigateMain(router, target, VIEW_FOCUS[name]);
 }

@@ -7,9 +7,11 @@ import MainWindowView from "../views/MainWindowView.vue";
 const MainView = () => import("../views/MainView.vue");
 const ConversationsView = () => import("../views/ConversationsView.vue");
 const SettingsView = () => import("../views/SettingsView.vue");
+const ProjectsView = () => import("../views/ProjectsView.vue");
 const TimelineView = () => import("../views/TimelineView.vue");
 const CompactView = () => import("../views/CompactView.vue");
 const OnboardingView = () => import("../views/OnboardingView.vue");
+const FloatingView = () => import("../views/FloatingView.vue");
 
 /**
  * 紧凑面板与首次启动仍各自通过 hash 载入独立表面。
@@ -26,9 +28,11 @@ export const router = createRouter({
         { path: "settings", name: "settings", component: SettingsView },
         { path: "timeline", name: "timeline", component: TimelineView },
         { path: "conversations", name: "conversations", component: ConversationsView },
+        { path: "projects", name: "projects", component: ProjectsView },
       ],
     },
     { path: "/compact", name: "compact", component: CompactView },
     { path: "/onboarding", name: "onboarding", component: OnboardingView },
+    { path: "/floating", name: "floating", component: FloatingView },
   ],
 });

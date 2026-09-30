@@ -600,7 +600,7 @@ impl AppCore {
             .copied()
             .filter(|provider| settings.services.get(*provider).menu_bar)
             .collect();
-        crate::platform::tray::present_quota(app, &state, &menu_bar);
+        crate::platform::tray::present_quota(app, &state, &menu_bar, settings.menu_bar_window_mode);
         let _ = app.emit(EVENT_QUOTA_UPDATED, state);
     }
 

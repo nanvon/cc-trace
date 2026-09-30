@@ -18,8 +18,10 @@ use crate::contracts::{
     ProviderId, QuotaHistoryEvent, QuotaSnapshot, QuotaWindowKind, UsageConversation,
     UsageConversationBreakdown, UsageConversationPage, UsageConversationProjectOption,
     UsageConversationQuery, UsageConversationSort, UsageCostTotals, UsageFastTotals, UsageGroupBy,
-    UsageProjectPage, UsageProjectQuery, UsageProjectSort, UsageProjectSummary, UsageRepriceResult,
-    UsageSource, UsageSpeed, UsageSummary, UsageSummaryQuery, UsageSummaryRow, UsageTokenTotals,
+    UsageProjectAllTime, UsageProjectBranchRow, UsageProjectBreakdown, UsageProjectBreakdownQuery,
+    UsageProjectPage, UsageProjectQuery, UsageProjectSort, UsageProjectSummary,
+    UsageProjectUnattributedRow, UsageProjectWorktreeRow, UsageRepriceResult, UsageSource,
+    UsageSpeed, UsageSummary, UsageSummaryQuery, UsageSummaryRow, UsageTokenTotals,
     decimal_nanos_string,
 };
 use crate::usage::model::{
@@ -1026,7 +1028,9 @@ impl UsageDb {
                     CASE WHEN COUNT(DISTINCT e.pricing_fingerprint) = 1
                          THEN MAX(e.pricing_fingerprint) END,
                     MAX(COALESCE(c.unattributed, 0)),
-                    MIN(COALESCE(c.worktree_path, ''))
+                    COUNT(DISTINCT CASE WHEN c.worktree_path IS NOT NULL
+                                         AND c.worktree_path <> COALESCE(c.project_key, '')
+                                        THEN c.worktree_path END)
                FROM usage_entries e
                LEFT JOIN conversations c ON c.conversation_key = e.conversation_key
               WHERE (?1 IS NULL OR e.occurred_at >= ?1)
@@ -1057,6 +1061,188 @@ impl UsageDb {
             total: count,
             limit,
             offset,
+        })
+    }
+
+    /// 路径是否是某个对话记录过的项目根或 worktree 目录。
+    /// 「在文件管理器中显示」只放行这些路径，前端不能借它打开任意目录。
+    pub fn is_known_project_path(&self, path: &str) -> Result<bool, UsageDbError> {
+        let connection = self.open_read()?;
+        let found = connection
+            .query_row(
+                "SELECT 1 FROM conversations
+                  WHERE project_key = ?1 OR worktree_path = ?1 LIMIT 1",
+                [path],
+                |_| Ok(()),
+            )
+            .optional()?;
+        Ok(found.is_some())
+    }
+
+    /// 单个项目的明细：分支表、worktree、全部时间汇总，未归属分组另按来源拆分。
+    ///
+    /// `key` 为空串表示未归属分组（Cursor 远端计量与补录）。分支与 worktree 受时间范围
+    /// 与可见服务限制；全部时间汇总只受可见服务限制。
+    pub fn project_breakdown(
+        &self,
+        query: &UsageProjectBreakdownQuery,
+    ) -> Result<UsageProjectBreakdown, UsageDbError> {
+        let connection = self.open_read()?;
+        let filter = &query.filter;
+        let sources_json = sources_json(filter.sources.as_deref());
+        // 列 1..18 与 `summary_row` 的布局一致，后面追加对话数、最近时间与分支。
+        let aggregate = "COUNT(*), COALESCE(SUM(e.request_count), 0),
+                    COALESCE(SUM(e.uncached_input_tokens), 0),
+                    COALESCE(SUM(e.output_tokens), 0),
+                    COALESCE(SUM(e.reasoning_output_tokens), 0),
+                    COALESCE(SUM(e.cache_read_input_tokens), 0),
+                    COALESCE(SUM(e.cache_write_5m_input_tokens), 0),
+                    COALESCE(SUM(e.cache_write_1h_input_tokens), 0),
+                    COALESCE(SUM(CASE WHEN e.speed = 'fast' THEN
+                        e.uncached_input_tokens + e.output_tokens + e.cache_read_input_tokens
+                        + e.cache_write_5m_input_tokens + e.cache_write_1h_input_tokens
+                    ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN e.speed = 'fast'
+                        THEN e.billing_equivalent_tokens_nanos ELSE 0 END), 0),
+                    MIN(CASE WHEN e.speed = 'fast' THEN e.fast_multiplier_nanos END),
+                    MAX(CASE WHEN e.speed = 'fast' THEN e.fast_multiplier_nanos END),
+                    SUM(CASE WHEN e.speed = 'fast'
+                             AND e.billing_equivalent_tokens_nanos IS NULL THEN 1 ELSE 0 END),
+                    COALESCE(SUM(e.api_equivalent_cost_nanos), 0),
+                    SUM(CASE WHEN e.api_equivalent_cost_nanos IS NOT NULL THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN e.api_equivalent_cost_nanos IS NULL THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN e.source = 'claude' AND e.inference_geo = 'unknown'
+                             AND e.api_equivalent_cost_nanos IS NOT NULL THEN 1 ELSE 0 END),
+                    CASE WHEN COUNT(DISTINCT e.pricing_fingerprint) = 1
+                         THEN MAX(e.pricing_fingerprint) END,
+                    COUNT(DISTINCT e.conversation_key),
+                    COALESCE(MAX(e.occurred_at), ''),
+                    MAX(c.branch)";
+        let from_where = "FROM usage_entries e
+               LEFT JOIN conversations c ON c.conversation_key = e.conversation_key
+              WHERE COALESCE(c.project_key, '') = ?1
+                AND (?2 IS NULL OR e.occurred_at >= ?2)
+                AND (?3 IS NULL OR e.occurred_at < ?3)
+                AND (?4 IS NULL OR e.source IN (SELECT value FROM json_each(?4)))";
+
+        type GroupedRow = (UsageSummaryRow, i64, String, Option<String>);
+        let grouped = |group: &str| -> Result<Vec<GroupedRow>, UsageDbError> {
+            let mut statement = connection.prepare(&format!(
+                "SELECT {group}, {aggregate} {from_where}
+                  GROUP BY {group}
+                  ORDER BY COALESCE(SUM(e.api_equivalent_cost_nanos), 0) DESC,
+                           {group} ASC"
+            ))?;
+            let rows = statement.query_map(
+                params![
+                    query.key,
+                    filter.from.as_deref(),
+                    filter.to.as_deref(),
+                    sources_json
+                ],
+                |row| Ok((summary_row(row)?, row.get(19)?, row.get(20)?, row.get(21)?)),
+            )?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        };
+
+        let branches = grouped("COALESCE(c.branch, '')")?
+            .into_iter()
+            .map(|(row, conversations, last_at, _)| UsageProjectBranchRow {
+                branch: row.key,
+                conversation_count: conversations,
+                last_at,
+                tokens: row.tokens,
+                cost: row.cost,
+            })
+            .collect::<Vec<_>>();
+
+        let worktree_rows = grouped("COALESCE(c.worktree_path, '')")?;
+        // 只有一个工作目录且就是项目根时没有 worktree 可展示。
+        let has_worktree = worktree_rows
+            .iter()
+            .any(|(row, ..)| !row.key.is_empty() && row.key != query.key);
+        let worktrees = if has_worktree {
+            worktree_rows
+                .into_iter()
+                .map(
+                    |(row, conversations, last_at, branch)| UsageProjectWorktreeRow {
+                        path: row.key,
+                        branch: branch.filter(|value| !value.is_empty()),
+                        conversation_count: conversations,
+                        last_at,
+                        tokens: row.tokens,
+                        cost: row.cost,
+                    },
+                )
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        let all_time = connection.query_row(
+            &format!(
+                "SELECT 'all', {aggregate}, MIN(e.occurred_at)
+                   FROM usage_entries e
+                   LEFT JOIN conversations c ON c.conversation_key = e.conversation_key
+                  WHERE COALESCE(c.project_key, '') = ?1
+                    AND (?2 IS NULL OR e.source IN (SELECT value FROM json_each(?2)))"
+            ),
+            params![query.key, sources_json],
+            |row| {
+                let summary = summary_row(row)?;
+                Ok(UsageProjectAllTime {
+                    first_at: row.get(22)?,
+                    conversation_count: row.get(19)?,
+                    entry_count: summary.entry_count,
+                    tokens: summary.tokens,
+                    cost: summary.cost,
+                })
+            },
+        )?;
+
+        let unattributed_sources = if query.key.is_empty() {
+            let mut statement = connection.prepare(&format!(
+                "SELECT e.source || '/' || e.granularity, {aggregate},
+                        MIN(e.day_local), MAX(e.day_local)
+                   {from_where}
+                  GROUP BY e.source, e.granularity
+                  ORDER BY e.source ASC, e.granularity ASC"
+            ))?;
+            let rows = statement.query_map(
+                params![
+                    query.key,
+                    filter.from.as_deref(),
+                    filter.to.as_deref(),
+                    sources_json
+                ],
+                |row| {
+                    let summary = summary_row(row)?;
+                    let (source, granularity) = summary
+                        .key
+                        .split_once('/')
+                        .map(|(a, b)| (a.to_owned(), b.to_owned()))
+                        .unwrap_or_default();
+                    Ok(UsageProjectUnattributedRow {
+                        source: source_from_db(&source)?,
+                        granularity,
+                        first_day: row.get(22)?,
+                        last_day: row.get(23)?,
+                        entry_count: summary.entry_count,
+                        tokens: summary.tokens,
+                        cost: summary.cost,
+                    })
+                },
+            )?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        } else {
+            Vec::new()
+        };
+
+        Ok(UsageProjectBreakdown {
+            branches,
+            worktrees,
+            all_time,
+            unattributed_sources,
         })
     }
 
@@ -2197,7 +2383,9 @@ fn project_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<UsageProjectSummary>
     let key: String = row.get(0)?;
     let hint: String = row.get(1)?;
     let unattributed = row.get::<_, i64>(24)? != 0 || key.is_empty();
-    let name = if key.is_empty() {
+    // 保留键（`@none`、`@system`）与未归属由前端按键显示固定名称，这里不放文案。
+    let reserved = key.starts_with('@');
+    let name = if key.is_empty() || reserved {
         String::new()
     } else if hint.is_empty() {
         tail_segment(&key)
@@ -2205,10 +2393,13 @@ fn project_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<UsageProjectSummary>
         hint
     };
     Ok(UsageProjectSummary {
-        path: (!key.is_empty()).then(|| key.clone()),
+        path: (!key.is_empty() && !reserved).then(|| key.clone()),
         key,
         name,
         unattributed,
+        worktree_count: row.get(25)?,
+        status: String::new(),
+        is_git: None,
         conversation_count: row.get(2)?,
         active_days: row.get(3)?,
         first_at: row.get(4)?,
@@ -3795,6 +3986,123 @@ mod tests {
             .find(|row| row.key == "standard")
             .expect("standard speed");
         assert_eq!(standard_speed.fast.raw_tokens, 0);
+    }
+
+    #[test]
+    fn project_breakdown_groups_branches_worktrees_and_unattributed_sources() {
+        let (_dir, database) = database();
+        let entry =
+            |key: &str, conversation: &str, at: &str, tokens: i64, granularity| UsageEntry {
+                source: UsageSource::Claude,
+                dedup_key: key.to_owned(),
+                conversation_key: conversation.to_owned(),
+                model: Some("model-a".to_owned()),
+                speed: UsageSpeed::Standard,
+                inference_geo: InferenceGeo::Global,
+                occurred_at: at.to_owned(),
+                day_local: at[..10].to_owned(),
+                tokens: TokenFacts {
+                    uncached_input_tokens: tokens,
+                    ..TokenFacts::default()
+                },
+                api_equivalent_cost_nanos: Some(tokens * 10),
+                billing_equivalent_tokens_nanos: None,
+                fast_multiplier_nanos: None,
+                pricing_fingerprint: Some("price".to_owned()),
+                request_count: 1,
+                granularity,
+            };
+        let conversation = |key: &str, worktree: &str, branch: Option<&str>| ConversationFact {
+            conversation_key: key.to_owned(),
+            source: UsageSource::Claude,
+            title: None,
+            project_hint: Some("repo".to_owned()),
+            project_key: Some("/work/repo".to_owned()),
+            worktree_path: Some(worktree.to_owned()),
+            unattributed: false,
+            is_sidechain: false,
+            occurred_at: "2026-07-30T00:00:00Z".to_owned(),
+            source_id: None,
+            branch: branch.map(str::to_owned),
+        };
+        let batch = ScanBatch {
+            entries: vec![
+                entry("a", "c1", "2026-07-30T00:00:00Z", 100, Granularity::Request),
+                entry("b", "c2", "2026-07-31T00:00:00Z", 50, Granularity::Request),
+                entry(
+                    "old",
+                    "c1",
+                    "2026-01-01T00:00:00Z",
+                    10,
+                    Granularity::Request,
+                ),
+                // 没有对话行的事实（Cursor 远端计量）落进未归属分组。
+                entry(
+                    "cursor",
+                    "none",
+                    "2026-07-30T00:00:00Z",
+                    7,
+                    Granularity::Day,
+                ),
+            ],
+            conversations: vec![
+                conversation("c1", "/work/repo", Some("main")),
+                conversation("c2", "/work/repo-wt", Some("feature")),
+            ],
+            ..ScanBatch::default()
+        };
+        database
+            .commit_scan_batch(
+                "file",
+                UsageSource::Claude,
+                1,
+                1,
+                1,
+                "p",
+                None,
+                false,
+                &batch,
+            )
+            .expect("commit");
+
+        let query = |key: &str, from: Option<&str>| UsageProjectBreakdownQuery {
+            key: key.to_owned(),
+            filter: crate::contracts::UsageFilter {
+                from: from.map(str::to_owned),
+                ..Default::default()
+            },
+        };
+
+        let breakdown = database
+            .project_breakdown(&query("/work/repo", Some("2026-07-01T00:00:00Z")))
+            .expect("breakdown");
+        assert_eq!(breakdown.branches.len(), 2);
+        assert_eq!(breakdown.branches[0].branch, "main");
+        assert_eq!(breakdown.branches[0].tokens.total_tokens, 100);
+        assert_eq!(breakdown.worktrees.len(), 2);
+        assert!(
+            breakdown
+                .worktrees
+                .iter()
+                .any(|row| row.path == "/work/repo-wt" && row.branch.as_deref() == Some("feature"))
+        );
+        // 全部时间不受范围限制。
+        assert_eq!(breakdown.all_time.tokens.total_tokens, 160);
+        assert_eq!(
+            breakdown.all_time.first_at.as_deref(),
+            Some("2026-01-01T00:00:00Z")
+        );
+        assert_eq!(breakdown.all_time.conversation_count, 2);
+        assert!(breakdown.unattributed_sources.is_empty());
+
+        let unattributed = database
+            .project_breakdown(&query("", None))
+            .expect("unattributed");
+        assert_eq!(unattributed.unattributed_sources.len(), 1);
+        let row = &unattributed.unattributed_sources[0];
+        assert_eq!(row.granularity, "day");
+        assert_eq!(row.tokens.total_tokens, 7);
+        assert_eq!(row.first_day, "2026-07-30");
     }
 
     #[test]

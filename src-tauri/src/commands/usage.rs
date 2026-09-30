@@ -10,8 +10,9 @@ use crate::app::AppCore;
 use crate::contracts::{
     PricingCatalogRefreshStatus, QuotaCyclePage, QuotaCycleQuery, QuotaHistory, QuotaHistoryQuery,
     UsageConversation, UsageConversationBreakdown, UsageConversationPage,
-    UsageConversationProjectOption, UsageConversationQuery, UsageRepriceResult, UsageScanStatus,
-    UsageSource, UsageSummary, UsageSummaryQuery,
+    UsageConversationProjectOption, UsageConversationQuery, UsageProjectBreakdown,
+    UsageProjectBreakdownQuery, UsageProjectPage, UsageProjectQuery, UsageRepriceResult,
+    UsageScanStatus, UsageSource, UsageSummary, UsageSummaryQuery,
 };
 use crate::usage::CursorRemoteOutcome;
 use crate::usage::UsageError;
@@ -93,6 +94,38 @@ pub fn usage_list_conversations(
     query: UsageConversationQuery,
 ) -> Result<UsageConversationPage, CommandError> {
     core.usage().conversations(query).map_err(map_usage_error)
+}
+
+#[tauri::command]
+pub fn usage_list_projects(
+    core: State<'_, Arc<AppCore>>,
+    query: UsageProjectQuery,
+) -> Result<UsageProjectPage, CommandError> {
+    core.usage().projects(query).map_err(map_usage_error)
+}
+
+#[tauri::command]
+pub fn usage_get_project_breakdown(
+    core: State<'_, Arc<AppCore>>,
+    query: UsageProjectBreakdownQuery,
+) -> Result<UsageProjectBreakdown, CommandError> {
+    core.usage()
+        .project_breakdown(query)
+        .map_err(map_usage_error)
+}
+
+/// 在系统文件管理器中显示项目目录。只放行库里记录过的项目根与 worktree 目录，
+/// 目录已不存在时返回 `false`。
+#[tauri::command]
+pub fn usage_reveal_project(
+    core: State<'_, Arc<AppCore>>,
+    path: String,
+) -> Result<bool, CommandError> {
+    let target = core
+        .usage()
+        .revealable_project_path(&path)
+        .map_err(map_usage_error)?;
+    Ok(target.is_some_and(|dir| crate::platform::open::open_folder(&dir)))
 }
 
 #[tauri::command]

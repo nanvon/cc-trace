@@ -186,6 +186,9 @@ pub struct CodexCursor {
     /// 规范化后的项目路径（项目身份键）。
     #[serde(default)]
     pub project_path: Option<String>,
+    /// 对话自身的工作目录（worktree 明细用）。
+    #[serde(default)]
+    pub project_worktree: Option<String>,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -208,6 +211,9 @@ pub struct PiCursor {
     /// 规范化后的项目路径（项目身份键）。
     #[serde(default)]
     pub project_path: Option<String>,
+    /// 对话自身的工作目录（worktree 明细用）。
+    #[serde(default)]
+    pub project_worktree: Option<String>,
     /// 首个 user 消息的标题兜底；消费一次后清空，避免后续批次覆盖既有标题。
     pub pending_title: Option<String>,
     /// 文件名末尾 UUID 兜底会话键；session entry 出现后覆盖。

@@ -552,14 +552,43 @@ Windows 行为在实机验证前一律标注未验证。
 - [x] `usage_get_quota_cycles` 命令 + 额度页周期卡（官方已用、重置倒计时、本份额度用量、周期区间、额外重置、历史周期表、多账号分区、多窗口切换）。
 - [x] 校验：Rust 420 项测试、`cargo fmt`、`cargo clippy -D warnings` 干净；前端 vue-tsc／eslint／prettier／vitest（111 项）干净。
 
-### 批次 5～8、10：待做
+### 批次 5：项目分析页（2026-10-01 开发完成，校验待做）
 
-- [ ] 批次 4：额度页（周期记录、用满预估、多账号分区）。
-- [ ] 批次 5：项目分析页（Git 根、worktree 归组、未归属分组）。
-- [ ] 批次 6：概览页重构（粒度日／周／月、范围分档、构成四维、高消耗对话、排行口径）。
-- [ ] 批次 7：悬浮窗与系统区域显示配置。
-- [ ] 批次 8：设置页四分类与服务矩阵、隐私模式全覆盖、诊断导出、检查更新、引导。
-- [ ] 批次 10：文档同步与全量校验。
+- [x] 项目身份解析器（[ADR-0034](决策/ADR-0034-项目身份与未归属口径.md)）接入 Codex／Claude／Pi／OpenCode／DSH 扫描：Git 根作项目键，worktree 归主仓库，受保护目录不查文件系统；`@none`（无明确项目）、`@system`（系统任务）与未归属（key 空串）分开存放。
+- [x] 新增命令 `usage_list_projects`、`usage_get_project_breakdown`、`usage_reveal_project`（只放行库里出现过且存在的目录，Rust 命令，无新增 capability）。
+- [x] `/projects` 页：左列表右详情，粒度与范围与概览、对话页共享；徽标、特殊行、未归属详情、首次整理／再次扫描／空态；分支表、worktree 表、高消耗对话前 3。
+- [x] 校验：`cargo check --all-targets` 通过，`cargo test --lib -- usage:: storage::usage_db` 178 项通过；前端仅语法校验。
+- [ ] 已知限制：列表固定前 200 条无分页；范围无自定义日期；存量数据需「重新计算用量」才补齐项目身份；同步目录的专门判定未做；Windows 路径归一与资源管理器打开未验证。
+
+### 批次 6：概览页重构（2026-10-01 开发完成，校验待做）
+
+- [x] 粒度（日／周／月）与分档范围放入 usage store，概览、对话、项目三页共享；进行中的本周／本月／本年与上一周期同天数对比。
+- [x] KPI 行（总 Tokens、API 等值、各服务卡，主数字中性色）、每日用量＋Token 拆分并排、用量构成面板（服务／提供商／模型／项目）、高消耗对话前 5、排行口径设置生效。
+- [x] 新增排名色阶等设计 token，已同步 `docs/设计方向与状态规范.md` 3.4 节。
+- [x] 校验：`overview.test.ts`、`ranges.test.ts`、`store.test.ts` 共 35 项 vitest 通过（agent 自跑）。
+- [ ] 与 cc-bar 草案的差异：构成面板不做行数上限与「其余 N 个…」合并行（cc-bar 实际代码四维全部列出并在区域内滚动）；悬停 Token 拆分用原生 `title`。
+
+### 批次 7：悬浮窗与系统区域显示配置（2026-10-01 开发完成，校验待做）
+
+- [x] `floating` 窗口（置顶、无边框、透明、不进任务栏、不抢焦点），展示 `quota && hud` 的主账号额度；位置以锚点空间持久化，多显示器屏幕外回落，20px 吸附，右键菜单。
+- [x] tray tooltip 按菜单栏矩阵与窗口模式生成，按 `NOTIFYICONDATAW` 127 个 UTF-16 码元截断（Microsoft Learn，等级 A）。
+- [x] 校验：`cargo check` 通过，`cargo test --lib platform::` 48 项通过。
+- [ ] 未验证：`focusable: false` 下 Windows 拖动与非激活窗口弹右键菜单（等级 D）、混合 DPI；macOS 与 Windows 悬浮窗实机均未验证，已记入 [桌面壳验证记录](桌面壳验证记录.md)。
+
+### 批次 8：设置页、隐私模式、诊断、更新、引导（2026-10-01 开发完成，校验待做）
+
+- [x] 设置页四分类（服务与账号／外观与显示／数据与刷新／通用）与服务矩阵；Codex 副账号导入／改名／排序／删除、Command Code API Key、服务行状态列、凭据来源状态。
+- [x] `src/lib/privacy.ts`；设置页、引导、时间线、项目页、概览页已接入。
+- [x] 诊断包导出、详细日志开关、检查更新（[ADR-0036](决策/ADR-0036-诊断导出与更新检查进入首版.md)）；`diagnostics` 模块 15 项单测通过。
+- [x] 引导页四步对齐 cc-bar。
+- [x] 发现并修复 release 命令列表漏项（`command_code_*`、`codex_reset_credits`）。
+- [ ] 未完成：诊断包为 `.txt` 而非 zip；业务事件（刷新、退避、身份变化）日志尚未接入；紧凑面板、对话页的隐私遮挡未逐页核对。
+
+### 批次 10：文档同步与全量校验（待做）
+
+- [ ] 全量校验：`cargo fmt`（`lib.rs`、`contracts/mod.rs`、`platform/mod.rs` 有格式差异）、`cargo clippy --all-targets -D warnings`、`cargo test`；`vue-tsc`、eslint、prettier、全量 vitest；CI 的 Windows 矩阵编译。
+- [ ] 文档同步：`CLAUDE.md` 阶段状态表、`docs/产品范围.md`、`docs/信息架构与核心流程.md`、`docs/技术架构.md`、`docs/数据存储与用量索引.md`（schema 与项目字段）、`docs/文案与国际化.md`。
+- [ ] 手动走查：`/projects`、`/floating`、设置四分类、引导四步的 UI。
 - [x] 批次 9（cc-bar 历史迁移器）**取消**：产品所有者 2026-10-01 明确应用仍处开发阶段，旧数据直接弃用，不写导入器；ADR-0003 继续有效。
 
 ## 执行门禁

@@ -35,6 +35,8 @@ pub struct NativeStrings {
     pub open: &'static str,
     pub refresh: &'static str,
     pub settings: &'static str,
+    /// 悬浮窗右键菜单：隐藏悬浮窗。
+    pub hide_floating: &'static str,
     pub quit: &'static str,
 }
 
@@ -57,6 +59,7 @@ pub fn native(lang: Lang) -> NativeStrings {
             open: "打开 CC Trace",
             refresh: "刷新额度",
             settings: "设置",
+            hide_floating: "隐藏悬浮窗",
             quit: "退出 CC Trace",
         },
         Lang::En => NativeStrings {
@@ -64,6 +67,7 @@ pub fn native(lang: Lang) -> NativeStrings {
             open: "Open CC Trace",
             refresh: "Refresh quota",
             settings: "Settings",
+            hide_floating: "Hide floating window",
             quit: "Quit CC Trace",
         },
     }

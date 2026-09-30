@@ -30,7 +30,9 @@ function handleNavigation(target: MainNavigationTarget): void {
         ? "timeline-title"
         : target === "conversations"
           ? "conversations-title"
-          : "usage-title";
+          : target === "projects"
+            ? "projects-title"
+            : "usage-title";
   void navigateMain(router, target, focusTarget);
 }
 

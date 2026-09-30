@@ -147,6 +147,11 @@ export interface UsageDashboardRange {
     | "thisYear"
     | "last7Days"
     | "last30Days"
+    | "lastWeek"
+    | "last4Weeks"
+    | "last12Weeks"
+    | "lastMonth"
+    | "last6Months"
     | "all"
     | "custom";
   from: string | null;
@@ -324,6 +329,12 @@ export interface UsageProjectSummary {
   /** 完整项目路径；未归属分组为 null。 */
   path: string | null;
   unattributed: boolean;
+  /** 除项目根以外的 worktree 工作目录数。 */
+  worktreeCount: number;
+  /** 目录状态：unverified 不允许检查（不声称存在）；reserved 为 `@none`／`@system` 保留键。 */
+  status: "available" | "unavailable" | "unverified" | "reserved" | "unattributed";
+  /** 是否为 Git 仓库；只有做过检查时才有值。 */
+  isGit: boolean | null;
   conversationCount: number;
   activeDays: number;
   firstAt: string | null;
@@ -340,6 +351,60 @@ export interface UsageProjectPage {
   total: number;
   limit: number;
   offset: number;
+}
+
+/** 项目明细查询：`key` 空串为未归属分组。 */
+export interface UsageProjectBreakdownQuery {
+  key: string;
+  filter: UsageFilter;
+}
+
+/** 分支行；`branch` 为空串表示该数据源没有记录分支。 */
+export interface UsageProjectBranchRow {
+  branch: string;
+  conversationCount: number;
+  lastAt: string;
+  tokens: UsageTokenTotals;
+  cost: UsageCostTotals;
+}
+
+/** worktree 行：`path` 是对话自身的工作目录，与项目键相同即主仓库。 */
+export interface UsageProjectWorktreeRow {
+  path: string;
+  branch: string | null;
+  conversationCount: number;
+  lastAt: string;
+  tokens: UsageTokenTotals;
+  cost: UsageCostTotals;
+}
+
+/** 全部时间汇总：不受时间范围限制，仍受可见服务限制。 */
+export interface UsageProjectAllTime {
+  firstAt: string | null;
+  conversationCount: number;
+  entryCount: number;
+  tokens: UsageTokenTotals;
+  cost: UsageCostTotals;
+}
+
+/** 未归属分组按来源拆分的一行；`granularity` 为 `day`（远端计量）或 `request`（补录）。 */
+export interface UsageProjectUnattributedRow {
+  source: UsageSource;
+  granularity: "day" | "request";
+  firstDay: string;
+  lastDay: string;
+  entryCount: number;
+  tokens: UsageTokenTotals;
+  cost: UsageCostTotals;
+}
+
+export interface UsageProjectBreakdown {
+  branches: UsageProjectBranchRow[];
+  /** 项目只有一个工作目录（即项目根）时为空。 */
+  worktrees: UsageProjectWorktreeRow[];
+  allTime: UsageProjectAllTime;
+  /** 仅未归属分组有值。 */
+  unattributedSources: UsageProjectUnattributedRow[];
 }
 
 export interface UsageConversationPage {

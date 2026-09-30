@@ -46,6 +46,23 @@
         }
       },
       {
+        "label": "floating",
+        "title": "CC Trace",
+        "url": "/#/floating",
+        "width": 200,
+        "height": 64,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "focus": false,
+        "focusable": false,
+        "acceptFirstMouse": true,
+        "visible": false
+      },
+      {
         "label": "onboarding",
         "title": "CC Trace",
         "url": "/#/onboarding",

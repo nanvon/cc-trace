@@ -30,7 +30,9 @@ pub use usage::{
     QuotaCycleSegmentView, QuotaCycleUsage, QuotaCycleView, QuotaHistory, QuotaHistoryEvent,
     QuotaHistoryQuery, UsageConversation, UsageConversationBreakdown, UsageConversationPage,
     UsageConversationProjectOption, UsageConversationQuery, UsageConversationSort, UsageCostTotals,
-    UsageFastTotals, UsageFilter, UsageGroupBy, UsageProjectPage, UsageProjectQuery,
-    UsageProjectSort, UsageProjectSummary, UsageRepriceResult, UsageScanState, UsageScanStatus,
-    UsageSource, UsageSpeed, UsageSummary, UsageSummaryQuery, UsageSummaryRow, UsageTokenTotals,
+    UsageFastTotals, UsageFilter, UsageGroupBy, UsageProjectAllTime, UsageProjectBranchRow,
+    UsageProjectBreakdown, UsageProjectBreakdownQuery, UsageProjectPage, UsageProjectQuery,
+    UsageProjectSort, UsageProjectSummary, UsageProjectUnattributedRow, UsageProjectWorktreeRow,
+    UsageRepriceResult, UsageScanState, UsageScanStatus, UsageSource, UsageSpeed, UsageSummary,
+    UsageSummaryQuery, UsageSummaryRow, UsageTokenTotals,
 };

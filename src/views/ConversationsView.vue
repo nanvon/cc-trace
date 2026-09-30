@@ -7,6 +7,7 @@
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import { useRoute } from "vue-router";
 
 import ConversationDetailPane from "../components/ConversationDetailPane.vue";
 import MenuSelect, { type MenuSelectOption } from "../components/MenuSelect.vue";
@@ -24,18 +25,31 @@ const PAGE_SIZE = 20;
 
 const { t, locale } = useI18n();
 const usage = useUsageStore();
+const route = useRoute();
 
 const loading = ref(true);
 const unavailable = ref(false);
 const page = ref<UsageConversationPage | null>(null);
 const search = ref("");
-const sort = ref<UsageConversationSort>("recent");
+const querySort = route.query.sort;
+const sort = ref<UsageConversationSort>(
+  querySort === "tokens" || querySort === "cost" ? querySort : "recent",
+);
 const offset = ref(0);
 const pendingSearch = ref("");
-const selectedKey = ref<string | null>(null);
+/** 从概览「高消耗对话」跳来时通过 `?conversation=` 预选对话；它可能不在首页，不能被清掉。 */
+const routedConversation =
+  typeof route.query.conversation === "string" && route.query.conversation !== ""
+    ? route.query.conversation
+    : null;
+const selectedKey = ref<string | null>(routedConversation);
 const projects = ref<UsageConversationProjectOption[]>([]);
 /** 项目筛选菜单的取值是项目身份键（规范化项目路径），展示用项目名。 */
-const projectFilter = ref<string | null>(null);
+const projectFilter = ref<string | null>(
+  typeof route.query.project === "string" && route.query.project !== ""
+    ? route.query.project
+    : null,
+);
 
 const SORT_OPTIONS: Array<{ value: UsageConversationSort; label: string }> = [
   { value: "recent", label: "conversations.sort.recent" },
@@ -54,7 +68,12 @@ const projectOptions = computed<MenuSelectOption<string>[]>(() => [
     .filter((option) => option.key !== null)
     .map((option) => ({
       value: option.key ?? "",
-      label: option.name,
+      label:
+        option.key === "@none"
+          ? t("projects.special.none")
+          : option.key === "@system"
+            ? t("projects.special.system")
+            : option.name,
       count: option.conversationCount,
     })),
 ]);
@@ -122,6 +141,7 @@ async function load(): Promise<void> {
       page.value = result;
       if (
         selectedKey.value &&
+        selectedKey.value !== routedConversation &&
         !result.items.some((item) => item.conversationKey === selectedKey.value)
       ) {
         selectedKey.value = null;

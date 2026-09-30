@@ -5,7 +5,7 @@ use tauri::{AppHandle, State};
 use super::CommandError;
 use crate::app::{self, AppCore};
 use crate::contracts::{Settings, SettingsUpdate};
-use crate::platform::autostart;
+use crate::platform::{autostart, floating};
 
 #[tauri::command]
 pub fn settings_read(core: State<'_, Arc<AppCore>>) -> Settings {
@@ -26,6 +26,15 @@ pub fn settings_update(
         .update_settings(&update)
         .map_err(|_| CommandError::SETTINGS_WRITE_FAILED)?;
 
+    if update.verbose_logging.is_some() {
+        crate::diagnostics::log::set_verbose(outcome.settings.verbose_logging);
+        crate::diagnostics::log::info(
+            "commands",
+            "verbose_logging_changed",
+            &[("enabled", &outcome.settings.verbose_logging.to_string())],
+        );
+    }
+
     if update.launch_at_login.is_some() {
         autostart::apply(&app, outcome.settings.launch_at_login);
     }
@@ -35,6 +44,15 @@ pub fn settings_update(
     }
 
     core.emit_settings(&app, &outcome.settings);
+
+    // 系统区域 tooltip 与悬浮窗显示状态都由设置决定：服务矩阵或窗口模式变了，
+    // 不等下一次额度刷新，立即按同一份状态重画。
+    if update.services.is_some() || update.menu_bar_window_mode.is_some() {
+        core.emit_quota_state(&app);
+    }
+    if update.hud.is_some() {
+        floating::sync(&app, &outcome.settings);
+    }
     Ok(outcome.settings)
 }
 

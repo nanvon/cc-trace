@@ -11,10 +11,16 @@ import VChart from "vue-echarts";
 
 import type {
   UsageDashboardRange,
+  UsageGranularity,
   UsageSource,
   UsageSummary,
-  UsageSummaryRow,
 } from "../features/usage/contracts";
+import {
+  barWidthForCount,
+  buildPeriodSamples,
+  type PeriodSample,
+} from "../features/usage/overview";
+import { usageBucketStart, usageChartUsesContext, usageDayKey } from "../features/usage/ranges";
 import { formatCompactTokens, formatUsdNanos } from "../lib/format";
 import { usageChartColors } from "../lib/chartTheme";
 
@@ -25,6 +31,7 @@ const props = defineProps<{
   sources: readonly UsageSource[];
   range: UsageDashboardRange;
   chartRange: UsageDashboardRange;
+  granularity: UsageGranularity;
   loaded: boolean;
   unavailable: boolean;
 }>();
@@ -37,71 +44,79 @@ let themeObserver: MutationObserver | null = null;
 
 useResizeObserver(chartRoot, () => chart.value?.resize());
 
-function localDay(date: Date): Date {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
-}
-
-function dayKey(date: Date): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-function daysInRange(range: UsageDashboardRange): string[] {
-  if (!range.from || !range.to) return [];
-
-  const fromDate = localDay(new Date(range.from));
-  const toDate = localDay(new Date(range.to));
-  const values: string[] = [];
-
-  for (
-    let current = fromDate;
-    current < toDate;
-    current = new Date(current.getFullYear(), current.getMonth(), current.getDate() + 1)
-  ) {
-    values.push(dayKey(current));
+function nextPeriod(start: Date): Date {
+  if (props.granularity === "week") {
+    return new Date(start.getFullYear(), start.getMonth(), start.getDate() + 7);
   }
+  if (props.granularity === "month") {
+    return new Date(start.getFullYear(), start.getMonth() + 1, 1);
+  }
+  return new Date(start.getFullYear(), start.getMonth(), start.getDate() + 1);
+}
 
+/** 图表窗口内的全部周期起点（无用量的周期补零，柱子不塌缩）。全部范围只显示有数据的周期。 */
+function periodsInRange(range: UsageDashboardRange): string[] {
+  if (!range.from || !range.to) return [];
+  const end = new Date(range.to);
+  const values: string[] = [];
+  for (
+    let current = usageBucketStart(new Date(range.from), props.granularity);
+    current < end;
+    current = nextPeriod(current)
+  ) {
+    values.push(usageDayKey(current));
+  }
   return values;
 }
 
-const rowDates = computed(() => {
-  const values = new Set<string>();
-  for (const source of props.sources) {
-    for (const row of props.day[source]?.rows ?? []) values.add(row.key);
-  }
-  return [...values];
-});
-
-const contextDates = computed(() => daysInRange(props.chartRange));
-const selectedDates = computed(() => new Set(daysInRange(props.range)));
-const contextual = computed(
-  () => props.chartRange.from !== props.range.from || props.chartRange.to !== props.range.to,
-);
+const samples = computed(() => buildPeriodSamples(props.day, props.sources, props.granularity));
+const sampleByKey = computed(() => new Map(samples.value.map((sample) => [sample.key, sample])));
 
 const dates = computed(() => {
-  const values = new Set([...contextDates.value, ...rowDates.value]);
+  const values = new Set([
+    ...periodsInRange(props.chartRange),
+    ...samples.value.map((sample) => sample.key),
+  ]);
   return [...values].sort();
 });
 
-const hasUsageRows = computed(() => rowDates.value.length > 0);
+const hasUsageRows = computed(() => samples.value.length > 0);
+const contextual = computed(() => usageChartUsesContext(props.range, props.granularity));
+const highlightedKey = computed(() =>
+  contextual.value && props.range.from
+    ? usageDayKey(usageBucketStart(new Date(props.range.from), props.granularity))
+    : null,
+);
 
-function dayRow(source: UsageSource, date: string): UsageSummaryRow | undefined {
-  return props.day[source]?.rows.find((row) => row.key === date);
+function sourceTokens(sample: PeriodSample | undefined, source: UsageSource): number {
+  return sample?.bySource[source]?.tokens.totalTokens ?? 0;
 }
 
-function dayTokens(source: UsageSource, date: string): number {
-  return dayRow(source, date)?.tokens.totalTokens ?? 0;
+function parseKey(value: string): Date {
+  return new Date(`${value}T00:00:00`);
 }
 
-function formatDay(value: string): string {
-  const date = new Date(`${value}T00:00:00`);
+function formatAxis(value: string): string {
+  const date = parseKey(value);
+  if (props.granularity === "month") {
+    return new Intl.DateTimeFormat(locale.value, { month: "short", year: "2-digit" }).format(date);
+  }
   return new Intl.DateTimeFormat(locale.value, { day: "numeric", month: "numeric" }).format(date);
 }
 
+/** 悬浮标题：日 `2026-09-03`，周 `2026-09-01 – 09-07`，月 `2026-09`。 */
+function periodLabel(value: string): string {
+  if (props.granularity === "month") return value.slice(0, 7);
+  if (props.granularity === "week") {
+    const start = parseKey(value);
+    const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 6);
+    return `${value} – ${usageDayKey(end).slice(5)}`;
+  }
+  return value;
+}
+
 function barOpacity(date: string): number {
-  return contextual.value && !selectedDates.value.has(date) ? 0.35 : 1;
+  return highlightedKey.value !== null && date !== highlightedKey.value ? 0.35 : 1;
 }
 
 interface TooltipParam {
@@ -112,6 +127,7 @@ function tooltipFormatter(rawParams: unknown): string {
   const params = rawParams as TooltipParam[];
   const dateKey = params[0]?.data?.dateKey;
   if (!dateKey) return "";
+  const sample = sampleByKey.value.get(dateKey);
 
   const colors = usageChartColors();
   const rowStyle =
@@ -119,25 +135,16 @@ function tooltipFormatter(rawParams: unknown): string {
   const numStyle = "font-variant-numeric:tabular-nums";
   const muted = `color:${colors.muted}`;
 
-  let totalCostNanos = 0;
-  let totalTokens = 0;
-  for (const source of props.sources) {
-    const row = dayRow(source, dateKey);
-    if (!row) continue;
-    totalCostNanos += row.cost.apiEquivalentCostNanos;
-    totalTokens += row.tokens.totalTokens;
-  }
-
   const lines = [
     `<div style="${rowStyle}">` +
       `<span style="flex:1">${t("main.grandTotal")}</span>` +
-      `<span style="${numStyle};font-weight:600">${formatUsdNanos(locale.value, totalCostNanos)}</span>` +
-      `<span style="${numStyle};min-inline-size:4.5em;text-align:right;font-weight:600">${formatCompactTokens(locale.value, totalTokens)}</span>` +
+      `<span style="${numStyle};font-weight:600">${formatUsdNanos(locale.value, sample?.total.cost.apiEquivalentCostNanos ?? 0)}</span>` +
+      `<span style="${numStyle};min-inline-size:4.5em;text-align:right;font-weight:600">${formatCompactTokens(locale.value, sample?.total.tokens.totalTokens ?? 0)}</span>` +
       `</div>`,
   ];
 
   for (const source of props.sources) {
-    const row = dayRow(source, dateKey);
+    const row = sample?.bySource[source];
     if (!row) continue;
     lines.push(
       `<div style="${rowStyle}">` +
@@ -151,16 +158,9 @@ function tooltipFormatter(rawParams: unknown): string {
 
   lines.push(`<div style="height:1px;background:${colors.border};margin:6px 0"></div>`);
 
-  let totalInput = 0;
-  let totalCacheRead = 0;
-  let totalOutput = 0;
-  for (const source of props.sources) {
-    const row = dayRow(source, dateKey);
-    if (!row) continue;
-    totalInput += row.tokens.inputTokens;
-    totalCacheRead += row.tokens.cacheReadInputTokens;
-    totalOutput += row.tokens.outputTokens;
-  }
+  const totalInput = sample?.total.tokens.inputTokens ?? 0;
+  const totalCacheRead = sample?.total.tokens.cacheReadInputTokens ?? 0;
+  const totalOutput = sample?.total.tokens.outputTokens ?? 0;
   const hitRate = totalInput > 0 ? Math.round((totalCacheRead / totalInput) * 100) : 0;
 
   lines.push(
@@ -179,7 +179,7 @@ function tooltipFormatter(rawParams: unknown): string {
   );
 
   lines.push(
-    `<div style="margin-top:6px;${muted};font-family:${colors.fontFamily}">${dateKey}</div>`,
+    `<div style="margin-top:6px;${muted};font-family:${colors.fontFamily}">${periodLabel(dateKey)}</div>`,
   );
 
   return lines.join("");
@@ -189,7 +189,7 @@ const option = computed<EChartsOption>(() => {
   // 主题切换时通过 MutationObserver 改变依赖，重新读取 CSS variables。
   void themeVersion.value;
   const colors = usageChartColors();
-  const categories = dates.value.map(formatDay);
+  const categories = dates.value.map(formatAxis);
 
   const sourceColors = props.sources.map((source) => colors[source]);
   return {
@@ -237,12 +237,12 @@ const option = computed<EChartsOption>(() => {
     },
     series: props.sources.map((source, index) => ({
       // 产物是纯 CSS 柱状：每列柱子占满列宽、上下堆叠两段、3px 圆角、降透明度。
-      barMaxWidth: 18,
-      barCategoryGap: "32%",
+      // 柱宽按样本数分档（30 根为 10），不随面板宽度拉伸。
+      barWidth: barWidthForCount(dates.value.length),
       data: dates.value.map((date) => ({
         dateKey: date,
         itemStyle: { opacity: barOpacity(date) },
-        value: dayTokens(source, date),
+        value: sourceTokens(sampleByKey.value.get(date), source),
       })),
       itemStyle: {
         color: colors[source],

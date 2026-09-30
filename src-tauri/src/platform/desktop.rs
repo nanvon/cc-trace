@@ -77,12 +77,12 @@ struct Anchor {
 ///
 /// Windows 的物理坐标是真实像素，全程可比，不做换算。
 #[cfg(target_os = "macos")]
-fn to_anchor_space(value: f64, scale: f64) -> f64 {
+pub(super) fn to_anchor_space(value: f64, scale: f64) -> f64 {
     value / scale
 }
 
 #[cfg(not(target_os = "macos"))]
-fn to_anchor_space(value: f64, _scale: f64) -> f64 {
+pub(super) fn to_anchor_space(value: f64, _scale: f64) -> f64 {
     value
 }
 

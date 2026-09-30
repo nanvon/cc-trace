@@ -28,6 +28,20 @@ export async function setCompactHeight(contentHeight: number): Promise<void> {
   }
 }
 
+/**
+ * 上报悬浮窗内容需要的尺寸，单位是 CSS 像素。
+ *
+ * 与紧凑面板同一约定：前端只报量测结果，区间与定位在 Rust 平台层决定。
+ */
+export async function setFloatingSize(width: number, height: number): Promise<void> {
+  try {
+    await invoke("window_set_floating_size", { width, height });
+  } catch {
+    // 纯浏览器预览没有 Tauri 桥。
+  }
+}
+
+export const showFloatingContextMenu = () => call("window_floating_context_menu");
 export const openMainWindow = () => call("window_open_main");
 export const openSettingsWindow = () => call("window_open_settings");
 export const openOnboardingWindow = () => call("window_open_onboarding");

@@ -565,7 +565,7 @@ impl FileScan {
             .cwd
             .as_deref()
             .map(project_identity)
-            .unwrap_or_default();
+            .unwrap_or_else(|| project_identity(""));
         Some(DshConversationDraft {
             conversation_key: format!("dsh:{session_id}"),
             session_id,
@@ -573,7 +573,7 @@ impl FileScan {
             title: self.title.clone(),
             project_hint: identity.hint,
             project_key: identity.path.clone(),
-            worktree_path: identity.path,
+            worktree_path: identity.worktree,
             first_at: self
                 .first_at
                 .clone()
